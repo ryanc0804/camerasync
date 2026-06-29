@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: camerasync-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: camerasync
+      POSTGRES_PASSWORD: camerasync
+      POSTGRES_DB: camerasync
+    ports:
+      - "5432:5432"
+    volumes:
+      - camerasync-pgdata:/var/lib/postgresql/data
+
+volumes:
+  camerasync-pgdata:

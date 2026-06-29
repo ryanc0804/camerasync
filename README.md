@@ -1,0 +1,69 @@
+# Camera Sync
+
+Multi-device synchronized video recording for mascot teams, athletic
+organizations, and performance groups. A single admin command triggers
+synchronized recording across every connected device in a session; footage is
+aggregated for multi-angle review with timestamped feedback.
+
+## Repository layout
+
+This is a **monorepo**. All three surfaces share one set of Socket.IO event
+names and API contracts.
+
+| Path           | Stack                          | Purpose                                  |
+| -------------- | ------------------------------ | ---------------------------------------- |
+| `apps/server`  | Express + Socket.IO + Postgres | API, auth, real-time sync hub            |
+| `apps/web`     | React (Vite)                   | Admin / coach review + management UI     |
+| `apps/mobile`  | Flutter                        | Recording app (joins sessions, records)  |
+
+## Tech stack (per the project plan)
+
+- **Backend:** Express.js, Socket.IO (real-time), PostgreSQL
+- **Web:** React
+- **Mobile:** Flutter
+- **Sync:** shared server clock (TrueTime-style offset) over Socket.IO
+- **Storage/delivery:** AWS S3 + Cloudflare Stream (later)
+- **Deploy:** AWS EC2 (later)
+
+## Local development
+
+### 1. Start Postgres
+
+```bash
+docker compose up -d
+```
+
+### 2. Run the server
+
+```bash
+cd apps/server
+cp .env.example .env
+npm install
+npm run dev          # http://localhost:4000  (health: GET /health)
+```
+
+### 3. Run the web app
+
+```bash
+cd apps/web
+npm install
+npm run dev          # http://localhost:5173
+```
+
+### 4. Mobile (Flutter)
+
+Flutter isn't scaffolded yet. Once the Flutter SDK is installed:
+
+```bash
+cd apps/mobile
+flutter create .
+```
+
+See `apps/mobile/README.md`.
+
+## Status
+
+Early scaffold. Implemented: repo structure, server boilerplate with a health
+check and a Socket.IO session-room + recording-command skeleton, web
+boilerplate, local Postgres. **Not** yet implemented: auth, persistence,
+recording, uploads, playback, comments.
