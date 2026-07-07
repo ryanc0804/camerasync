@@ -29,6 +29,19 @@ names and API contracts.
 
 ### Option A: Docker Compose (server + web + Postgres)
 
+Each service reads its config from a gitignored `.env` file, so secrets never
+land in git. Copy the templates once before the first run:
+
+```bash
+cp .env.example .env                    # shared Postgres credentials
+cp apps/server/.env.example apps/server/.env
+cp apps/web/.env.example apps/web/.env
+```
+
+Edit the values (e.g. `POSTGRES_PASSWORD` in the root `.env`) as needed —
+`docker-compose.yml` falls back to the dev defaults shown in `.env.example`
+if a variable isn't set.
+
 #### Dev Container
 
 ```bash
@@ -73,6 +86,7 @@ npm run dev          # http://localhost:4000  (health: GET /health)
 
 ```bash
 cd apps/web
+cp .env.example .env
 npm install
 npm run dev          # http://localhost:5173
 ```

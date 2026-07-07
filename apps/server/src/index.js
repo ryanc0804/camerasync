@@ -17,7 +17,7 @@ app.use(express.json());
 app.use("/health", healthRouter);
 
 // Status message for root route
-app.get("/", async function (req, res) {
+app.get("/", async (req, res) => {
   res.status(200).json({"status": "OK"})
 })
 
