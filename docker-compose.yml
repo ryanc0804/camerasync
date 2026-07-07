@@ -11,6 +11,44 @@ services:
       - "5432:5432"
     volumes:
       - camerasync-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U camerasync"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build: ./apps/server
+    container_name: camerasync-server
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 4000
+      WEB_ORIGIN: http://localhost:5173
+      DATABASE_URL: postgres://camerasync:camerasync@db:5432/camerasync
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./apps/server:/app
+      - camerasync-server-modules:/app/node_modules
+
+  web:
+    build: ./apps/web
+    container_name: camerasync-web
+    restart: unless-stopped
+    depends_on:
+      - server
+    environment:
+      VITE_SERVER_URL: http://localhost:4000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./apps/web:/app
+      - camerasync-web-modules:/app/node_modules
 
 volumes:
   camerasync-pgdata:
+  camerasync-server-modules:
+  camerasync-web-modules:

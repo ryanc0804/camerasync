@@ -27,13 +27,32 @@ names and API contracts.
 
 ## Local development
 
-### 1. Start Postgres
+### Option A: Docker Compose (server + web + Postgres)
 
 ```bash
-docker compose up -d
+docker compose up --build
 ```
 
-### 2. Run the server
+This starts Postgres, the Express/Socket.IO server (hot reload via
+`node --watch`), and the Vite dev server (hot reload) together:
+
+- Server: http://localhost:4000 (health: GET /health)
+- Web: http://localhost:5173
+- Postgres: localhost:5432
+
+Source is bind-mounted into the `server` and `web` containers, so local edits
+are picked up automatically. Run `docker compose up -d --build` to run in the
+background, and `docker compose down` to stop.
+
+### Option B: Run services natively
+
+#### 1. Start Postgres
+
+```bash
+docker compose up -d db
+```
+
+#### 2. Run the server
 
 ```bash
 cd apps/server
@@ -42,7 +61,7 @@ npm install
 npm run dev          # http://localhost:4000  (health: GET /health)
 ```
 
-### 3. Run the web app
+#### 3. Run the web app
 
 ```bash
 cd apps/web
@@ -50,7 +69,7 @@ npm install
 npm run dev          # http://localhost:5173
 ```
 
-### 4. Mobile (Flutter)
+### 4. Mobile startup (Flutter)
 
 Flutter isn't scaffolded yet. Once the Flutter SDK is installed:
 
