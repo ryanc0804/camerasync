@@ -1,12 +1,30 @@
 import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
 
+import { AuthProvider, useAuth } from "./auth/AuthContext.jsx";
+import { AuthScreen } from "./screens/AuthScreen.jsx";
+
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
+
+export function App() {
+  return (
+    <AuthProvider>
+      <Root />
+    </AuthProvider>
+  );
+}
+
+// Show the auth screen until signed in, then the (gated) sync demo.
+function Root() {
+  const { isAuthenticated } = useAuth();
+  return isAuthenticated ? <SyncDemo /> : <AuthScreen />;
+}
 
 // Minimal smoke-test UI: connects to the server, joins a demo session, and
 // lets you fire the synchronized start/stop commands. This is scaffolding to
 // prove the socket contract end to end — replace with the real admin UI.
-export function App() {
+function SyncDemo() {
+  const { user, logout } = useAuth();
   const [connected, setConnected] = useState(false);
   const [socket, setSocket] = useState(null);
   const [devices, setDevices] = useState([]);
@@ -36,7 +54,20 @@ export function App() {
 
   return (
     <main style={{ fontFamily: "system-ui", maxWidth: 640, margin: "2rem auto", padding: "0 1rem" }}>
-      <h1>Camera Sync</h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <h1 style={{ margin: 0, color: "#0d0d0d", borderBottom: "3px solid #ffc72c", display: "inline-block" }}>
+          KnightHyve
+        </h1>
+        <span style={{ fontSize: "0.9rem", color: "#666" }}>
+          {user?.name || user?.email}{" "}
+          <button
+            onClick={logout}
+            style={{ marginLeft: 8, cursor: "pointer" }}
+          >
+            Log out
+          </button>
+        </span>
+      </div>
       <p>
         Server: <code>{SERVER_URL}</code> —{" "}
         <strong style={{ color: connected ? "green" : "crimson" }}>
