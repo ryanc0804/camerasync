@@ -11,7 +11,9 @@ authRouter.post("/login", async(req, res) => {
 
     console.log(email)
     console.log(password)
-    res.status(200).json({token: "1234", user: email})
+    
+
+    res.cookie('session', '1234');
 })
 
 authRouter.post("/register", async(req, res) => {
