@@ -3,6 +3,9 @@ import { pool } from "../db/pool.js";
 
 export const authRouter  = Router();
 
+
+//TODO: Handle server-side cookies
+//TODO: Handle database query of users for all CRUD functions (parameterize!)
 authRouter.post("/login", async(req, res) => {
     const {email, password} = req.body;
 

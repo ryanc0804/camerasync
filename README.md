@@ -1,4 +1,4 @@
-# Camera Sync
+# KnightHyve
 
 Multi-device synchronized video recording for mascot teams, athletic
 organizations, and performance groups. A single admin command triggers
