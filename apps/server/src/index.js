@@ -6,6 +6,9 @@ import { Server as SocketServer } from "socket.io";
 
 import { healthRouter } from "./routes/health.js";
 import { registerSocketHandlers } from "./sockets/index.js";
+import { authRouter } from "./routes/auth.js";
+import { groupRouter } from "./routes/groups.js";
+import { postRouter } from "./routes/posts.js";
 
 const PORT = process.env.PORT || 4000;
 const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:5173";
@@ -22,8 +25,9 @@ app.get("/", async (req, res) => {
 })
 
 // REST routes go here as the API grows:
-//   app.use("/api/auth", authRouter);
-//   app.use("/api/groups", groupsRouter);
+app.use("/api/auth", authRouter);
+app.use("/api/groups", groupRouter);
+app.use("/api/posts", postRouter);
 //   app.use("/api/sessions", sessionsRouter);
 
 const server = http.createServer(app);

@@ -65,6 +65,15 @@ Source is bind-mounted into the `server` and `web` containers, so local edits
 are picked up automatically. Run `docker compose up -d --build` to run in the
 background, and `docker compose down` to stop.
 
+#### Initialize database tables
+
+With `db` up, apply `apps/server/src/db/schema.sql` (safe to re-run — every
+statement is `CREATE TABLE IF NOT EXISTS`):
+
+```bash
+docker compose run --rm db-init
+```
+
 ### Option B: Run services natively
 
 #### 1. Start Postgres

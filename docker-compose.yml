@@ -55,6 +55,28 @@ services:
       - ./apps/web:/app
       - camerasync-web-modules:/app/node_modules
 
+  # One-off: creates/updates tables from schema.sql. Not started by `up`
+  # (profiles keeps it out of the default set) — run it explicitly with:
+  #   docker compose run --rm db-init
+  db-init:
+    image: postgres:16-alpine
+    container_name: camerasync-db-init
+    profiles: ["tools"]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: ./.env
+        required: false
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER:-camerasync}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-camerasync}
+      PGDATABASE: ${POSTGRES_DB:-camerasync}
+    volumes:
+      - ./apps/server/src/db/schema.sql:/schema.sql:ro
+    entrypoint: ["psql", "-v", "ON_ERROR_STOP=1", "-f", "/schema.sql"]
+
 volumes:
   camerasync-pgdata:
   camerasync-server-modules:

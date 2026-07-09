@@ -1,5 +1,4 @@
 // Thin client for the server's auth endpoints. The token + user are persisted
-// in localStorage so a refresh keeps you signed in.
 //
 // NOTE: the server routes (/api/auth/login, /api/auth/register) are not built
 // yet — see the TODO in apps/server/src/index.js. Until they exist these calls
@@ -39,13 +38,15 @@ async function postJson(path, body) {
   return data;
 }
 
+//TODO: Change this persist function to handle setting cookies on the server instead of the client
+
 function persist({ token, user }) {
-  if (token) localStorage.setItem(TOKEN_KEY, token);
+  if (token) setCookie("session", token, 120);
   if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
 }
 
 export async function login({ email, password }) {
-  const data = await postJson("/api/auth/login", { email, password });
+  const data = await postJson("/api/auth/login", { email: email, password: password });
   persist(data);
   return data;
 }
@@ -61,6 +62,7 @@ export function logout() {
   localStorage.removeItem(USER_KEY);
 }
 
+//TODO: Fix logout and loadSession to handle cookies
 // Restore a persisted session on app start. Returns { token, user } or null.
 export function loadSession() {
   const token = localStorage.getItem(TOKEN_KEY);

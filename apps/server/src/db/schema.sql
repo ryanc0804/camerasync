@@ -24,19 +24,19 @@ CREATE TABLE IF NOT EXISTS organizations (
     name VARCHAR(64),
     admins JSON DEFAULT '[]',
     rec_sessions JSON DEFAULT '[]'
-)
+);
 
 CREATE TABLE IF NOT EXISTS videos (
     recording_uri TEXT,
     session_id VARCHAR(255),
     author BIGINT
-)
+);
 
 CREATE TABLE IF NOT EXISTS recordings (
     sessions    JSON DEFAULT '[]',
     org_id      VARCHAR(255) NOT NULL,
     created_at  TIMESTAMP NOT NULL DEFAULT NOW()
-)
+);
 
 CREATE TABLE IF NOT EXISTS posts (
     post_id     VARCHAR(255) PRIMARY KEY,
@@ -45,4 +45,4 @@ CREATE TABLE IF NOT EXISTS posts (
     created_at  TIMESTAMP DEFAULT NOW(),
     video_meta  JSON,
     reply       VARCHAR(255)
-)
+);
