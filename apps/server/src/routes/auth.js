@@ -17,7 +17,7 @@ const COOKIE_OPTIONS = {
   httpOnly: true,
   sameSite: "lax",
   secure: process.env.NODE_ENV === "production",
-  maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days, matches SESSION_TTL_MS
+  maxAge: 1000 * 60 * 60 * 24 * 30, // same as TLS; 30 days
 };
 
 authRouter.post("/register", async (req, res, next) => {
