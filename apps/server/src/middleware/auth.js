@@ -38,6 +38,10 @@ export async function createUser(name, email, password) {
   }
 }
 
+export async function verifyEmail(email) {
+  
+}
+
 // Validate user/password on login, returns null if not valid or user doesn't exist
 export async function loginUser(email, password) {
   const { rows } = await pool.query(
