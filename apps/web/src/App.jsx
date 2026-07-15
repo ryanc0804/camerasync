@@ -3,6 +3,7 @@ import { io } from "socket.io-client";
 
 import { AuthProvider, useAuth } from "./auth/AuthContext.jsx";
 import { AuthScreen } from "./screens/AuthScreen.jsx";
+import { ResetPasswordScreen } from "./screens/ResetPasswordScreen.jsx";
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
 
@@ -14,9 +15,17 @@ export function App() {
   );
 }
 
-// Show the auth screen until signed in, then the (gated) sync demo.
+// Minimal URL-based routing without pulling in a router: the reset-password
+// link from the email lands on /reset-password?token=…, which takes priority
+// over the normal auth-gated app.
 function Root() {
   const { isAuthenticated } = useAuth();
+
+  if (window.location.pathname === "/reset-password") {
+    const token = new URLSearchParams(window.location.search).get("token");
+    return <ResetPasswordScreen token={token} />;
+  }
+
   return isAuthenticated ? <SyncDemo /> : <AuthScreen />;
 }
 
