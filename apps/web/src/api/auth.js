@@ -62,6 +62,32 @@ export function logout() {
   localStorage.removeItem(USER_KEY);
 }
 
+// Kick off a password reset. The server (once /api/auth/forgot-password exists)
+// should email a reset link. We intentionally ignore the HTTP status and always
+// treat a reachable server as success: responding identically whether or not
+// the email has an account avoids leaking which emails are registered, and it
+// also lets this flow work before the endpoint is implemented. Only a network
+// failure surfaces an error to the user.
+export async function requestPasswordReset(email) {
+  try {
+    await fetch(`${SERVER_URL}/api/auth/forgot-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+  } catch {
+    throw new Error(`Can't reach the server at ${SERVER_URL}. Is it running?`);
+  }
+}
+
+// Complete a password reset using the token from the emailed link. Unlike the
+// request step, this surfaces real errors — an invalid/expired token must tell
+// the user, so they can request a fresh link.
+//   POST /api/auth/reset-password { token, password } -> {} (200) | { error }
+export async function resetPassword({ token, password }) {
+  return postJson("/api/auth/reset-password", { token, password });
+}
+
 //TODO: Fix logout and loadSession to handle cookies
 // Restore a persisted session on app start. Returns { token, user } or null.
 export function loadSession() {
