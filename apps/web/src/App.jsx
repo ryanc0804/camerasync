@@ -3,8 +3,10 @@ import { io } from "socket.io-client";
 
 import { AuthProvider, useAuth } from "./auth/AuthContext.jsx";
 import { AuthScreen } from "./screens/AuthScreen.jsx";
+import { Dashboard } from "./screens/dashboard/Dashboard.jsx";
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
+const SHOW_DASHBOARD_DEV = true;
 
 export function App() {
   return (
@@ -17,6 +19,11 @@ export function App() {
 // Show the auth screen until signed in, then the (gated) sync demo.
 function Root() {
   const { isAuthenticated } = useAuth();
+
+  if (SHOW_DASHBOARD_DEV) {
+    return <Dashboard />;
+  }
+
   return isAuthenticated ? <SyncDemo /> : <AuthScreen />;
 }
 
