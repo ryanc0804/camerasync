@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'camera_screen.dart';
 
 import '../socket/sync_socket.dart';
 
@@ -29,9 +30,7 @@ class _SessionScreenState extends State<SessionScreen> {
   final List<StreamSubscription> _subs = [];
 
   bool _permissionsGranted = false;
-  bool _recording = false;
   List<String> _devices = [];
-  Timer? _pendingStart;
 
   @override
   void initState() {
@@ -46,8 +45,6 @@ class _SessionScreenState extends State<SessionScreen> {
     _socket.joinSession(widget.sessionId, widget.deviceName);
 
     _subs.add(_socket.devices.listen((d) => setState(() => _devices = d)));
-    _subs.add(_socket.recordingStart.listen(_scheduleStart));
-    _subs.add(_socket.recordingStop.listen((_) => _stopRecording()));
   }
 
   Future<void> _requestPermissions() async {
@@ -58,30 +55,9 @@ class _SessionScreenState extends State<SessionScreen> {
     });
   }
 
-  /// Arm the camera now; begin capture exactly at the shared local start time.
-  void _scheduleStart(int localStartEpochMs) {
-    final delay = localStartEpochMs - DateTime.now().millisecondsSinceEpoch;
-    _pendingStart?.cancel();
-    _pendingStart = Timer(
-      Duration(milliseconds: delay < 0 ? 0 : delay),
-      _startRecording,
-    );
-  }
-
-  void _startRecording() {
-    // TODO: start CameraController video recording here.
-    setState(() => _recording = true);
-  }
-
-  void _stopRecording() {
-    // TODO: stop CameraController + hand the file off for upload.
-    _pendingStart?.cancel();
-    setState(() => _recording = false);
-  }
 
   @override
   void dispose() {
-    _pendingStart?.cancel();
     for (final s in _subs) {
       s.cancel();
     }
@@ -107,14 +83,6 @@ class _SessionScreenState extends State<SessionScreen> {
             Text('Device: ${widget.deviceName}'),
             Text('Clock offset: ${_socket.clockOffsetMs} ms'),
             const SizedBox(height: 8),
-            Text(
-              _recording ? '● RECORDING' : 'Idle',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: _recording ? Colors.red : Colors.grey,
-              ),
-            ),
             const SizedBox(height: 16),
             Text('Connected devices (${_devices.length})'),
             Expanded(
@@ -122,6 +90,20 @@ class _SessionScreenState extends State<SessionScreen> {
                 children: _devices.map((d) => ListTile(title: Text(d))).toList(),
               ),
             ),
+            FilledButton(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => CameraScreen(
+                      socket: _socket,
+                      sessionId: widget.sessionId,
+                  ),
+                ),
+              );
+            },
+            child: const Text('Open Camera'),
+          ),
           ],
         ),
       ),
