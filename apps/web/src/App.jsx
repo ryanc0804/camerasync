@@ -63,7 +63,7 @@ function SyncDemo() {
     <main style={{ fontFamily: "system-ui", maxWidth: 640, margin: "2rem auto", padding: "0 1rem" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <h1 style={{ margin: 0, color: "#0d0d0d", borderBottom: "3px solid #ffc72c", display: "inline-block" }}>
-          KnightHyve
+          8Kount
         </h1>
         <span style={{ fontSize: "0.9rem", color: "#666" }}>
           {user?.name || user?.email}{" "}

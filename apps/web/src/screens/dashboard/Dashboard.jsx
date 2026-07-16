@@ -27,7 +27,7 @@ const DEFAULT_THEME = {
 
 function loadSavedTheme() {
   try {
-    const savedTheme = localStorage.getItem("knighthyve.theme");
+    const savedTheme = localStorage.getItem("8kount.theme");
     return savedTheme ? { ...DEFAULT_THEME, ...JSON.parse(savedTheme) } : DEFAULT_THEME;
   } catch {
     return DEFAULT_THEME;
@@ -47,7 +47,7 @@ export function Dashboard() {
 
   const handleThemeSave = (nextTheme) => {
     setTheme(nextTheme);
-    localStorage.setItem("knighthyve.theme", JSON.stringify(nextTheme));
+    localStorage.setItem("8kount.theme", JSON.stringify(nextTheme));
   };
 
   return (
