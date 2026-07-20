@@ -70,87 +70,80 @@ class _PillNavBar extends StatelessWidget {
       top: false,
       child: Container(
         margin: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-        height: 62,
+        height: 74,
         decoration: BoxDecoration(
           color: kGold,
-          borderRadius: BorderRadius.circular(31),
+          borderRadius: BorderRadius.circular(37),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: List.generate(_items.length, (i) {
-            final selected = i == index;
-            return Expanded(
-              child: Semantics(
-                label: _labels[i],
-                selected: selected,
-                button: true,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(31),
-                  onTap: () => onChanged(i),
-                  child: Center(
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 150),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 22,
-                        vertical: 9,
-                      ),
-                      decoration: BoxDecoration(
-                        color: selected ? kGoldActive : Colors.transparent,
-                        borderRadius: BorderRadius.circular(24),
-                      ),
-                      child: Icon(
-                        _items[i],
-                        size: 26,
-                        color: const Color(0xFF0D0D0D),
+        // Clip so the sliding highlight can't spill past the rounded ends.
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(37),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final slotWidth = constraints.maxWidth / _items.length;
+
+              return Stack(
+                children: [
+                  // A single highlight that travels to the selected slot,
+                  // rather than one per icon fading in place.
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeOutCubic,
+                    left: index * slotWidth,
+                    top: 0,
+                    bottom: 0,
+                    width: slotWidth,
+                    child: Center(
+                      child: Container(
+                        width: slotWidth - 16,
+                        height: 54,
+                        decoration: BoxDecoration(
+                          color: kGoldActive,
+                          borderRadius: BorderRadius.circular(27),
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ),
-            );
-          }),
+
+                  // Icons sit above the highlight.
+                  Row(
+                    children: List.generate(_items.length, (i) {
+                      return Expanded(
+                        child: Semantics(
+                          label: _labels[i],
+                          selected: i == index,
+                          button: true,
+                          child: InkWell(
+                            onTap: () => onChanged(i),
+                            child: Center(
+                              child: Icon(
+                                _items[i],
+                                size: 26,
+                                color: const Color(0xFF0D0D0D),
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
+                ],
+              );
+            },
+          ),
         ),
       ),
     );
   }
 }
 
-/// Recording cards from the design. Real recordings replace these once the
-/// videos API exists.
+/// Empty for now — recordings will fill this in once the videos API exists.
 class _HomeTab extends StatelessWidget {
   const _HomeTab();
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 24, 20, 110),
-      children: [
-        const Text(
-          'Recent recordings',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 4),
-        const Text(
-          'No recordings yet — these are placeholders.',
-          style: TextStyle(color: Color(0xFF8A8A8A), fontSize: 13),
-        ),
-        const SizedBox(height: 16),
-        for (var i = 0; i < 4; i++) ...[
-          Container(
-            height: 130,
-            decoration: BoxDecoration(
-              color: kCard,
-              borderRadius: BorderRadius.circular(6),
-            ),
-          ),
-          const SizedBox(height: 18),
-        ],
-      ],
-    );
+    return const SizedBox.expand(key: ValueKey('home-tab'));
   }
 }
 

@@ -29,7 +29,7 @@ void main() {
     await tester.pumpWidget(wrap(HomeShell(auth: auth)));
 
     // Home is the default tab per the design.
-    expect(find.text('Recent recordings'), findsOneWidget);
+    expect(find.byKey(const ValueKey('home-tab')), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.groups));
     await tester.pumpAndSettle();
