@@ -19,11 +19,21 @@ export function App() {
 // link from the email lands on /reset-password?token=…, which takes priority
 // over the normal auth-gated app.
 function Root() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, loading } = useAuth();
 
   if (window.location.pathname === "/reset-password") {
     const token = new URLSearchParams(window.location.search).get("token");
     return <ResetPasswordScreen token={token} />;
+  }
+
+  // Wait for the /me check so an already-signed-in user doesn't briefly see
+  // the sign-in screen on refresh.
+  if (loading) {
+    return (
+      <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: "#0d0d0d", color: "#999", fontFamily: "system-ui" }}>
+        Loading…
+      </div>
+    );
   }
 
   return isAuthenticated ? <SyncDemo /> : <AuthScreen />;
