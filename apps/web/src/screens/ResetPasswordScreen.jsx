@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { resetPassword } from "../api/auth.js";
 
@@ -42,17 +43,17 @@ export function ResetPasswordScreen({ token }) {
     }
   };
 
-  const goToSignIn = () => {
-    // Drop the token from the URL and return to the app root / sign-in.
-    window.location.href = "/";
-  };
+  const navigate = useNavigate();
+
+  // Drop the token from the URL and return to sign-in.
+  const goToSignIn = () => navigate("/login", { replace: true });
 
   return (
     <div style={styles.page}>
       <style>{css}</style>
 
       <form style={styles.card} onSubmit={onSubmit} noValidate>
-        <h1 style={styles.brand}>KnightHyve</h1>
+        <h1 style={styles.brand}>8kount</h1>
         <p style={styles.subtitle}>Choose a new password</p>
 
         {missingToken ? (

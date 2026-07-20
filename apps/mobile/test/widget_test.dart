@@ -18,8 +18,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(auth.isAuthenticated, isFalse);
-    expect(find.text('KnightHyve'), findsOneWidget);
+    expect(find.text('8kount'), findsOneWidget);
     expect(find.text('Sign in'), findsOneWidget);
-    expect(find.text('New to KnightHyve? Create one'), findsOneWidget);
+    expect(find.text('New to 8kount? Create one'), findsOneWidget);
   });
 }

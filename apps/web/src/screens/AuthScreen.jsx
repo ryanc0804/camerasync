@@ -89,7 +89,7 @@ export function AuthScreen() {
       <style>{css}</style>
 
       <form style={styles.card} onSubmit={onSubmit} noValidate>
-        <h1 style={styles.brand}>KnightHyve</h1>
+        <h1 style={styles.brand}>8kount</h1>
         <p style={styles.subtitle}>{subtitle}</p>
 
         {error && <div style={styles.error}>{error}</div>}
@@ -193,7 +193,7 @@ export function AuthScreen() {
                 </>
               ) : (
                 <>
-                  New to KnightHyve?{" "}
+                  New to 8kount?{" "}
                   <button type="button" className="cs-link" onClick={() => go("signup")}>
                     Create one
                   </button>
