@@ -107,7 +107,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const Text(
-                    'KnightHyve',
+                    '8kount',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 30,
@@ -190,7 +190,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Text(
                       _isSignup
                           ? 'Already have an account? Sign in'
-                          : 'New to KnightHyve? Create one',
+                          : 'New to 8kount? Create one',
                       style: const TextStyle(color: Color(0xFFFFC72C)),
                     ),
                   ),

@@ -27,7 +27,7 @@ class CameraSyncApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'KnightHyve',
+      title: '8kount',
       theme: ThemeData(
         colorSchemeSeed: const Color(0xFFFFC72C),
         brightness: Brightness.dark,
@@ -105,7 +105,7 @@ class _JoinScreenState extends State<JoinScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('KnightHyve'),
+        title: const Text('8kount'),
         actions: [
           IconButton(
             tooltip: 'Log out',
