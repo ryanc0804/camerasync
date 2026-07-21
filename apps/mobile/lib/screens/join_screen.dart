@@ -45,7 +45,7 @@ class _JoinScreenState extends State<JoinScreen> {
       padding: const EdgeInsets.fromLTRB(20, 24, 20, 110),
       children: [
         const Text(
-          'Record',
+          'Groups',
           style: TextStyle(
             color: Colors.white,
             fontSize: 22,
@@ -54,8 +54,15 @@ class _JoinScreenState extends State<JoinScreen> {
         ),
         const SizedBox(height: 6),
         const Text(
-          'Join a session, then wait for the admin to start recording.',
+          'Join a session to record in sync with the other devices. The admin '
+          'starts and stops everyone at once.',
           style: TextStyle(color: Color(0xFF8A8A8A), height: 1.5),
+        ),
+        const SizedBox(height: 10),
+        const Text(
+          'Typing an ID is temporary — once the sessions API exists you will '
+          'pick your group and its scheduled practices from a list.',
+          style: TextStyle(color: Color(0xFF5F5F5F), fontSize: 12, height: 1.4),
         ),
         const SizedBox(height: 24),
         TextField(

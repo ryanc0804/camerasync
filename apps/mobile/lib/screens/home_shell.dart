@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../auth/auth_service.dart';
+import 'calendar_tab.dart';
+import 'camera_screen.dart';
 import 'join_screen.dart';
 
 const kBackground = Color(0xFF0D0D0D);
@@ -26,9 +28,15 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     final tabs = [
-      const _GroupsTab(),
       JoinScreen(auth: widget.auth),
+      // Mounted only while selected. IndexedStack builds every child up
+      // front, which would hold the camera open in the background — against
+      // the MVP rule that camera/mic are live only in the recording view.
+      _index == 1
+          ? const CameraScreen(embedded: true)
+          : const SizedBox.shrink(),
       const _HomeTab(),
+      const CalendarTab(),
       _SettingsTab(auth: widget.auth),
     ];
 
@@ -59,10 +67,17 @@ class _PillNavBar extends StatelessWidget {
     Icons.groups,
     Icons.photo_camera_outlined,
     Icons.home_outlined,
+    Icons.calendar_month_outlined,
     Icons.settings_outlined,
   ];
 
-  static const _labels = <String>['Groups', 'Record', 'Home', 'Settings'];
+  static const _labels = <String>[
+    'Groups',
+    'Record',
+    'Home',
+    'Calendar',
+    'Settings',
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -147,17 +162,6 @@ class _HomeTab extends StatelessWidget {
   }
 }
 
-class _GroupsTab extends StatelessWidget {
-  const _GroupsTab();
-
-  @override
-  Widget build(BuildContext context) {
-    return const _EmptyTab(
-      title: 'Groups',
-      body: 'Teams you belong to. Needs the groups API, which is still a stub.',
-    );
-  }
-}
 
 class _SettingsTab extends StatelessWidget {
   const _SettingsTab({required this.auth});
@@ -220,34 +224,3 @@ class _SettingsTab extends StatelessWidget {
       );
 }
 
-class _EmptyTab extends StatelessWidget {
-  const _EmptyTab({required this.title, required this.body});
-
-  final String title;
-  final String body;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 24, 20, 110),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            body,
-            style: const TextStyle(color: Color(0xFF8A8A8A), height: 1.5),
-          ),
-        ],
-      ),
-    );
-  }
-}
