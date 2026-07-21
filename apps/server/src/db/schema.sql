@@ -19,6 +19,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     expires TIMESTAMP DEFAULT NOW()
 );
 
+-- Every authenticated request looks a session up by its cookie value, so this
+-- index keeps that lookup from becoming a sequential scan.
+CREATE INDEX IF NOT EXISTS sessions_session_token_idx ON sessions (session_token);
+
 CREATE TABLE IF NOT EXISTS organizations (
     org_id VARCHAR(255) PRIMARY KEY,
     name VARCHAR(64),

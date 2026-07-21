@@ -7,7 +7,7 @@ const SALT_ROUNDS = 12;
 // Session expiry
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
-// Columns safe to return to the client (never includes `password`).
+// public columns (no password hash).
 const PUBLIC_USER_COLUMNS =
   "user_id, email, display_name, profile_picture, roles, settings";
 
@@ -38,8 +38,12 @@ export async function createUser(name, email, password) {
   }
 }
 
+// Send email to user to verify that it is real
+// TODO: Either a code or a verification link is sent
+// TODO: use nodemailer with SMTP
+// (BE AWARE OF POSSIBLE SMTP RESTRICTIONS WITH EC2)
 export async function verifyEmail(email) {
-  
+
 }
 
 // Validate user/password on login, returns null if not valid or user doesn't exist
@@ -52,7 +56,7 @@ export async function loginUser(email, password) {
   const user = rows[0];
   if (!user) {
     // Compare against a dummy hash anyway to keep timing roughly constant
-    // avoid leaks
+    // avoid timing analysis that exposes if no valid user
     await bcrypt.compare(password, "$2b$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinva");
     return null;
   }

@@ -2,6 +2,7 @@ import "dotenv/config";
 import http from "node:http";
 import express from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import { Server as SocketServer } from "socket.io";
 
 import { healthRouter } from "./routes/health.js";
@@ -14,8 +15,11 @@ const PORT = process.env.PORT || 4000;
 const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:5173";
 
 const app = express();
-app.use(cors({ origin: WEB_ORIGIN }));
+// credentials:true is required for the browser to send/accept the httpOnly
+// session cookie cross-origin (Vite on :5173 -> API on :4000).
+app.use(cors({ origin: WEB_ORIGIN, credentials: true }));
 app.use(express.json());
+app.use(cookieParser());
 
 app.use("/health", healthRouter);
 

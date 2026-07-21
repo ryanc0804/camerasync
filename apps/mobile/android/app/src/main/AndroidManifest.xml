@@ -1,8 +1,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Network access for the API + Socket.IO connection. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Camera/mic for synchronized recording (requested at runtime, only
+         while the recording view is open). -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+
+    <!-- usesCleartextTraffic: Android 9+ blocks plain HTTP by default, which
+         would break the local dev server at http://10.0.2.2:4000. Set this to
+         false once the app talks to an HTTPS deployment. -->
     <application
         android:label="camerasync_mobile"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -1,68 +1,110 @@
 import { Router } from "express";
+import bcrypt from "bcryptjs";
+
+import { pool } from "../db/pool.js";
 import {
-  createUser,
-  loginUser,
+  SESSION_COOKIE,
   createSession,
-  destroySession,
-  getSessionToken,
-} from "../middleware/auth.js";
+  deleteSession,
+  getUserBySessionToken,
+  publicUser,
+  sessionCookieOptions,
+} from "../auth/sessions.js";
 
 export const authRouter = Router();
 
-// Options for the session cookie. httpOnly so JS can't read it, sameSite=lax
-// mitigates CSRF
-// TODO: Handle HTTPS only in production
-const SESSION_COOKIE = "session";
-const COOKIE_OPTIONS = {
-  httpOnly: true,
-  sameSite: "lax",
-  secure: process.env.NODE_ENV === "production",
-  maxAge: 1000 * 60 * 60 * 24 * 30, // same as TLS; 30 days
-};
+const BCRYPT_ROUNDS = 12;
+const MIN_PASSWORD_LENGTH = 8;
+
+// Postgres unique-constraint violation. Turns a race on the users_email_key
+// index into a clean 409 instead of a 500.
+const PG_UNIQUE_VIOLATION = "23505";
+
+function normalizeEmail(email) {
+  return String(email ?? "").trim().toLowerCase();
+}
 
 authRouter.post("/register", async (req, res, next) => {
-  const { name, email, password } = req.body ?? {};
-  if (!email || !password) {
-    return res
-      .status(400)
-      .json({ error: "email and password are required" });
-  }
-
   try {
-    const user = await createUser(name, email, password);
-    const { sessionToken, csrfToken } = await createSession(
-      user.user_id,
-      req.get("user-agent")
-    );
-    res.cookie(SESSION_COOKIE, sessionToken, COOKIE_OPTIONS);
-    res.status(201).json({ user, csrfToken });
-  } catch (err) {
-    if (err.status === 409) {
-      return res.status(409).json({ error: err.message });
+    const { name, password } = req.body ?? {};
+    const email = normalizeEmail(req.body?.email);
+
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password are required." });
     }
+    if (String(password).length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({
+        error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(String(password), BCRYPT_ROUNDS);
+
+    let row;
+    try {
+      const result = await pool.query(
+        `INSERT INTO users (email, display_name, password)
+         VALUES ($1, $2, $3)
+         RETURNING user_id, email, display_name, roles`,
+        [email, name?.trim() || null, passwordHash]
+      );
+      row = result.rows[0];
+    } catch (err) {
+      if (err.code === PG_UNIQUE_VIOLATION) {
+        return res
+          .status(409)
+          .json({ error: "An account with that email already exists." });
+      }
+      throw err;
+    }
+
+    const token = await createSession(row.user_id);
+    res.cookie(SESSION_COOKIE, token, sessionCookieOptions());
+    res.status(201).json({ user: publicUser(row) });
+  } catch (err) {
     next(err);
   }
 });
 
 authRouter.post("/login", async (req, res, next) => {
-  const { email, password } = req.body ?? {};
-  if (!email || !password) {
-    return res
-      .status(400)
-      .json({ error: "email and password are required" });
-  }
-
   try {
-    const user = await loginUser(email, password);
-    if (!user) {
-      return res.status(401).json({ error: "Invalid credentials" });
+    const { password } = req.body ?? {};
+    const email = normalizeEmail(req.body?.email);
+
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password are required." });
     }
-    const { sessionToken, csrfToken } = await createSession(
-      user.user_id,
-      req.get("user-agent")
+
+    const { rows } = await pool.query(
+      `SELECT user_id, email, display_name, roles, password
+         FROM users
+        WHERE email = $1`,
+      [email]
     );
-    res.cookie(SESSION_COOKIE, sessionToken, COOKIE_OPTIONS);
-    res.json({ user, csrfToken });
+    const row = rows[0];
+
+    // Same response whether the email is unknown or the password is wrong, so
+    // this endpoint can't be used to discover which emails have accounts.
+    const ok = row && (await bcrypt.compare(String(password), row.password));
+    if (!ok) {
+      return res.status(401).json({ error: "Incorrect email or password." });
+    }
+
+    const token = await createSession(row.user_id);
+    res.cookie(SESSION_COOKIE, token, sessionCookieOptions());
+    res.json({ user: publicUser(row) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Who am I? The browser can't read the httpOnly cookie, so the web app calls
+// this on start-up to restore the signed-in user.
+authRouter.get("/me", async (req, res, next) => {
+  try {
+    const row = await getUserBySessionToken(req.cookies?.[SESSION_COOKIE]);
+    if (!row) return res.status(401).json({ error: "Not authenticated" });
+    res.json({ user: publicUser(row) });
   } catch (err) {
     next(err);
   }
@@ -70,9 +112,11 @@ authRouter.post("/login", async (req, res, next) => {
 
 authRouter.post("/logout", async (req, res, next) => {
   try {
-    const token = getSessionToken(req);
-    await destroySession(token);
-    res.clearCookie(SESSION_COOKIE, COOKIE_OPTIONS);
+    await deleteSession(req.cookies?.[SESSION_COOKIE]);
+    res.clearCookie(SESSION_COOKIE, {
+      ...sessionCookieOptions(),
+      maxAge: undefined,
+    });
     res.status(204).end();
   } catch (err) {
     next(err);

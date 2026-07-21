@@ -1,86 +1,63 @@
 import 'package:flutter/material.dart';
 
-import 'screens/session_screen.dart';
-
-// Point at your running server. For Android emulator use 10.0.2.2 to reach the
-// host machine; on a physical device use your computer's LAN IP.
-const String kServerUrl = String.fromEnvironment(
-  'SERVER_URL',
-  defaultValue: 'http://10.0.2.2:4000',
-);
+import 'api/api_client.dart';
+import 'auth/auth_service.dart';
+import 'config.dart';
+import 'screens/home_shell.dart';
+import 'screens/login_screen.dart';
 
 void main() {
-  runApp(const CameraSyncApp());
+  final auth = AuthService(ApiClient(kServerUrl));
+  // Fire-and-forget: the UI shows a spinner while `loading` is true.
+  auth.restoreSession();
+  runApp(CameraSyncApp(auth: auth));
 }
 
 class CameraSyncApp extends StatelessWidget {
-  const CameraSyncApp({super.key});
+  const CameraSyncApp({super.key, required this.auth});
+
+  final AuthService auth;
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Camera Sync',
-      theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
-      home: const JoinScreen(),
-    );
-  }
-}
-
-/// Simple join form: enter a session ID + device name, then go to the
-/// recording screen. Replace with real auth + group/session selection later.
-class JoinScreen extends StatefulWidget {
-  const JoinScreen({super.key});
-
-  @override
-  State<JoinScreen> createState() => _JoinScreenState();
-}
-
-class _JoinScreenState extends State<JoinScreen> {
-  final _sessionController = TextEditingController(text: 'demo-session');
-  final _deviceController = TextEditingController(text: 'My phone');
-
-  @override
-  void dispose() {
-    _sessionController.dispose();
-    _deviceController.dispose();
-    super.dispose();
-  }
-
-  void _join() {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => SessionScreen(
-          serverUrl: kServerUrl,
-          sessionId: _sessionController.text.trim(),
-          deviceName: _deviceController.text.trim(),
+      title: '8kount',
+      theme: ThemeData(
+        colorSchemeSeed: kGold,
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: kBackground,
+        useMaterial3: true,
+        inputDecorationTheme: const InputDecorationTheme(
+          filled: true,
+          fillColor: Color(0xFF262626),
         ),
       ),
+      home: AuthGate(auth: auth),
     );
   }
+}
+
+/// Shows the login screen until signed in, then the tabbed app shell.
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key, required this.auth});
+
+  final AuthService auth;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Camera Sync')),
-      body: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            TextField(
-              controller: _sessionController,
-              decoration: const InputDecoration(labelText: 'Session ID'),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _deviceController,
-              decoration: const InputDecoration(labelText: 'Device name'),
-            ),
-            const SizedBox(height: 24),
-            FilledButton(onPressed: _join, child: const Text('Join session')),
-          ],
-        ),
-      ),
+    return AnimatedBuilder(
+      animation: auth,
+      builder: (context, _) {
+        if (auth.loading) {
+          return const Scaffold(
+            backgroundColor: kBackground,
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        return auth.isAuthenticated
+            ? HomeShell(auth: auth)
+            : LoginScreen(auth: auth);
+      },
     );
   }
 }
