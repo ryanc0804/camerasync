@@ -14,13 +14,14 @@ void main() {
 
   Widget wrap(Widget child) => MaterialApp(home: child);
 
-  testWidgets('shell shows all four nav destinations', (tester) async {
+  testWidgets('shell shows all five nav destinations', (tester) async {
     final auth = AuthService(ApiClient('http://127.0.0.1:1'));
     await tester.pumpWidget(wrap(HomeShell(auth: auth)));
 
     expect(find.byIcon(Icons.groups), findsOneWidget);
     expect(find.byIcon(Icons.photo_camera_outlined), findsOneWidget);
     expect(find.byIcon(Icons.home_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.calendar_month_outlined), findsOneWidget);
     expect(find.byIcon(Icons.settings_outlined), findsOneWidget);
   });
 
