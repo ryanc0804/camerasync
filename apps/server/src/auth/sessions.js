@@ -4,9 +4,8 @@ import { pool } from "../db/pool.js";
 
 export const SESSION_COOKIE = "session";
 
-// How long a session stays valid. Kept in one place so the DB row and the
-// cookie can't drift apart.
-const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
+// Session expiry date
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
 // httpOnly keeps the cookie unreadable from JavaScript (the whole point of
 // choosing cookies over localStorage). sameSite:"lax" blocks the cookie on
