@@ -1,3 +1,5 @@
+// Will probably be deleted since obsolete now - Parker
+
 import { EVENTS, RECORDING_LEAD_TIME_MS } from "./events.js";
 
 // In-memory view of who is connected to each session room.

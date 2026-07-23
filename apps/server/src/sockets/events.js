@@ -8,8 +8,15 @@ export const EVENTS = {
 
   // --- Session membership ---
   JOIN_SESSION: "session:join", // { sessionId, deviceName }
+  SESSION_JOINED: "session:device-joined", // {sessionId, deviceId}
   LEAVE_SESSION: "session:leave", // { sessionId }
   DEVICE_LIST: "session:devices", // server -> room: current connected devices
+  CLOSE_SESSION: "session:close",
+
+  // SESSION EMITTERS
+  SESSION_JOINED: "session:device-joined", // {sessionId, deviceId}
+  SESSION_LEFT: "session:device-left", // {deviceId}
+
 
   // --- Recording control (admin-initiated, broadcast to whole room) ---
   START_RECORDING: "recording:start", // admin -> server: { sessionId }

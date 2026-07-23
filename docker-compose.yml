@@ -15,7 +15,7 @@ services:
     volumes:
       - camerasync-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-camerasync}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-camerasync} -d ${POSTGRES_DB:-camerasync}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -30,6 +30,7 @@ services:
     env_file:
       - path: ./apps/server/.env
         required: false
+    command: sh -c "npm install && npm run dev"
     environment:
       # Forced to the in-network db hostname/credentials regardless of what
       # apps/server/.env has for native (non-docker) dev.
@@ -49,6 +50,7 @@ services:
     env_file:
       - path: ./apps/web/.env
         required: false
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
     ports:
       - "5173:5173"
     volumes:

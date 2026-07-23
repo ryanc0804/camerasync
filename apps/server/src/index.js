@@ -6,10 +6,11 @@ import cookieParser from "cookie-parser";
 import { Server as SocketServer } from "socket.io";
 
 import { healthRouter } from "./routes/health.js";
-import { registerSocketHandlers } from "./sockets/index.js";
+import { initSocket } from "./sockets/websocket.js";
 import { authRouter } from "./routes/auth.js";
 import { groupRouter } from "./routes/groups.js";
 import { postRouter } from "./routes/posts.js";
+import { recordingsRouter } from './routes/recordings.js';
 
 const PORT = process.env.PORT || 4000;
 const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:5173";
@@ -32,14 +33,12 @@ app.get("/", async (req, res) => {
 app.use("/api/auth", authRouter);
 app.use("/api/groups", groupRouter);
 app.use("/api/posts", postRouter);
-//   app.use("/api/sessions", sessionsRouter);
+app.use("/api/recordings", recordingsRouter);
 
 const server = http.createServer(app);
 
-const io = new SocketServer(server, {
-  cors: { origin: WEB_ORIGIN },
-});
-registerSocketHandlers(io);
+// Create web socket
+initSocket(server);
 
 server.listen(PORT, () => {
   console.log(`[camerasync] server listening on http://localhost:${PORT}`);
