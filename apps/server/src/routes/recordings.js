@@ -17,6 +17,8 @@ import {
   stopSessionRecording,
   closeSessionSocket,
 } from "../sockets/websocket.js";
+import { EVENTS } from "../sockets/events.js";
+import { STATUS_CODES } from "node:http";
 
 export const recordingsRouter = Router();
 const SOCKET_STATUSES = new Set(['recording', 'stopped']);
@@ -32,7 +34,24 @@ recordingsRouter.post("/create", async (req, res, next) => {
       return res.status(400).json({error: "name must be a string"});
     }
 
-    res.status(501).json({ error: "Not implemented" });
+    const sessionId = crypto.randomUUID();
+
+    const { result } = await pool.query(`
+      INSERT INTO recordings (id, name, status)
+      VALUES ($1, $2, 'created')
+      RETURNING id, name, status, created_at
+      `,
+    [sessionId, name ?? null]);
+
+    createSessionSocket(sessionId);
+
+    res.status(200).json({
+      session: result[0],
+      connect: {
+        sessionId,
+        event: EVENTS.JOIN_SESSION
+      }
+    })
   } catch (err) {
     next(err);
   }
@@ -41,8 +60,24 @@ recordingsRouter.post("/create", async (req, res, next) => {
 // Fetch a session's current info / connected devices.
 recordingsRouter.get("/info", async (req, res, next) => {
   try {
-    // TODO: read sessionId from req.query, look up getSessionSocket(sessionId).
-    res.status(501).json({ error: "Not implemented" });
+    const {sessionId} = req.query;
+    if (!sessionId) {
+      return res.status(400).json({message: "sessionId is requred."});
+    }
+
+    const {results} = await pool.query(`
+      SELECT id, name, status, created_at, started_at, stopped_at, closed_)at
+      FROM recordings WHERE id = $1`,
+    [sessionId]);
+
+    if (results.length === 0) {
+      return res.status(404).json({message: "sessionId not found."})
+    }
+
+    const currentSocket = await getSessionSocket(sessionId);
+
+    // ... is spread op to unpack data
+    res.status(200).json({ ...results[0], ...currentSocket})
   } catch (err) {
     next(err);
   }
@@ -51,8 +86,36 @@ recordingsRouter.get("/info", async (req, res, next) => {
 // Update session state (e.g. start/stop recording).
 recordingsRouter.patch("/update", async (req, res, next) => {
   try {
-    // TODO: branch on desired state -> startSessionRecording / stopSessionRecording.
-    res.status(501).json({ error: "Not implemented" });
+    const {sessionId, status} = req.body ?? {};
+    if (!sessionId) {
+      return res.status(400).json({message: "sessionId is requred."});
+    }
+
+    if(!STATUS_CODES.has(status)) {
+      return res.status(403).json({message: "requested status is not valid"});
+    }
+
+    const timestampCol = status === "recording" ? "started_at" : "stopped_at"
+
+    const {results} = await pool.query(
+      `UPDATE recordings
+      SET status = $1, $2 = now()
+      WHERE id = $3 AND status != 'closed'
+      RETURNING id, name, status, started_at, stopped_at`,
+      [status, timestampCol, sessionId]
+    );
+
+    if (results.length === 0) {
+      return res.status(404).json({message: "sessionId not found."})
+    }
+
+    if (status === "recording") {
+      startSessionRecording(sessionId);
+    } else {
+      stopSessionRecording(sessionId);
+    }
+
+    res.send(204).json(results[0])
   } catch (err) {
     next(err);
   }
@@ -61,8 +124,25 @@ recordingsRouter.patch("/update", async (req, res, next) => {
 // End a session and tear down its websocket channel.
 recordingsRouter.delete("/close", async (req, res, next) => {
   try {
-    // TODO: read sessionId, closeSessionSocket(sessionId), mark it ended.
-    res.status(501).json({ error: "Not implemented" });
+    const {sessionId, status} = req.body ?? {};
+    if (!sessionId) {
+      return res.status(400).json({message: "sessionId is requred."});
+    }
+
+    const {results} = await pool.query(
+      `UPDATE recordings
+      SET status = 'closed', closed_at = now()
+      WHERE id = $1
+      RETURNING id, status, closed_at`,
+      [sessionId]
+    );
+    if (results.length === 0) {
+      return res.status(404).json({message: "sessionId not found."})
+    }
+
+    await closeSessionSocket(sessionId);
+
+    res.status(204).json(results[0]);
   } catch (err) {
     next(err);
   }
