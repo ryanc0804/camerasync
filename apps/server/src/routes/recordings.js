@@ -16,9 +16,10 @@ import {
   startSessionRecording,
   stopSessionRecording,
   closeSessionSocket,
-} from "../middleware/websocket.js";
+} from "../sockets/websocket.js";
 
 export const recordingsRouter = Router();
+const SOCKET_STATUSES = new Set(['recording', 'stopped']);
 
 // Create a new recording session (and host its websocket channel).
 recordingsRouter.post("/create", async (req, res, next) => {
@@ -26,6 +27,11 @@ recordingsRouter.post("/create", async (req, res, next) => {
     // TODO: validate body, generate sessionId (crypto.randomUUID()),
     // persist the session, then createSessionSocket(io, sessionId).
     // TODO: return 201 with the new session + how phones should connect.
+    const {name} = req.body ?? {};
+    if (name !== undefined && typeof name !== "string") {
+      return res.status(400).json({error: "name must be a string"});
+    }
+
     res.status(501).json({ error: "Not implemented" });
   } catch (err) {
     next(err);

@@ -37,9 +37,14 @@ CREATE TABLE IF NOT EXISTS videos (
 );
 
 CREATE TABLE IF NOT EXISTS recordings (
-    sessions    JSON DEFAULT '[]',
-    org_id      VARCHAR(255) NOT NULL,
-    created_at  TIMESTAMP NOT NULL DEFAULT NOW()
+    id uuid PRIMARY KEY,
+    name text,
+    status text NOT NULL DEFAULT 'created'
+    CHECK (status IN ('created', 'recording', 'stopped', 'closed')),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    started_at timestamptz,
+    stopped_at timestamptz,
+    closed_at timestamptz
 );
 
 CREATE TABLE IF NOT EXISTS posts (
