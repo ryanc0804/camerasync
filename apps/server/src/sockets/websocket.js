@@ -36,6 +36,17 @@ export async function initSocket(httpServer) {
   io.on('connection', (socket) => {
     // Event called after device connection
 
+    // Clock sync: echo the client's send time alongside the server time so the
+    // client can estimate its offset from the shared server clock.
+    socket.on(EVENTS.TIME_SYNC, (clientSentAtEpochMs, ack) => {
+      const reply = {
+        clientSentAtEpochMs,
+        serverTimeEpochMs: Date.now(),
+      };
+      if (typeof ack === "function") ack(reply);
+      else socket.emit(EVENTS.TIME_SYNC, reply);
+    });
+    
     socket.on(EVENTS.JOIN_SESSION, async ({ sessionId, deviceId } = {}, ack) => {
       if (typeof ack !== "function") return; // client must pass a callback function
       if (!sessionId) return ack({ ok: false, error: "sessionId required" });
