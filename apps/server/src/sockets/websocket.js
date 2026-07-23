@@ -107,7 +107,7 @@ export async function createRecordingSession(io, sessionId, options = {}) {
  * @param {string} sessionId
  * @returns {object | undefined}
  */
-export function getRecordingSession(sessionId) {
+export async function getRecordingSession(sessionId) {
   // fetch all current sockets in the newest session
 
   const sockets = await getIO().in(sessionId).fetchSockets();

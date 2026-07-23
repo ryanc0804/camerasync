@@ -11,8 +11,8 @@ import crypto from "node:crypto";
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import {
-  createSessionSocket,
-  getSessionSocket,
+  createRecordingSession,
+  getRecordingSession,
   startSessionRecording,
   stopSessionRecording,
   closeSessionSocket,
