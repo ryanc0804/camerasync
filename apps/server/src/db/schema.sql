@@ -23,6 +23,41 @@ CREATE TABLE IF NOT EXISTS sessions (
 -- index keeps that lookup from becoming a sequential scan.
 CREATE INDEX IF NOT EXISTS sessions_session_token_idx ON sessions (session_token);
 
+CREATE TABLE IF NOT EXISTS groups (
+    group_id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    is_public BOOLEAN NOT NULL DEFAULT TRUE,
+    password_hash TEXT,
+    owner_id BIGINT NOT NULL REFERENCES users(user_id),
+    primary_color CHAR(7) NOT NULL DEFAULT '#ffc72c',
+    secondary_color CHAR(7) NOT NULL DEFAULT '#0d0d0d',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (is_public OR password_hash IS NOT NULL)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS groups_group_id_lower_idx
+    ON groups (LOWER(group_id));
+
+CREATE TABLE IF NOT EXISTS group_members (
+    group_id VARCHAR(64) NOT NULL REFERENCES groups(group_id) ON DELETE CASCADE,
+    user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    role VARCHAR(16) NOT NULL DEFAULT 'member'
+        CHECK (role IN ('admin', 'member')),
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (group_id, user_id)
+);
+
+UPDATE group_members
+SET role = 'member'
+WHERE role NOT IN ('admin', 'member');
+
+ALTER TABLE group_members
+    DROP CONSTRAINT IF EXISTS group_members_role_check;
+
+ALTER TABLE group_members
+    ADD CONSTRAINT group_members_role_check
+    CHECK (role IN ('admin', 'member'));
+
 CREATE TABLE IF NOT EXISTS organizations (
     org_id VARCHAR(255) PRIMARY KEY,
     name VARCHAR(64),
