@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
 import {
@@ -7,6 +8,11 @@ import {
   joinGroup,
   searchGroups,
 } from "../api/groups.js";
+import {
+  endSession,
+  getSessions,
+  joinSession,
+} from "../api/recordings.js";
 
 // Shells for the sections that don't have backing APIs yet. Each states what
 // it will hold so the nav is honest about what's built vs. planned.
@@ -37,6 +43,14 @@ const styles = {
 
 export function HomeScreen() {
   const { user } = useAuth();
+  const navigate = useNavigate();
+  const [groups, setGroups] = useState([]);
+  const [liveSessions, setLiveSessions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [joiningId, setJoiningId] = useState(null);
+  const [endingId, setEndingId] = useState(null);
+  const [confirmingEndId, setConfirmingEndId] = useState(null);
+  const [error, setError] = useState("");
 
   const today = new Date().toLocaleDateString(undefined, {
     weekday: "long",
@@ -45,8 +59,63 @@ export function HomeScreen() {
     year: "numeric",
   });
 
+  // loads live sessions for the user's groups
+  useEffect(() => {
+    Promise.all([getGroups(), getSessions()])
+      .then(([loadedGroups, loadedSessions]) => {
+        setGroups(loadedGroups);
+        setLiveSessions(
+          loadedSessions.filter((session) => session.status === "active")
+        );
+      })
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const groupName = (groupId) =>
+    groups.find((group) => group.id === groupId)?.name || groupId;
+
+  // joins a live session from the home page
+  const joinLiveSession = async (id) => {
+    setError("");
+    setJoiningId(id);
+
+    try {
+      const joinedSession = await joinSession(id);
+      setLiveSessions((current) =>
+        current.map((session) =>
+          session.id === id ? joinedSession : session
+        )
+      );
+      navigate(`/record/${joinedSession.id}`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setJoiningId(null);
+    }
+  };
+
+  // lets the creator end a live session
+  const endLiveSession = async (id) => {
+    setError("");
+    setEndingId(id);
+
+    try {
+      await endSession(id);
+      setLiveSessions((current) =>
+        current.filter((session) => session.id !== id)
+      );
+      setConfirmingEndId(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setEndingId(null);
+    }
+  };
+
   return (
     <div>
+      <style>{homeCss}</style>
       <div style={styles.date}>{today}</div>
       <h1 style={styles.title}>Welcome back, {user?.name || user?.email}</h1>
       <p style={styles.muted}>
@@ -54,10 +123,92 @@ export function HomeScreen() {
         from <strong>Record</strong>, and every connected device begins filming
         on the same command.
       </p>
-      <div style={styles.note}>
-        Upcoming sessions and recent recordings will appear here once sessions
-        exist in the API.
-      </div>
+
+      <section className="home-live-sessions">
+        <h2>Live sessions</h2>
+        {error && <p className="home-live-error">{error}</p>}
+        {loading ? (
+          <p className="home-live-empty">Loading live sessions...</p>
+        ) : liveSessions.length === 0 ? (
+          <p className="home-live-empty">No sessions are live right now.</p>
+        ) : (
+          <div className="home-live-list">
+            {liveSessions.map((session) => {
+              const group = groups.find(
+                (item) => item.id === session.groupId
+              );
+
+              return (
+                <article
+                  className="home-live-card"
+                  style={{ borderLeftColor: group?.primaryColor }}
+                  key={session.id}
+                >
+                  <div>
+                    <span className="home-live-label">Live</span>
+                    <h3>{session.name}</h3>
+                    <p>{groupName(session.groupId)}</p>
+                  </div>
+                  <div className="home-live-details">
+                    <span>
+                      {session.activeMemberCount} active{" "}
+                      {session.activeMemberCount === 1 ? "member" : "members"}
+                    </span>
+                    {session.isJoined ? (
+                      <button
+                        className="home-joined-button"
+                        type="button"
+                        onClick={() => navigate(`/record/${session.id}`)}
+                      >
+                        Enter Session
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={joiningId === session.id}
+                        onClick={() => joinLiveSession(session.id)}
+                      >
+                        {joiningId === session.id ? "Joining..." : "Join"}
+                      </button>
+                    )}
+
+                    {session.createdBy === user?.id &&
+                      (confirmingEndId === session.id ? (
+                        <>
+                          <button
+                            className="home-keep-button"
+                            type="button"
+                            onClick={() => setConfirmingEndId(null)}
+                          >
+                            Keep Live
+                          </button>
+                          <button
+                            className="home-end-button"
+                            type="button"
+                            disabled={endingId === session.id}
+                            onClick={() => endLiveSession(session.id)}
+                          >
+                            {endingId === session.id
+                              ? "Ending..."
+                              : "Confirm End"}
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          className="home-end-button"
+                          type="button"
+                          onClick={() => setConfirmingEndId(session.id)}
+                        >
+                          End Session
+                        </button>
+                      ))}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -456,6 +607,106 @@ export function GroupsScreen() {
     </div>
   );
 }
+
+const homeCss = `
+  .home-live-sessions {
+    width: min(100%, 760px);
+    margin-top: 28px;
+  }
+  .home-live-sessions h2 {
+    margin: 0 0 12px;
+    font-size: 1.2rem;
+  }
+  .home-live-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .home-live-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 16px;
+    border: 1px solid #303030;
+    border-left: 4px solid #ffc72c;
+    border-radius: 8px;
+    background: #202020;
+  }
+  .home-live-card h3 {
+    margin: 4px 0;
+    font-size: 1rem;
+  }
+  .home-live-card p,
+  .home-live-card span {
+    margin: 0;
+    color: #999;
+    font-size: 0.85rem;
+  }
+  .home-live-card .home-live-label {
+    color: #72d58c;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .home-live-details {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+  .home-live-details button {
+    min-width: 72px;
+    padding: 8px 12px;
+    border: 1px solid #ffc72c;
+    border-radius: 7px;
+    background: #ffc72c;
+    color: #0d0d0d;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .home-live-details button:disabled {
+    cursor: default;
+    opacity: 0.55;
+  }
+  .home-live-details .home-joined-button {
+    border-color: #4f8f63;
+    background: transparent;
+    color: #72d58c;
+    opacity: 1;
+  }
+  .home-live-details .home-end-button {
+    border-color: #7a3434;
+    background: transparent;
+    color: #ff8a80;
+  }
+  .home-live-details .home-keep-button {
+    border-color: #444;
+    background: #292929;
+    color: #eee;
+  }
+  .home-live-empty,
+  .home-live-error {
+    margin: 0;
+    padding: 20px 14px;
+    border: 1px dashed #3a3a3a;
+    border-radius: 8px;
+    color: #888;
+    text-align: center;
+  }
+  .home-live-error {
+    margin-bottom: 10px;
+    color: #ff8a80;
+  }
+  @media (max-width: 600px) {
+    .home-live-card,
+    .home-live-details {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+  }
+`;
 
 const groupsCss = `
   .groups-grid {

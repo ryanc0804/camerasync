@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
+import { SessionScheduler } from "../components/SessionScheduler.jsx";
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
 
@@ -75,6 +76,8 @@ export function RecordScreen() {
 
       <h3 style={styles.h3}>Event log</h3>
       <pre style={styles.log}>{log.join("\n")}</pre>
+
+      <SessionScheduler />
 
       <style>{css}</style>
     </div>

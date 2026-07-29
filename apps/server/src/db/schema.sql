@@ -65,6 +65,42 @@ CREATE TABLE IF NOT EXISTS organizations (
     rec_sessions JSON DEFAULT '[]'
 );
 
+-- stores scheduled and live group sessions
+CREATE TABLE IF NOT EXISTS recording_sessions (
+    id VARCHAR(6) PRIMARY KEY
+        CHECK (id ~ '^[a-z0-9]{6}$'),
+    group_id VARCHAR(64) NOT NULL REFERENCES groups(group_id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    scheduled_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_by BIGINT NOT NULL REFERENCES users(user_id),
+    status VARCHAR(16) NOT NULL DEFAULT 'scheduled'
+        CHECK (status IN ('scheduled', 'active', 'complete', 'cancelled'))
+);
+
+UPDATE recording_sessions
+SET status = 'complete'
+WHERE status = 'completed';
+
+ALTER TABLE recording_sessions
+    DROP CONSTRAINT IF EXISTS recording_sessions_status_check;
+
+ALTER TABLE recording_sessions
+    ADD CONSTRAINT recording_sessions_status_check
+    CHECK (status IN ('scheduled', 'active', 'complete', 'cancelled'));
+
+CREATE INDEX IF NOT EXISTS recording_sessions_group_date_idx
+    ON recording_sessions (group_id, scheduled_at);
+
+-- tracks users who joined each session
+CREATE TABLE IF NOT EXISTS recording_session_members (
+    session_id VARCHAR(6) NOT NULL
+        REFERENCES recording_sessions(id) ON DELETE CASCADE,
+    user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (session_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS videos (
     recording_uri TEXT,
     session_id VARCHAR(255),

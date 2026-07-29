@@ -3,7 +3,7 @@ import http from "node:http";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-import { Server as SocketServer } from "socket.io";
+import timesyncServer from "timesync/server/index.js";
 
 import { healthRouter } from "./routes/health.js";
 import { initSocket } from "./sockets/websocket.js";
@@ -23,6 +23,7 @@ app.use(express.json());
 app.use(cookieParser());
 
 app.use("/health", healthRouter);
+app.use("/timesync", timesyncServer.requestHandler);
 
 // Status message for root route
 app.get("/", async (req, res) => {

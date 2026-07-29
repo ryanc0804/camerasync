@@ -1,170 +1,297 @@
-// Session WebSocket manager.
-//
-// Creates and hosts one logical websocket "channel" per recording session so
-// phones can be synced independently of each other. This sits on top of the
-// shared Socket.IO server (see ../sockets/index.js) and tracks the lifecycle of
-// each session's room: create -> host/broadcast -> close.
-
-import { EVENTS, RECORDING_LEAD_TIME_MS } from "./events.js";
 import { Server } from "socket.io";
 import { createAdapter } from "@socket.io/postgres-adapter";
-import { pool } from '../db/pool.js';
+
+import {
+  SESSION_COOKIE,
+  getUserBySessionToken,
+  publicUser,
+} from "../auth/sessions.js";
+import { pool } from "../db/pool.js";
+import { DEFAULT_RECORDING_BUFFER_MS, EVENTS } from "./events.js";
 
 const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:5173";
+const MAX_RECORDING_BUFFER_MS = 60000;
 let io = null;
+const activeRecordings = new Map();
+const recordingNumbers = new Map();
 
-/**
- * Init server on module startup
- */
+// keeps one socket room for each session
+function roomName(sessionId) {
+  return `recording:${sessionId}`;
+}
+
+// reads the login token from the socket cookie
+function readCookie(cookieHeader, name) {
+  const cookies = String(cookieHeader || "").split(";");
+
+  for (const cookie of cookies) {
+    const [cookieName, ...valueParts] = cookie.trim().split("=");
+    if (cookieName === name) {
+      return decodeURIComponent(valueParts.join("="));
+    }
+  }
+
+  return null;
+}
+
+// gets each connected user once
+async function getRoomMembers(sessionId) {
+  const sockets = await getIO().in(roomName(sessionId)).fetchSockets();
+  const members = new Map();
+
+  for (const socket of sockets) {
+    const user = socket.data.user;
+    if (user) members.set(user.id, user);
+  }
+
+  return Array.from(members.values());
+}
+
+async function sendRoomMembers(sessionId) {
+  const members = await getRoomMembers(sessionId);
+  getIO().to(roomName(sessionId)).emit(EVENTS.SESSION_MEMBERS, members);
+  return members;
+}
+
+// keeps the recording buffer safe and numeric
+function cleanBuffer(bufferMs) {
+  const number = Number(bufferMs);
+  if (!Number.isFinite(number)) return DEFAULT_RECORDING_BUFFER_MS;
+  return Math.min(MAX_RECORDING_BUFFER_MS, Math.max(0, Math.round(number)));
+}
+
+async function isSessionHost(socket, sessionId) {
+  if (socket.data.sessionId !== sessionId) return false;
+
+  const result = await pool.query(
+    `SELECT 1
+       FROM recording_sessions
+      WHERE id = $1
+        AND created_by = $2
+        AND status = 'active'`,
+    [sessionId, socket.data.user.id]
+  );
+
+  return result.rowCount > 0;
+}
+
 export async function initSocket(httpServer) {
-
   await pool.query(`
     CREATE TABLE IF NOT EXISTS socket_io (
-    id BIGSERIAL UNIQUE PRIMARY KEY,
-    created_at timestamptz DEFAULT NOW(),
-    payload bytea
-    );
+      id BIGSERIAL UNIQUE PRIMARY KEY,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      payload BYTEA
+    )
   `);
 
   io = new Server(httpServer, {
-    cors: { origin: WEB_ORIGIN }
+    cors: {
+      origin: WEB_ORIGIN,
+      credentials: true,
+    },
   });
-
-  // Initializes to postgres socket.io adapter
   io.adapter(createAdapter(pool));
 
-  io.on('connection', (socket) => {
-    // Event called after device connection
+  // socket rooms use the same login cookie as the api
+  io.use(async (socket, next) => {
+    try {
+      const token = readCookie(
+        socket.handshake.headers.cookie,
+        SESSION_COOKIE
+      );
+      const userRow = await getUserBySessionToken(token);
 
-    // Clock sync: echo the client's send time alongside the server time so the
-    // client can estimate its offset from the shared server clock.
-    socket.on(EVENTS.TIME_SYNC, (clientSentAtEpochMs, ack) => {
-      const reply = {
-        clientSentAtEpochMs,
-        serverTimeEpochMs: Date.now(),
-      };
-      if (typeof ack === "function") ack(reply);
-      else socket.emit(EVENTS.TIME_SYNC, reply);
-    });
-    
-    socket.on(EVENTS.JOIN_SESSION, async ({ sessionId, deviceId } = {}, ack) => {
-      if (typeof ack !== "function") return; // client must pass a callback function
-      if (!sessionId) return ack({ ok: false, error: "sessionId required" });
+      if (!userRow) return next(new Error("Not authenticated"));
+
+      socket.data.user = publicUser(userRow);
+      next();
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  io.on("connection", (socket) => {
+    socket.on(EVENTS.JOIN_SESSION, async ({ sessionId } = {}, ack) => {
+      if (typeof ack !== "function") return;
+      if (!sessionId) {
+        return ack({ ok: false, error: "Session ID is required." });
+      }
 
       try {
-        const { recExists } = await pool.query(
-          "SELECT status FROM recordings WHERE rec_id = $1"
-          [sessionId]
-        )
+        const { rows } = await pool.query(
+          `SELECT rs.id, rs.name, rs.created_by, rs.status
+             FROM recording_sessions rs
+             JOIN group_members gm
+               ON gm.group_id = rs.group_id
+              AND gm.user_id = $2
+             JOIN recording_session_members rsm
+               ON rsm.session_id = rs.id
+              AND rsm.user_id = $2
+            WHERE rs.id = $1
+              AND rs.status = 'active'`,
+          [sessionId, socket.data.user.id]
+        );
 
-        if (recExists.length == 0 || recExists[0].status === "closed") {
-          return ack({ ok: false, error: "session not found or has been closed." })
+        if (rows.length === 0) {
+          return ack({
+            ok: false,
+            error: "This session is not live or you have not joined it.",
+          });
         }
 
-        // join socket "room" that will run asynchronously depending on the session
-        socket.join(sessionId);
+        const previousSessionId = socket.data.sessionId;
+        if (previousSessionId && previousSessionId !== sessionId) {
+          await socket.leave(roomName(previousSessionId));
+          await sendRoomMembers(previousSessionId);
+        }
+
         socket.data.sessionId = sessionId;
-        socket.data.deviceId = deviceId ?? socket.id;
+        await socket.join(roomName(sessionId));
+        const members = await sendRoomMembers(sessionId);
 
-        // Fire device-joined event after successful connect and respond with success ACK packet
-        socket.to(sessionId).emit(EVENTS.SESSION_JOINED, { deviceId: socket.data.deviceId });
-        ack({ ok: true, status: recExists[0].status });
+        ack({
+          ok: true,
+          members,
+          recording: activeRecordings.get(sessionId) ?? null,
+          session: {
+            id: rows[0].id,
+            name: rows[0].name,
+            createdBy: Number(rows[0].created_by),
+            status: rows[0].status,
+          },
+        });
       } catch (err) {
-        ack({ ok: false, error: "Internal server error with socket connection." })
-      }
-    })
-
-
-    socket.on(EVENTS.LEAVE_SESSION, () => {
-      const { sessionid, deviceId } = socket.data;
-      if (sessionid) {
-        socket.to(sessionid).emit(EVENTS.SESSION_LEFT, { deviceId });
+        console.error("Unable to join Socket.IO session:", err);
+        ack({ ok: false, error: "Unable to join the live session." });
       }
     });
 
+    socket.on(EVENTS.LEAVE_SESSION, async () => {
+      const sessionId = socket.data.sessionId;
+      if (!sessionId) return;
+
+      socket.data.sessionId = null;
+      await socket.leave(roomName(sessionId));
+      await sendRoomMembers(sessionId);
+    });
+
+    // lets the host send one shared recording start time
+    socket.on(
+      EVENTS.START_RECORDING,
+      async ({ sessionId, bufferMs } = {}, ack = () => {}) => {
+        try {
+          if (!(await isSessionHost(socket, sessionId))) {
+            return ack({
+              ok: false,
+              error: "Only the session creator can start recording.",
+            });
+          }
+
+          const recording = await startSessionRecording(
+            sessionId,
+            cleanBuffer(bufferMs)
+          );
+          ack({ ok: true, recording });
+        } catch (err) {
+          ack({ ok: false, error: err.message });
+        }
+      }
+    );
+
+    // sends the stop command to every device in the room
+    socket.on(
+      EVENTS.STOP_RECORDING,
+      async ({ sessionId } = {}, ack = () => {}) => {
+        try {
+          if (!(await isSessionHost(socket, sessionId))) {
+            return ack({
+              ok: false,
+              error: "Only the session creator can stop recording.",
+            });
+          }
+
+          const recording = await stopSessionRecording(sessionId);
+          ack({ ok: true, recording });
+        } catch (err) {
+          ack({ ok: false, error: err.message });
+        }
+      }
+    );
+
+    socket.on("disconnect", async () => {
+      const sessionId = socket.data.sessionId;
+      if (sessionId) await sendRoomMembers(sessionId);
+    });
   });
 
   return io;
 }
 
-/**
- * 
- * @returns {import("socket.io").Server}
- */
 function getIO() {
-  if (!io) {
-    throw new Error("socket server has not been initialized.");
-  }
-
+  if (!io) throw new Error("Socket server has not been initialized.");
   return io;
 }
 
-/**
- * Stand up a new websocket channel for a recording session.
- * Async so the manager can later back this with a store (Redis/db) that the
- * REST layer awaits before returning to the client.
- *
- * @param {import("socket.io").Server} io   shared Socket.IO server instance
- * @param {string} sessionId
- * @param {object} [options]
- * @returns {Promise<object>} handle describing the created session socket
- */
-export async function createRecordingSession(io, sessionId, options = {}) {
-  getIO()
+// keeps this available for parker's later recording work
+export async function createRecordingSession(sessionId) {
+  return getRecordingSession(sessionId);
 }
 
-/**
- * Look up the live handle for a session, or undefined if none is hosted.
- * @param {string} sessionId
- * @returns {object | undefined}
- */
 export async function getRecordingSession(sessionId) {
-  // fetch all current sockets in the newest session
-
-  const sockets = await getIO().in(sessionId).fetchSockets();
+  const sockets = await getIO().in(roomName(sessionId)).fetchSockets();
   return {
     deviceCount: sockets.length,
-    devices: sockets.map((socket) => socket.data.deviceId ?? socket.id),
+    devices: sockets.map((socket) => socket.data.user ?? { id: socket.id }),
+    recording: activeRecordings.get(sessionId) ?? null,
   };
 }
 
-/**
- * Broadcast a synchronized recording start to every phone in the session.
- * Picks a single shared future wall-clock instant (Date.now() + lead time).
- * @param {string} sessionId
- * @returns {Promise<{ startAtEpochMs: number }>}
- */
-export async function startSessionRecording(sessionId) {
-  // TODO: resolve handle, compute startAtEpochMs, emit EVENTS.RECORDING_STARTED.
-  const session = getIO();
-
-  session.to(sessionId).emit(EVENTS.RECORDING_STARTED);
-}
-
-/**
- * Broadcast a recording stop to every phone in the session.
- * @param {string} sessionId
- * @returns {Promise<void>}
- */
-export async function stopSessionRecording(sessionId) {
-  // TODO: resolve handle, emit EVENTS.RECORDING_STOPPED.
-  const session = getIO();
-
-  session.to(sessionId).emit(EVENTS.RECORDING_STOPPED);
-}
-
-/**
- * Tear down a session's websocket channel and free its registry entry.
- * @param {string} sessionId
- * @returns {Promise<void>}
- */
-export async function closeSessionSocket(sessionId) {
-  // TODO: disconnect room members, delete from sessionSockets.
-  const server = getIO();
-
-  server.to(sessionId).emit(EVENTS.CLOSE_SESSION);
-  const sockets = await server.in(sessionId).fetchSockets();
-  for (const socket of sockets) {
-    socket.leave(sessionId);
+export async function startSessionRecording(
+  sessionId,
+  bufferMs = DEFAULT_RECORDING_BUFFER_MS
+) {
+  if (activeRecordings.has(sessionId)) {
+    throw new Error("This session is already recording.");
   }
+
+  const recordingNumber = (recordingNumbers.get(sessionId) ?? 0) + 1;
+  const serverSentAtEpochMs = Date.now();
+  const safeBufferMs = cleanBuffer(bufferMs);
+  const recording = {
+    sessionId,
+    recordingNumber,
+    bufferMs: safeBufferMs,
+    serverSentAtEpochMs,
+    startAtEpochMs: serverSentAtEpochMs + safeBufferMs,
+  };
+
+  recordingNumbers.set(sessionId, recordingNumber);
+  activeRecordings.set(sessionId, recording);
+  getIO().to(roomName(sessionId)).emit(EVENTS.RECORDING_STARTED, recording);
+  return recording;
+}
+
+export async function stopSessionRecording(sessionId) {
+  const recording = activeRecordings.get(sessionId);
+  if (!recording) throw new Error("This session is not recording.");
+
+  const stoppedRecording = {
+    ...recording,
+    stopAtEpochMs: Date.now(),
+  };
+
+  getIO()
+    .to(roomName(sessionId))
+    .emit(EVENTS.RECORDING_STOPPED, stoppedRecording);
+  activeRecordings.delete(sessionId);
+  return stoppedRecording;
+}
+
+export async function closeSessionSocket(sessionId) {
+  const room = roomName(sessionId);
+  if (activeRecordings.has(sessionId)) {
+    await stopSessionRecording(sessionId);
+  }
+  getIO().to(room).emit(EVENTS.CLOSE_SESSION, { sessionId });
+  getIO().in(room).socketsLeave(room);
 }
