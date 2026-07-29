@@ -1,4 +1,4 @@
-// Socket.IO event names shared by the web and mobile clients.
+// socket.io event names shared by the web and mobile clients
 export const EVENTS = {
   JOIN_SESSION: "session:join",
   LEAVE_SESSION: "session:leave",

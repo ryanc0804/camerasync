@@ -611,7 +611,7 @@ recordingsRouter.patch("/update", async (req, res, next) => {
       stopSessionRecording(sessionId);
     }
 
-    res.send(200).json(rows[0])
+    res.status(200).json(rows[0])
   } catch (err) {
     next(err);
   }
