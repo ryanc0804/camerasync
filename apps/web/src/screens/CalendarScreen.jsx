@@ -1,4 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+import { getGroups } from "../api/groups.js";
+import { getSessions } from "../api/recordings.js";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -8,6 +11,15 @@ function isSameDay(a, b) {
     a.getMonth() === b.getMonth() &&
     a.getDate() === b.getDate()
   );
+}
+
+// gives each date a simple lookup key
+function dateKey(date) {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
 }
 
 /// Builds the 6x7 grid for a month, padded with the neighbouring months' days
@@ -35,10 +47,56 @@ export function CalendarScreen() {
     () => new Date(today.getFullYear(), today.getMonth(), 1)
   );
   const [selected, setSelected] = useState(null);
+  const [groups, setGroups] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   const year = cursor.getFullYear();
   const month = cursor.getMonth();
   const { cells } = useMemo(() => buildMonthGrid(year, month), [year, month]);
+
+  // loads visible sessions and their group colors
+  useEffect(() => {
+    Promise.all([getGroups(), getSessions()])
+      .then(([loadedGroups, loadedSessions]) => {
+        setGroups(loadedGroups);
+        setSessions(
+          loadedSessions.filter((session) => session.status !== "cancelled")
+        );
+      })
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const groupsById = useMemo(
+    () => new Map(groups.map((group) => [group.id, group])),
+    [groups]
+  );
+
+  // groups sessions by date and sorts each day by time
+  const sessionsByDate = useMemo(() => {
+    const grouped = new Map();
+
+    sessions.forEach((session) => {
+      const key = dateKey(new Date(session.scheduledAt));
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(session);
+    });
+
+    grouped.forEach((daySessions) =>
+      daySessions.sort(
+        (left, right) =>
+          new Date(left.scheduledAt) - new Date(right.scheduledAt)
+      )
+    );
+
+    return grouped;
+  }, [sessions]);
+
+  const selectedSessions = selected
+    ? sessionsByDate.get(dateKey(selected)) || []
+    : [];
 
   const monthLabel = cursor.toLocaleDateString(undefined, {
     month: "long",
@@ -52,7 +110,7 @@ export function CalendarScreen() {
   };
 
   return (
-    <div>
+    <div className="calendar-content">
       <style>{css}</style>
 
       <div style={styles.header}>
@@ -71,6 +129,8 @@ export function CalendarScreen() {
         </div>
       </div>
 
+      {error && <p className="cal-error">{error}</p>}
+
       <div style={styles.grid}>
         {WEEKDAYS.map((d) => (
           <div key={d} style={styles.weekday}>
@@ -81,6 +141,7 @@ export function CalendarScreen() {
         {cells.map(({ date, inMonth }) => {
           const isToday = isSameDay(date, today);
           const isSelected = selected && isSameDay(date, selected);
+          const daySessions = sessionsByDate.get(dateKey(date)) || [];
           const classes = [
             "cal-day",
             !inMonth && "cal-day-muted",
@@ -97,22 +158,72 @@ export function CalendarScreen() {
               onClick={() => setSelected(date)}
               aria-current={isToday ? "date" : undefined}
             >
-              {date.getDate()}
+              <span className="cal-day-number">{date.getDate()}</span>
+              <span className="cal-day-events">
+                {daySessions.slice(0, 2).map((session) => {
+                  const group = groupsById.get(session.groupId);
+                  return (
+                    <span
+                      className="cal-day-event"
+                      style={{ color: group?.primaryColor || "#ffc72c" }}
+                      key={session.id}
+                    >
+                      {session.name} - {group?.name || session.groupId}
+                    </span>
+                  );
+                })}
+                {daySessions.length > 2 && (
+                  <span className="cal-day-more">
+                    +{daySessions.length - 2} more
+                  </span>
+                )}
+              </span>
             </button>
           );
         })}
       </div>
 
       {selected && (
-        <p style={styles.selectedNote}>
-          {selected.toLocaleDateString(undefined, {
-            weekday: "long",
-            month: "long",
-            day: "numeric",
-            year: "numeric",
-          })}{" "}
-          — no sessions scheduled.
-        </p>
+        <section className="cal-agenda">
+          <h2>
+            {selected.toLocaleDateString(undefined, {
+              weekday: "long",
+              month: "long",
+              day: "numeric",
+              year: "numeric",
+            })}
+          </h2>
+
+          {loading ? (
+            <p>Loading sessions...</p>
+          ) : selectedSessions.length === 0 ? (
+            <p>No scheduled sessions.</p>
+          ) : (
+            <div className="cal-agenda-list">
+              {selectedSessions.map((session) => {
+                const group = groupsById.get(session.groupId);
+                return (
+                  <div className="cal-agenda-item" key={session.id}>
+                    <time>
+                      {new Date(session.scheduledAt).toLocaleTimeString(
+                        undefined,
+                        {
+                          hour: "numeric",
+                          minute: "2-digit",
+                        }
+                      )}
+                    </time>
+                    <span
+                      style={{ color: group?.primaryColor || "#ffc72c" }}
+                    >
+                      {session.name} - {group?.name || session.groupId}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
       )}
     </div>
   );
@@ -139,7 +250,8 @@ const styles = {
     display: "grid",
     gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
     gap: 6,
-    maxWidth: 780,
+    width: "100%",
+    maxWidth: 940,
   },
   weekday: {
     textAlign: "center",
@@ -150,10 +262,12 @@ const styles = {
     color: "#8a8a8a",
     padding: "0 0 6px",
   },
-  selectedNote: { color: "#999", marginTop: "1.25rem" },
 };
 
 const css = `
+  .calendar-content {
+    width: min(100%, 940px);
+  }
   .cal-nav, .cal-today {
     font: inherit;
     font-weight: 600;
@@ -171,8 +285,11 @@ const css = `
     font: inherit;
     aspect-ratio: 1 / 1;
     display: flex;
+    flex-direction: column;
     align-items: flex-start;
-    justify-content: flex-end;
+    justify-content: flex-start;
+    gap: 7px;
+    min-width: 0;
     padding: 8px;
     border-radius: 8px;
     border: 1px solid #2a2a2a;
@@ -180,6 +297,32 @@ const css = `
     color: #e8e8e8;
     cursor: pointer;
     transition: background 0.12s, border-color 0.12s;
+  }
+  .cal-day-number {
+    align-self: flex-end;
+    line-height: 1;
+  }
+  .cal-day-events {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .cal-day-event,
+  .cal-day-more {
+    width: 100%;
+    overflow: hidden;
+    font-size: 0.68rem;
+    font-weight: 600;
+    line-height: 1.2;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .cal-day-more {
+    color: #777;
+    font-weight: 400;
   }
   .cal-day:hover { background: #262626; }
   .cal-day-muted { color: #5a5a5a; background: #161616; }
@@ -189,9 +332,66 @@ const css = `
     font-weight: 700;
   }
   .cal-day-selected {
-    background: #ffc72c;
+    background: #2a2a2a;
     border-color: #ffc72c;
-    color: #0d0d0d;
+    color: #ffc72c;
     font-weight: 700;
+  }
+  .cal-error {
+    margin: 0 0 12px;
+    color: #ff8a80;
+  }
+  .cal-agenda {
+    max-width: 940px;
+    margin-top: 20px;
+    padding: 18px;
+    border: 1px solid #2a2a2a;
+    border-radius: 9px;
+    background: #1c1c1c;
+  }
+  .cal-agenda h2 {
+    margin: 0 0 12px;
+    font-size: 1.05rem;
+  }
+  .cal-agenda p {
+    margin: 0;
+    color: #999;
+  }
+  .cal-agenda-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .cal-agenda-item {
+    display: grid;
+    grid-template-columns: 95px minmax(0, 1fr);
+    gap: 12px;
+    align-items: baseline;
+    padding-top: 8px;
+    border-top: 1px solid #2f2f2f;
+  }
+  .cal-agenda-item:first-child {
+    padding-top: 0;
+    border-top: 0;
+  }
+  .cal-agenda-item time {
+    color: #aaa;
+    font-size: 0.85rem;
+  }
+  .cal-agenda-item span {
+    font-weight: 600;
+  }
+  @media (max-width: 650px) {
+    .cal-day {
+      gap: 3px;
+      padding: 5px;
+    }
+    .cal-day-event {
+      font-size: 0;
+    }
+    .cal-day-event::before {
+      content: "•";
+      font-size: 0.9rem;
+    }
   }
 `;

@@ -5,6 +5,7 @@ import { AppLayout } from "./layouts/AppLayout.jsx";
 import { AuthScreen } from "./screens/AuthScreen.jsx";
 import { ResetPasswordScreen } from "./screens/ResetPasswordScreen.jsx";
 import { RecordScreen } from "./screens/RecordScreen.jsx";
+import { ActiveSessionScreen } from "./screens/ActiveSessionScreen.jsx";
 import { CalendarScreen } from "./screens/CalendarScreen.jsx";
 import {
   GroupsScreen,
@@ -44,6 +45,7 @@ function Root() {
         <Route path="/" element={<HomeScreen />} />
         <Route path="/groups" element={<GroupsScreen />} />
         <Route path="/record" element={<RecordScreen />} />
+        <Route path="/record/:sessionId" element={<ActiveSessionScreen />} />
         <Route path="/calendar" element={<CalendarScreen />} />
         <Route path="/settings" element={<SettingsScreen />} />
       </Route>
