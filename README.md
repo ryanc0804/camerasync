@@ -21,7 +21,7 @@ names and API contracts.
 - **Backend:** Express.js, Socket.IO (real-time), PostgreSQL
 - **Web:** React
 - **Mobile:** Flutter
-- **Sync:** shared server clock (TrueTime-style offset) over Socket.IO
+- **Sync:** shared server clock Timesynce offset over Socket.IO
 - **Storage/delivery:** AWS S3 + Cloudflare Stream (later)
 - **Deploy:** AWS EC2 (later)
 
