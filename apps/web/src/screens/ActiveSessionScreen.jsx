@@ -325,7 +325,7 @@ export function ActiveSessionScreen() {
   const startRecording = () => {
     const socket = socketRef.current;
     if (!socket?.connected) {
-      setRecordingMessage("Socket.IO is not connected yet.");
+      setRecordingMessage("Websocket is not connected yet.");
       return;
     }
 
@@ -346,7 +346,7 @@ export function ActiveSessionScreen() {
   const stopRecording = () => {
     const socket = socketRef.current;
     if (!socket?.connected) {
-      setRecordingMessage("Socket.IO is not connected.");
+      setRecordingMessage("Websocket is not connected.");
       return;
     }
 

@@ -11,6 +11,7 @@ import { authRouter } from "./routes/auth.js";
 import { groupRouter } from "./routes/groups.js";
 import { postRouter } from "./routes/posts.js";
 import { recordingsRouter } from './routes/recordings.js';
+import { fileRouter } from "./routes/file.js";
 
 const PORT = process.env.PORT || 4000;
 const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:5173";
@@ -35,6 +36,7 @@ app.use("/api/auth", authRouter);
 app.use("/api/groups", groupRouter);
 app.use("/api/posts", postRouter);
 app.use("/api/recordings", recordingsRouter);
+app.use("/api/files", fileRouter);
 
 const server = http.createServer(app);
 
