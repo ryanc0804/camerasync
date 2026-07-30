@@ -100,7 +100,7 @@ async function readHeader(filePath) {
   }
 }
 
-// Best-effort cleanup; a file that is already gone is not an error.
+// disards files passively
 async function discard(filePath) {
   if (!filePath) return;
   await fsp.rm(filePath, { force: true }).catch(() => {});
@@ -180,6 +180,20 @@ fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
 fileRouter.post(
   "/upload",
   requireAuth,
+  // Reject an oversized body before reading it, so the client gets a clean
+  // 413 instead of having the connection cut mid-transfer. Requests without a
+  // Content-Length still get caught by multer's own limit below.
+  (req, res, next) => {
+    const declaredLength = Number(req.headers["content-length"]);
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_BYTES) {
+      return res.status(413).json({
+        error: `File is too large. The limit is ${
+          MAX_UPLOAD_BYTES / (1024 * 1024)
+        } MB.`,
+      });
+    }
+    next();
+  },
   (req, res, next) => {
     upload.single("file")(req, res, (err) => {
       if (!err) return next();
