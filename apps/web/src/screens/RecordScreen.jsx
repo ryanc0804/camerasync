@@ -42,7 +42,7 @@ export function RecordScreen() {
     <div>
       <h1 style={styles.title}>Record</h1>
       <p style={styles.muted}>
-        Server: <code>{SERVER_URL}</code> —{" "}
+        Server: —{" "}
         <strong style={{ color: connected ? "#7ddc7d" : "#ff8a80" }}>
           {connected ? "connected" : "disconnected"}
         </strong>
