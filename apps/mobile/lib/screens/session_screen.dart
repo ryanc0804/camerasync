@@ -26,10 +26,11 @@ class SessionScreen extends StatefulWidget {
 }
 
 class _SessionScreenState extends State<SessionScreen> {
-  late final SyncSocket _socket;
+  SyncSocket? _socket;
   final List<StreamSubscription> _subs = [];
 
   bool _permissionsGranted = false;
+  bool _initialized = false;
   List<String> _devices = [];
 
   @override
@@ -41,10 +42,23 @@ class _SessionScreenState extends State<SessionScreen> {
   Future<void> _init() async {
     await _requestPermissions();
 
-    _socket = SyncSocket(widget.serverUrl)..connect();
-    _socket.joinSession(widget.sessionId, widget.deviceName);
+    _socket = SyncSocket(widget.serverUrl);
+    await _socket!.connect();
 
-    _subs.add(_socket.devices.listen((d) => setState(() => _devices = d)));
+    _subs.add(_socket!.devices.listen((d) => setState(() => _devices = d)));
+
+    _subs.add(
+      _socket!.recordingStart.listen((startTime) {
+        print("RECORDING START EVENT RECEIVED");
+        print("Scheduled start time: $startTime");
+      }),
+    );
+
+    _socket!.joinSession(widget.sessionId, widget.deviceName);
+
+    setState(() {
+      _initialized = true;
+    });
   }
 
   Future<void> _requestPermissions() async {
@@ -61,14 +75,22 @@ class _SessionScreenState extends State<SessionScreen> {
     for (final s in _subs) {
       s.cancel();
     }
-    _socket.leaveSession(widget.sessionId);
-    _socket.dispose();
+
+    _socket?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!_initialized) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
     return Scaffold(
+      
       appBar: AppBar(title: Text('Session ${widget.sessionId}')),
       body: Padding(
         padding: const EdgeInsets.all(16),
@@ -81,7 +103,9 @@ class _SessionScreenState extends State<SessionScreen> {
                 style: TextStyle(color: Colors.red),
               ),
             Text('Device: ${widget.deviceName}'),
-            Text('Clock offset: ${_socket.clockOffsetMs} ms'),
+            Text(
+              'Clock offset: ${_socket?.clockOffsetMs ?? 0} ms',
+            ),            
             const SizedBox(height: 8),
             const SizedBox(height: 16),
             Text('Connected devices (${_devices.length})'),
@@ -96,7 +120,7 @@ class _SessionScreenState extends State<SessionScreen> {
                 context,
                 MaterialPageRoute(
                   builder: (_) => CameraScreen(
-                      socket: _socket,
+                      socket: _socket!,
                       sessionId: widget.sessionId,
                   ),
                 ),

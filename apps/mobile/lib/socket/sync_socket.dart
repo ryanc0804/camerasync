@@ -34,7 +34,7 @@ class SyncSocket {
 
   bool get connected => _socket.connected;
 
-  void connect() {
+  Future<void> connect() async{ 
     _socket = io.io(
       serverUrl,
       io.OptionBuilder().setTransports(['websocket']).build(),

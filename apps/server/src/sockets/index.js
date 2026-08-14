@@ -47,8 +47,9 @@ export function registerSocketHandlers(io) {
       });
 
       io.to(roomFor(sessionId)).emit(EVENTS.DEVICE_LIST, deviceListFor(sessionId));
-      console.log(`[socket] ${socket.id} joined session ${sessionId}`);
-    });
+      console.log(
+        `[socket] ${socket.id} joined session ${sessionId} as ${deviceName}`
+      );    });
 
     socket.on(EVENTS.LEAVE_SESSION, ({ sessionId } = {}) => {
       leaveSession(socket, sessionId);
