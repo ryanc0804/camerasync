@@ -7,9 +7,9 @@ import { ResetPasswordScreen } from "./screens/ResetPasswordScreen.jsx";
 import { RecordScreen } from "./screens/RecordScreen.jsx";
 import { ActiveSessionScreen } from "./screens/ActiveSessionScreen.jsx";
 import { CalendarScreen } from "./screens/CalendarScreen.jsx";
+import { HomeScreen } from "./screens/HomeScreen.jsx";
 import {
   GroupsScreen,
-  HomeScreen,
   SettingsScreen,
 } from "./screens/PlaceholderScreens.jsx";
 
