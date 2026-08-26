@@ -27,6 +27,9 @@ class AuthService extends ChangeNotifier {
 
   final ApiClient _api;
 
+  /// The shared API client, so other services reuse the same session cookie.
+  ApiClient get api => _api;
+
   AppUser? _user;
   bool _loading = true;
 

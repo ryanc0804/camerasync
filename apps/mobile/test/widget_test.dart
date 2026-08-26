@@ -20,6 +20,9 @@ void main() {
     expect(auth.isAuthenticated, isFalse);
     expect(find.text('8kount'), findsOneWidget);
     expect(find.text('Sign in'), findsOneWidget);
-    expect(find.text('New to 8kount? Create one'), findsOneWidget);
+    expect(
+      find.textContaining("Don't have an account?", findRichText: true),
+      findsOneWidget,
+    );
   });
 }
