@@ -18,7 +18,7 @@ export function RecordScreen() {
     setLog((l) => [`${new Date().toLocaleTimeString()}  ${msg}`, ...l]);
 
   useEffect(() => {
-    const s = io(SERVER_URL);
+    const s = io(SERVER_URL, { withCredentials: true });
     setSocket(s);
 
     s.on("connect", () => {
@@ -34,6 +34,7 @@ export function RecordScreen() {
       )
     );
     s.on("recording:stopped", () => addLog("recording STOPPED"));
+    s.on("connect_error", (err) => addLog(`connect_error: ${err?.message || err}`));
 
     return () => s.disconnect();
   }, []);

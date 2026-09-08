@@ -126,3 +126,15 @@ CREATE TABLE IF NOT EXISTS posts (
     video_meta  JSON,
     reply       VARCHAR(255)
 );
+
+CREATE TABLE IF NOT EXISTS socket_io (
+    id BIGSERIAL UNIQUE PRIMARY KEY,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    payload BYTEA
+);
+
+CREATE TABLE IF NOT EXISTS socket_io_attachments (
+    id BIGSERIAL UNIQUE PRIMARY KEY,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    payload BYTEA
+);
