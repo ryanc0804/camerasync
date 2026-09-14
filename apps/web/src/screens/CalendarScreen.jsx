@@ -113,30 +113,33 @@ export function CalendarScreen() {
     <div className="calendar-content">
       <style>{css}</style>
 
+      <h1 style={styles.title}>Calendar</h1>
       <div style={styles.header}>
-        <h1 style={styles.title}>Calendar</h1>
         <div style={styles.controls}>
+          <span style={styles.monthLabel}>{monthLabel}</span>
           <button className="cal-nav" onClick={() => step(-1)} aria-label="Previous month">
             ‹
           </button>
-          <span style={styles.monthLabel}>{monthLabel}</span>
           <button className="cal-nav" onClick={() => step(1)} aria-label="Next month">
             ›
           </button>
-          <button className="cal-today" onClick={goToday}>
-            Today
-          </button>
         </div>
+        <button className="cal-today" onClick={goToday}>
+          Today
+        </button>
       </div>
 
       {error && <p className="cal-error">{error}</p>}
 
-      <div style={styles.grid}>
+      <div style={styles.weekdayRow}>
         {WEEKDAYS.map((d) => (
           <div key={d} style={styles.weekday}>
             {d}
           </div>
         ))}
+      </div>
+
+      <div style={styles.grid}>
 
         {cells.map(({ date, inMonth }) => {
           const isToday = isSameDay(date, today);
@@ -162,13 +165,18 @@ export function CalendarScreen() {
               <span className="cal-day-events">
                 {daySessions.slice(0, 2).map((session) => {
                   const group = groupsById.get(session.groupId);
+                  const color = group?.primaryColor || "#f2cb05";
                   return (
                     <span
                       className="cal-day-event"
-                      style={{ color: group?.primaryColor || "#ffc72c" }}
+                      style={{
+                        color,
+                        background: `${color}22`,
+                        borderLeft: `3px solid ${color}`,
+                      }}
                       key={session.id}
                     >
-                      {session.name} - {group?.name || session.groupId}
+                      {session.name}
                     </span>
                   );
                 })}
@@ -236,71 +244,101 @@ const styles = {
     alignItems: "center",
     justifyContent: "space-between",
     gap: "1rem",
-    marginBottom: "1.25rem",
+    margin: "0.4rem 0 1.5rem",
   },
-  title: { margin: 0, fontSize: "1.8rem" },
-  controls: { display: "flex", alignItems: "center", gap: 10 },
+  title: {
+    margin: 0,
+    fontSize: "2.2rem",
+    fontWeight: 800,
+    letterSpacing: "-0.5px",
+  },
+  controls: { display: "flex", alignItems: "center", gap: 12 },
   monthLabel: {
-    minWidth: "11ch",
-    textAlign: "center",
-    fontWeight: 700,
-    fontSize: "1.05rem",
+    fontWeight: 600,
+    fontSize: "1.45rem",
+    marginRight: 12,
+  },
+  weekdayRow: {
+    display: "grid",
+    gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
+    width: "100%",
+    maxWidth: 1200,
+  },
+  weekday: {
+    fontSize: "0.75rem",
+    fontWeight: 600,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    color: "#8a8a8a",
+    padding: "0 0 10px 10px",
   },
   grid: {
     display: "grid",
     gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
-    gap: 6,
+    gap: 1,
     width: "100%",
-    maxWidth: 940,
-  },
-  weekday: {
-    textAlign: "center",
-    fontSize: "0.75rem",
-    fontWeight: 700,
-    letterSpacing: "0.06em",
-    textTransform: "uppercase",
-    color: "#8a8a8a",
-    padding: "0 0 6px",
+    maxWidth: 1200,
+    background: "#262626",
+    border: "1px solid #262626",
+    borderRadius: 10,
+    overflow: "hidden",
   },
 };
 
 const css = `
   .calendar-content {
-    width: min(100%, 940px);
+    width: min(100%, 1200px);
   }
-  .cal-nav, .cal-today {
-    font: inherit;
+  .cal-nav {
+    width: 38px;
+    height: 38px;
+    font-size: 1.15rem;
+    line-height: 1;
     font-weight: 600;
-    border-radius: 8px;
-    border: 1px solid #3a3a3a;
-    background: #262626;
+    border-radius: 50%;
+    border: none;
+    background: #1c1c1c;
     color: #f0f0f0;
     cursor: pointer;
-    padding: 0.35rem 0.7rem;
   }
-  .cal-nav { font-size: 1.2rem; line-height: 1; padding: 0.2rem 0.7rem; }
-  .cal-nav:hover, .cal-today:hover { background: #333; }
+  .cal-nav:hover { background: #2a2a2a; }
+  .cal-today {
+    font: inherit;
+    font-weight: 700;
+    padding: 0.6rem 1.4rem;
+    border: none;
+    border-radius: 999px;
+    background: #f2cb05;
+    color: #000;
+    cursor: pointer;
+  }
+  .cal-today:hover { background: #ffe159; }
 
   .cal-day {
     font: inherit;
-    aspect-ratio: 1 / 1;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     justify-content: flex-start;
-    gap: 7px;
+    gap: 8px;
     min-width: 0;
-    padding: 8px;
-    border-radius: 8px;
-    border: 1px solid #2a2a2a;
-    background: #1c1c1c;
+    min-height: 120px;
+    padding: 10px;
+    border: none;
+    background: #0d0d0d;
     color: #e8e8e8;
     cursor: pointer;
-    transition: background 0.12s, border-color 0.12s;
+    transition: background 0.12s;
   }
   .cal-day-number {
-    align-self: flex-end;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    height: 28px;
+    border-radius: 50%;
     line-height: 1;
+    font-size: 0.95rem;
   }
   .cal-day-events {
     display: flex;
@@ -309,33 +347,39 @@ const css = `
     flex-direction: column;
     gap: 4px;
   }
-  .cal-day-event,
-  .cal-day-more {
+  .cal-day-event {
+    box-sizing: border-box;
     width: 100%;
     overflow: hidden;
-    font-size: 0.68rem;
+    padding: 4px 7px;
+    border-radius: 5px;
+    font-size: 0.75rem;
     font-weight: 600;
-    line-height: 1.2;
+    line-height: 1.25;
     text-align: left;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .cal-day-more {
+    width: 100%;
+    overflow: hidden;
+    padding-left: 7px;
     color: #777;
-    font-weight: 400;
+    font-size: 0.72rem;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .cal-day:hover { background: #262626; }
-  .cal-day-muted { color: #5a5a5a; background: #161616; }
-  .cal-day-today {
-    border-color: #ffc72c;
-    color: #ffc72c;
+  .cal-day:hover { background: #161616; }
+  .cal-day-muted { color: #4a4a4a; }
+  .cal-day-today .cal-day-number {
+    background: #f2cb05;
+    color: #000;
     font-weight: 700;
   }
   .cal-day-selected {
-    background: #2a2a2a;
-    border-color: #ffc72c;
-    color: #ffc72c;
-    font-weight: 700;
+    background: #191919;
+    box-shadow: inset 0 0 0 1.5px #f2cb05;
   }
   .cal-error {
     margin: 0 0 12px;

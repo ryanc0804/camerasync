@@ -17,13 +17,13 @@ export function AppLayout() {
 const styles = {
   shell: {
     minHeight: "100vh",
-    background: "#141414",
+    background: "#000",
     color: "#f0f0f0",
     fontFamily: "system-ui, sans-serif",
   },
   content: {
     marginLeft: SIDEBAR_WIDTH,
-    padding: "2rem",
+    padding: "2.25rem 2.75rem",
     minHeight: "100vh",
     boxSizing: "border-box",
   },

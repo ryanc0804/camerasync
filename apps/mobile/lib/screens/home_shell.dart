@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../auth/auth_service.dart';
+import '../theme.dart';
 import 'calendar_tab.dart';
 import 'camera_screen.dart';
+import 'home_tab.dart';
 import 'join_screen.dart';
 
-const kBackground = Color(0xFF0D0D0D);
-const kGold = Color(0xFFF2CB05);
-const kGoldActive = Color(0xFFFFE066);
-const kCard = Color(0xFF4A4750);
+// Older imports pull the palette from this file; keep that working.
+export '../theme.dart';
 
 /// App shell after sign-in: a dark content area with the floating yellow pill
 /// navigation from the design. Tabs keep their state via IndexedStack.
@@ -35,8 +35,12 @@ class _HomeShellState extends State<HomeShell> {
       _index == 1
           ? const CameraScreen(embedded: true)
           : const SizedBox.shrink(),
-      const _HomeTab(),
-      const CalendarTab(),
+      HomeTab(
+        key: const ValueKey('home-tab'),
+        auth: widget.auth,
+        onSwitchTab: (i) => setState(() => _index = i),
+      ),
+      CalendarTab(auth: widget.auth),
       _SettingsTab(auth: widget.auth),
     ];
 
@@ -151,17 +155,6 @@ class _PillNavBar extends StatelessWidget {
     );
   }
 }
-
-/// Empty for now — recordings will fill this in once the videos API exists.
-class _HomeTab extends StatelessWidget {
-  const _HomeTab();
-
-  @override
-  Widget build(BuildContext context) {
-    return const SizedBox.expand(key: ValueKey('home-tab'));
-  }
-}
-
 
 class _SettingsTab extends StatelessWidget {
   const _SettingsTab({required this.auth});

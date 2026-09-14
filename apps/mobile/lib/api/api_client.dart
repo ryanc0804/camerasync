@@ -28,6 +28,10 @@ class ApiClient {
 
   String? _cookie;
 
+  /// The stored `session=...` pair, for callers that open their own
+  /// authenticated connections (e.g. the Socket.IO handshake).
+  String? get cookie => _cookie;
+
   /// Load any persisted cookie. Call once during app start-up.
   Future<void> loadPersistedCookie() async {
     final prefs = await SharedPreferences.getInstance();
@@ -76,14 +80,20 @@ class ApiClient {
     final uri = Uri.parse('$baseUrl$path');
     late http.Response res;
 
+    // Without a timeout an unreachable host can hang a request forever and
+    // leave the UI stuck in its submitting state.
+    const timeout = Duration(seconds: 15);
+
     try {
       res = switch (method) {
-        'POST' => await http.post(
-            uri,
-            headers: _headers(json: body != null),
-            body: body == null ? null : jsonEncode(body),
-          ),
-        _ => await http.get(uri, headers: _headers()),
+        'POST' => await http
+            .post(
+              uri,
+              headers: _headers(json: body != null),
+              body: body == null ? null : jsonEncode(body),
+            )
+            .timeout(timeout),
+        _ => await http.get(uri, headers: _headers()).timeout(timeout),
       };
     } catch (_) {
       throw ApiException(0, "Can't reach the server at $baseUrl.");
