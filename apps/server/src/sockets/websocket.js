@@ -84,6 +84,13 @@ export async function initSocket(httpServer) {
       payload BYTEA
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS socket_io_attachments (
+      id BIGSERIAL UNIQUE PRIMARY KEY,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      payload BYTEA
+    )
+  `);
 
   io = new Server(httpServer, {
     cors: {

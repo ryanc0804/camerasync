@@ -127,6 +127,17 @@ CREATE TABLE IF NOT EXISTS posts (
     reply       VARCHAR(255)
 );
 
+CREATE TABLE IF NOT EXISTS socket_io (
+    id BIGSERIAL UNIQUE PRIMARY KEY,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    payload BYTEA
+);
+
+CREATE TABLE IF NOT EXISTS socket_io_attachments (
+    id BIGSERIAL UNIQUE PRIMARY KEY,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    payload BYTEA
+);
 -- Keep session attendance even after a member leaves.
 CREATE TABLE IF NOT EXISTS recording_session_participants (
     session_id VARCHAR(6) NOT NULL REFERENCES recording_sessions(id) ON DELETE CASCADE,

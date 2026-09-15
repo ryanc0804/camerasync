@@ -6,6 +6,7 @@ import 'calendar_tab.dart';
 import 'camera_screen.dart';
 import 'home_tab.dart';
 import 'join_screen.dart';
+import 'groups_screen.dart';
 
 // Older imports pull the palette from this file; keep that working.
 export '../theme.dart';
@@ -28,13 +29,10 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     final tabs = [
+      // Groups tab (new)
+      GroupsScreen(auth: widget.auth),
+      // Session list (formerly the Record tab) — moved under the camera icon
       JoinScreen(auth: widget.auth),
-      // Mounted only while selected. IndexedStack builds every child up
-      // front, which would hold the camera open in the background — against
-      // the MVP rule that camera/mic are live only in the recording view.
-      _index == 1
-          ? const CameraScreen(embedded: true)
-          : const SizedBox.shrink(),
       HomeTab(
         key: const ValueKey('home-tab'),
         auth: widget.auth,
