@@ -15,6 +15,12 @@ async function request(path, options = {}) {
   return data;
 }
 
+// counts the signed-in user's uploaded videos
+export async function getMyVideoCount() {
+  const data = await request("/api/recordings/my-video-count");
+  return data.count;
+}
+
 // loads sessions visible to the current user
 export async function getSessions() {
   const data = await request("/api/recordings/sessions");
@@ -68,4 +74,42 @@ export async function cancelSession(id) {
     { method: "PATCH" }
   );
   return data.session;
+}
+
+export async function saveRecordingDetails(id, startedAt) {
+  await request(`/api/recordings/sessions/${encodeURIComponent(id)}/videos`, {
+    method: "POST",
+    body: JSON.stringify({ startedAt }),
+  });
+}
+
+export async function getSessionVideos(id) {
+  const data = await request(`/api/recordings/sessions/${encodeURIComponent(id)}/videos`);
+  for (const recording of data.recordings) {
+    for (const video of recording.videos) {
+      if (video.url) video.url = `${SERVER_URL}${video.url}`;
+    }
+  }
+  return data;
+}
+
+export async function uploadSessionVideo(id, startedAt, video, filename) {
+  const body = new FormData();
+  // Multipart uploads need the plain media type, without recorder codec details.
+  const upload = new Blob([video], { type: video.type.split(";")[0] });
+  body.append("file", upload, filename);
+  const response = await fetch(
+    `${SERVER_URL}/api/files/upload?sessionId=${encodeURIComponent(id)}&startedAt=${startedAt}`,
+    { method: "POST", credentials: "include", body }
+  );
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new Error(data?.error || "Could not upload this recording.");
+  }
+}
+
+export async function deleteSession(id) {
+  await request(`/api/recordings/sessions/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }

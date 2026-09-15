@@ -7,6 +7,8 @@ import {
   endSession,
   getSessions,
   leaveSession,
+  saveRecordingDetails,
+  uploadSessionVideo,
 } from "../api/recordings.js";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { LocalMediaPreview } from "../components/LocalMediaPreview.jsx";
@@ -138,6 +140,15 @@ export function ActiveSessionScreen() {
       recordingChunksRef.current = [];
       setRecordingStatus("idle");
       setRecordingMessage(`Saved ${videoFileName}`);
+      if (video.size > 0) {
+        setRecordingMessage(`Saved ${videoFileName}. Uploading for playback...`);
+        saveRecordingDetails(sessionId, info.plannedStartAtEpochMs)
+          .then(() => uploadSessionVideo(sessionId, info.plannedStartAtEpochMs, video, videoFileName))
+          .then(() => setRecordingMessage(`Saved and uploaded ${videoFileName}`))
+          .catch((err) => setRecordingMessage(
+            `Saved ${videoFileName} on this device, but upload failed: ${err.message}`
+          ));
+      }
     };
 
     // waits for the shared server start time

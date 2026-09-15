@@ -9,6 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Router } from "express";
 import multer from "multer";
+import { pool } from "../db/pool.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 
 export const fileRouter = Router();
@@ -162,6 +163,22 @@ fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
     return res.status(400).json({ error: "File ID is invalid." });
   }
 
+  try {
+    const { rows } = await pool.query(
+      `SELECT EXISTS (
+         SELECT 1 FROM recording_sessions rs
+         JOIN group_members gm ON gm.group_id = rs.group_id
+         WHERE rs.id = v.session_id AND gm.user_id = $2
+       ) AS allowed FROM recording_session_videos v WHERE v.file_id = $1`,
+      [fileId, req.user.id]
+    );
+    if (rows.length > 0 && !rows[0].allowed) {
+      return res.status(403).json({ error: "Join this group to watch its recordings." });
+    }
+  } catch (err) {
+    return next(err);
+  }
+
   const filePath = path.join(UPLOAD_DIR, fileId);
   try {
     await fsp.access(filePath, fs.constants.R_OK);
@@ -180,6 +197,25 @@ fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
 fileRouter.post(
   "/upload",
   requireAuth,
+  async (req, res, next) => {
+    if (!req.query.sessionId) return next();
+    const startedAt = Number(req.query.startedAt);
+    if (!Number.isSafeInteger(startedAt) || startedAt <= 0 || startedAt > Date.now()) {
+      return res.status(400).json({ error: "Invalid recording time." });
+    }
+    try {
+      const { rows } = await pool.query(
+        `SELECT 1 FROM recording_session_participants WHERE session_id = $1 AND user_id = $2`,
+        [req.query.sessionId, req.user.id]
+      );
+      if (rows.length === 0) {
+        return res.status(403).json({ error: "You did not join this session." });
+      }
+      next();
+    } catch (err) {
+      next(err);
+    }
+  },
   // Reject an oversized body before reading it, so the client gets a clean
   // 413 instead of having the connection cut mid-transfer. Requests without a
   // Content-Length still get caught by multer's own limit below.
@@ -244,6 +280,22 @@ fileRouter.post(
         });
       }
 
+      if (req.query.sessionId) {
+        const { rows } = await pool.query(
+          `INSERT INTO recording_session_videos (session_id, user_id, started_at_ms, file_id)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (session_id, user_id, started_at_ms)
+           DO UPDATE SET file_id = EXCLUDED.file_id
+           WHERE recording_session_videos.file_id IS NULL
+           RETURNING file_id`,
+          [req.query.sessionId, req.user.id, Number(req.query.startedAt), req.file.filename]
+        );
+        if (rows.length === 0) {
+          await discard(filePath);
+          return res.json({ ok: true });
+        }
+      }
+
       res.status(201).json({
         file: {
           id: req.file.filename,
@@ -261,3 +313,11 @@ fileRouter.post(
     }
   }
 );
+
+// Remove the uploaded files when their session is deleted.
+export async function deleteRecordingFiles(fileIds) {
+  for (const fileId of fileIds) {
+    if (!FILE_ID_PATTERN.test(fileId)) throw new Error("Invalid recording file ID.");
+    await fsp.rm(path.join(UPLOAD_DIR, fileId), { force: true });
+  }
+}

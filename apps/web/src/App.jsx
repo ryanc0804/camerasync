@@ -5,6 +5,8 @@ import { AppLayout } from "./layouts/AppLayout.jsx";
 import { AuthScreen } from "./screens/AuthScreen.jsx";
 import { ResetPasswordScreen } from "./screens/ResetPasswordScreen.jsx";
 import { RecordScreen } from "./screens/RecordScreen.jsx";
+import { PlaybackScreen } from "./screens/PlaybackScreen.jsx";
+import { WatchScreen } from "./screens/WatchScreen.jsx";
 import { ActiveSessionScreen } from "./screens/ActiveSessionScreen.jsx";
 import { CalendarScreen } from "./screens/CalendarScreen.jsx";
 import { HomeScreen } from "./screens/HomeScreen.jsx";
@@ -46,6 +48,8 @@ function Root() {
         <Route path="/groups" element={<GroupsScreen />} />
         <Route path="/record" element={<RecordScreen />} />
         <Route path="/record/:sessionId" element={<ActiveSessionScreen />} />
+        <Route path="/watch" element={<WatchScreen />} />
+        <Route path="/watch/:sessionId" element={<PlaybackScreen />} />
         <Route path="/calendar" element={<CalendarScreen />} />
         <Route path="/settings" element={<SettingsScreen />} />
       </Route>

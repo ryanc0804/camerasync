@@ -1,13 +1,47 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { io } from "socket.io-client";
+import { getGroups } from "../api/groups.js";
 import { SessionScheduler } from "../components/SessionScheduler.jsx";
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
 
+export function RecordScreen() {
+  const [groups, setGroups] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    getGroups()
+      .then(setGroups)
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading || error || groups.length === 0) {
+    return (
+      <div>
+        <h1 style={styles.title}>Record</h1>
+        {loading ? (
+          <p style={styles.muted}>Loading groups...</p>
+        ) : error ? (
+          <p role="alert" style={{ color: "#ff8a80" }}>{error}</p>
+        ) : (
+          <p style={styles.muted}>
+            <Link to="/groups" style={{ color: "#f2cb05" }}>Join a group</Link> to record.
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  return <RecordContent />;
+}
+
 // Connects to the sync hub, joins a demo session, and fires the synchronized
 // start/stop commands. Still scaffolding — replace the hardcoded session with
 // real session selection once sessions exist in the API.
-export function RecordScreen() {
+function RecordContent() {
   const [connected, setConnected] = useState(false);
   const [socket, setSocket] = useState(null);
   const [devices, setDevices] = useState([]);

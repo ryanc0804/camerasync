@@ -6,7 +6,7 @@
   "main": "src/index.js",
   "type": "module",
   "scripts": {
-    "dev": "nodemon --watch src/index.js",
+    "dev": "nodemon --watch src",
     "start": "node src/index.js"
   },
   "dependencies": {
