@@ -2,6 +2,7 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 
 import { pool } from "../db/pool.js";
+import { removeMemberFromGroupSessions } from "../sockets/websocket.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 
 export const groupRouter = Router();
@@ -21,6 +22,7 @@ function publicGroup(row) {
     primaryColor: row.primary_color,
     secondaryColor: row.secondary_color,
     createdAt: row.created_at,
+    joinedAt: row.joined_at,
     role: row.role,
   };
 }
@@ -43,7 +45,7 @@ groupRouter.get("/", async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT g.group_id, g.name, g.is_public, g.owner_id,
-              g.primary_color, g.secondary_color, g.created_at, gm.role
+              g.primary_color, g.secondary_color, g.created_at, gm.role, gm.joined_at
          FROM groups g
          JOIN group_members gm ON gm.group_id = g.group_id
         WHERE gm.user_id = $1
@@ -100,6 +102,97 @@ groupRouter.get("/search", async (req, res) => {
     res.status(500).json({ error: "Unable to search groups." });
   }
 });
+
+//list members in join order, with the creator first
+groupRouter.get("/:id/members", async (req, res) => {
+  try {
+    const membership = await pool.query(
+      "SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2",
+      [req.params.id, req.user.id]
+    );
+    if (membership.rows.length === 0) {
+      return res.status(403).json({ error: "Join this group to view its roster." });
+    }
+
+    const { rows } = await pool.query(
+      `SELECT u.user_id, u.display_name, gm.role
+         FROM group_members gm
+         JOIN users u ON u.user_id = gm.user_id
+         JOIN groups g ON g.group_id = gm.group_id
+        WHERE gm.group_id = $1
+        ORDER BY (gm.user_id = g.owner_id) DESC, gm.joined_at, gm.user_id`,
+      [req.params.id]
+    );
+    res.json({ members: rows.map((row) => ({
+      id: Number(row.user_id),
+      name: row.display_name || "Unnamed member",
+      role: row.role,
+    })) });
+  } catch (err) {
+    console.error("Unable to load roster:", err);
+    res.status(500).json({ error: "Unable to load roster." });
+  }
+});
+
+// Owners manage admins and members. Admins can only manage members.
+async function changeMember(req, res) {
+  const memberId = Number(req.params.memberId);
+  const removing = req.method === "DELETE";
+  const role = req.body?.role;
+  if (!Number.isSafeInteger(memberId) || memberId <= 0 ||
+      (!removing && !["admin", "member"].includes(role))) {
+    return res.status(400).json({ error: "Invalid member or role." });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Keep simultaneous role changes from using outdated permissions.
+    const { rows: groups } = await client.query(
+      "SELECT owner_id FROM groups WHERE group_id = $1 FOR UPDATE",
+      [req.params.id]
+    );
+    const { rows: members } = await client.query(
+      "SELECT user_id, role FROM group_members WHERE group_id = $1 AND user_id IN ($2, $3)",
+      [req.params.id, req.user.id, memberId]
+    );
+    const actor = members.find((member) => Number(member.user_id) === Number(req.user.id));
+    const target = members.find((member) => Number(member.user_id) === memberId);
+    const ownerId = Number(groups[0]?.owner_id);
+    const allowed = actor && target && memberId !== ownerId &&
+      (Number(req.user.id) === ownerId ||
+        (actor.role === "admin" && target.role === "member" && (removing || role === "admin")));
+    if (!allowed) {
+      await client.query("ROLLBACK");
+      return res.status(403).json({ error: "You cannot change this member." });
+    }
+
+    if (removing) {
+      await client.query("DELETE FROM group_members WHERE group_id = $1 AND user_id = $2",
+        [req.params.id, memberId]);
+      await client.query(
+        `DELETE FROM recording_session_members rsm USING recording_sessions rs
+          WHERE rsm.session_id = rs.id AND rs.group_id = $1 AND rsm.user_id = $2`,
+        [req.params.id, memberId]
+      );
+    } else {
+      await client.query("UPDATE group_members SET role = $3 WHERE group_id = $1 AND user_id = $2",
+        [req.params.id, memberId, role]);
+    }
+    await client.query("COMMIT");
+    if (removing) await removeMemberFromGroupSessions(req.params.id, memberId);
+    res.json({ ok: true });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Unable to update member:", err);
+    res.status(500).json({ error: "Unable to update member." });
+  } finally {
+    client.release();
+  }
+}
+
+groupRouter.patch("/:id/members/:memberId", changeMember);
+groupRouter.delete("/:id/members/:memberId", changeMember);
 
 //create a group and make its owner an admin
 groupRouter.post("/", async (req, res) => {

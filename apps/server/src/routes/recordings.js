@@ -15,12 +15,27 @@ import {
   stopSessionRecording,
   closeSessionSocket,
 } from "../sockets/websocket.js";
+import { deleteRecordingFiles } from "./file.js";
 import { EVENTS } from "../sockets/events.js";
 
 export const recordingsRouter = Router();
 const SOCKET_STATUSES = new Set(['recording', 'stopped']);
 const SESSION_ID_CHARACTERS = "abcdefghijklmnopqrstuvwxyz0123456789";
 const SESSION_ID_PATTERN = /^[a-z0-9]{6}$/;
+
+// Count this account's uploaded videos across all groups.
+recordingsRouter.get("/my-video-count", requireAuth, async (req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT COUNT(*) AS count FROM recording_session_videos
+       WHERE user_id = $1 AND file_id IS NOT NULL`,
+      [req.user.id]
+    );
+    res.json({ count: Number(rows[0].count) });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // makes a random six character session id
 function createSessionId() {
@@ -40,6 +55,8 @@ function publicSession(row) {
     createdAt: row.created_at,
     createdBy: Number(row.created_by),
     status: row.status,
+    memberCount: row.member_count == null ? null : Number(row.member_count),
+    totalRecordings: row.total_recordings == null ? null : Number(row.total_recordings),
     activeMemberCount: Number(row.active_member_count ?? 0),
     isJoined: Boolean(row.is_joined),
   };
@@ -74,6 +91,12 @@ recordingsRouter.get("/sessions", requireAuth, async (req, res, next) => {
     const { rows } = await pool.query(
       `SELECT rs.id, rs.group_id, rs.name, rs.scheduled_at,
               rs.created_at, rs.created_by, rs.status,
+              CASE WHEN rs.counts_tracked THEN
+                (SELECT COUNT(*) FROM recording_session_participants p
+                  WHERE p.session_id = rs.id) END AS member_count,
+              CASE WHEN rs.counts_tracked THEN
+                (SELECT COUNT(*) FROM recording_session_videos v
+                  WHERE v.session_id = rs.id) END AS total_recordings,
               (
                 SELECT COUNT(*)
                   FROM recording_session_members rsm
@@ -107,6 +130,111 @@ recordingsRouter.get("/sessions", requireAuth, async (req, res, next) => {
   }
 });
 
+// Only the group owner can delete a completed session and its videos.
+recordingsRouter.delete("/sessions/:id", requireAuth, async (req, res, next) => {
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `SELECT rs.status, g.owner_id FROM recording_sessions rs
+       JOIN groups g ON g.group_id = rs.group_id
+       WHERE rs.id = $1 FOR UPDATE OF rs`,
+      [req.params.id]
+    );
+    if (rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Session not found." });
+    }
+    if (Number(rows[0].owner_id) !== Number(req.user.id)) {
+      await client.query("ROLLBACK");
+      return res.status(403).json({ error: "Only the group owner can delete sessions." });
+    }
+    if (rows[0].status !== "complete") {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "End this session before deleting it." });
+    }
+    const { rows: videos } = await client.query(
+      "SELECT file_id FROM recording_session_videos WHERE session_id = $1 FOR UPDATE",
+      [req.params.id]
+    );
+    await deleteRecordingFiles(videos.filter((video) => video.file_id).map((video) => video.file_id));
+    await client.query("DELETE FROM recording_sessions WHERE id = $1", [req.params.id]);
+    await client.query("COMMIT");
+    res.json({ ok: true });
+  } catch (err) {
+    if (client) await client.query("ROLLBACK");
+    next(err);
+  } finally {
+    client?.release();
+  }
+});
+
+// Load the session's recordings for members of its group.
+recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next) => {
+  try {
+    const { rows: sessions } = await pool.query(
+      `SELECT rs.id, rs.name FROM recording_sessions rs
+       JOIN group_members gm ON gm.group_id = rs.group_id
+       WHERE rs.id = $1 AND gm.user_id = $2`,
+      [req.params.id, req.user.id]
+    );
+    if (sessions.length === 0) {
+      return res.status(404).json({ error: "Session not found." });
+    }
+    const { rows } = await pool.query(
+      `SELECT v.started_at_ms, v.user_id, v.file_id, u.display_name
+       FROM recording_session_videos v JOIN users u ON u.user_id = v.user_id
+       WHERE v.session_id = $1 ORDER BY v.started_at_ms, v.user_id`,
+      [req.params.id]
+    );
+    const recordings = [];
+    for (const row of rows) {
+      const startedAt = Number(row.started_at_ms);
+      let recording = recordings[recordings.length - 1];
+      if (!recording || recording.startedAt !== startedAt) {
+        recording = { startedAt, videos: [] };
+        recordings.push(recording);
+      }
+      recording.videos.push({
+        userId: Number(row.user_id),
+        name: row.display_name || "Unnamed member",
+        url: row.file_id ? `/api/files/get/${row.file_id}` : null,
+      });
+    }
+    res.json({ session: sessions[0], recordings });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Count each finished local video once, including when a save is retried.
+recordingsRouter.post("/sessions/:id/videos", requireAuth, async (req, res, next) => {
+  const startedAt = req.body?.startedAt;
+  if (!SESSION_ID_PATTERN.test(req.params.id) ||
+      !Number.isSafeInteger(startedAt) || startedAt <= 0 || startedAt > Date.now()) {
+    return res.status(400).json({ error: "Invalid recording details." });
+  }
+  try {
+    const participant = await pool.query(
+      `SELECT 1 FROM recording_session_participants
+        WHERE session_id = $1 AND user_id = $2`,
+      [req.params.id, req.user.id]
+    );
+    if (participant.rows.length === 0) {
+      return res.status(403).json({ error: "You did not join this session." });
+    }
+    await pool.query(
+      `INSERT INTO recording_session_videos (session_id, user_id, started_at_ms)
+       VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+      [req.params.id, req.user.id, startedAt]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // schedules a session for one of the user's groups
 recordingsRouter.post("/sessions", requireAuth, async (req, res, next) => {
   const groupId = String(req.body?.groupId ?? "").trim();
@@ -133,13 +261,14 @@ recordingsRouter.post("/sessions", requireAuth, async (req, res, next) => {
       `SELECT 1
          FROM group_members
         WHERE group_id = $1
-          AND user_id = $2`,
+          AND user_id = $2
+          AND role = 'admin'`,
       [groupId, req.user.id]
     );
 
     if (membership.rowCount === 0) {
       return res.status(403).json({
-        error: "You must belong to this group to schedule a session.",
+        error: "Only owners and admins can schedule a session.",
       });
     }
 
@@ -189,13 +318,14 @@ recordingsRouter.post("/sessions/live", requireAuth, async (req, res, next) => {
       `SELECT 1
          FROM group_members
         WHERE group_id = $1
-          AND user_id = $2`,
+          AND user_id = $2
+          AND role = 'admin'`,
       [groupId, req.user.id]
     );
 
     if (membership.rowCount === 0) {
       return res.status(403).json({
-        error: "You must belong to this group to create a session.",
+        error: "Only owners and admins can create a session.",
       });
     }
 
@@ -233,6 +363,11 @@ recordingsRouter.post("/sessions/live", requireAuth, async (req, res, next) => {
     await client.query(
       `INSERT INTO recording_session_members (session_id, user_id)
        VALUES ($1, $2)`,
+      [sessionRow.id, req.user.id]
+    );
+    await client.query(
+      `INSERT INTO recording_session_participants (session_id, user_id)
+       VALUES ($1, $2) ON CONFLICT DO NOTHING`,
       [sessionRow.id, req.user.id]
     );
     await client.query("COMMIT");
@@ -319,6 +454,12 @@ recordingsRouter.post(
         `INSERT INTO recording_session_members (session_id, user_id)
          VALUES ($1, $2)
          ON CONFLICT (session_id, user_id) DO NOTHING`,
+        [id, req.user.id]
+      );
+
+      await pool.query(
+        `INSERT INTO recording_session_participants (session_id, user_id)
+         VALUES ($1, $2) ON CONFLICT DO NOTHING`,
         [id, req.user.id]
       );
 
