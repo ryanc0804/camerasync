@@ -65,10 +65,11 @@ async function isSessionHost(socket, sessionId) {
 
   const result = await pool.query(
     `SELECT 1
-       FROM recording_sessions
-      WHERE id = $1
-        AND created_by = $2
-        AND status = 'active'`,
+       FROM recording_sessions rs
+       JOIN group_members gm ON gm.group_id = rs.group_id AND gm.user_id = $2
+      WHERE rs.id = $1
+        AND rs.created_by = $2
+        AND rs.status = 'active'`,
     [sessionId, socket.data.user.id]
   );
 
@@ -301,4 +302,31 @@ export async function closeSessionSocket(sessionId) {
   }
   getIO().to(room).emit(EVENTS.CLOSE_SESSION, { sessionId });
   getIO().in(room).socketsLeave(room);
+}
+
+// Stop sending session events to someone removed from the group.
+export async function removeMemberFromGroupSessions(groupId, userId) {
+  const { rows: hostedSessions } = await pool.query(
+    `UPDATE recording_sessions SET status = 'complete'
+      WHERE group_id = $1 AND created_by = $2 AND status = 'active'
+      RETURNING id`,
+    [groupId, userId]
+  );
+  for (const session of hostedSessions) {
+    await closeSessionSocket(session.id);
+  }
+  const { rows } = await pool.query(
+    "SELECT id FROM recording_sessions WHERE group_id = $1 AND status = 'active'",
+    [groupId]
+  );
+  for (const session of rows) {
+    const sockets = await getIO().in(roomName(session.id)).fetchSockets();
+    for (const socket of sockets) {
+      if (Number(socket.data.user?.id) === userId) {
+        socket.emit(EVENTS.CLOSE_SESSION, { sessionId: session.id });
+        await socket.leave(roomName(session.id));
+      }
+    }
+    await sendRoomMembers(session.id);
+  }
 }

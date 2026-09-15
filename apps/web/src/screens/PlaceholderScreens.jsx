@@ -3,7 +3,11 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext.jsx";
 import {
   createGroup,
+  changeGroupMemberRole,
+  removeGroupMember,
   getGroups,
+  getDefaultGroup,
+  getGroupMembers,
   joinGroup,
   searchGroups,
 } from "../api/groups.js";
@@ -27,7 +31,129 @@ const styles = {
   },
 };
 
+function GroupRoster({ group }) {
+  const { user } = useAuth();
+  const [saving, setSaving] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [open, setOpen] = useState(false);
+  const [members, setMembers] = useState([]);
+  const [page, setPage] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    getGroupMembers(group.id)
+      .then((loadedMembers) => {
+        if (!cancelled) setMembers(loadedMembers);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [open, group.id]);
+
+  const isOwner = Number(user.id) === group.owner;
+  const isAdmin = members.find((member) => member.id === Number(user.id))?.role === "admin";
+
+  const updateMember = async (member, role) => {
+    const message = role
+      ? `Make ${member.name} ${role === "admin" ? "an admin" : "a member"}?`
+      : `Remove ${member.name} from this group?`;
+    if (!window.confirm(message)) return;
+    setSaving(true);
+    setActionError("");
+    try {
+      if (role) {
+        await changeGroupMemberRole(group.id, member.id, role);
+        setMembers((current) => current.map((item) =>
+          item.id === member.id ? { ...item, role } : item
+        ));
+      } else {
+        await removeGroupMember(group.id, member.id);
+        const remaining = members.filter((item) => item.id !== member.id);
+        setMembers(remaining);
+        setPage(Math.min(page, Math.max(0, Math.ceil(remaining.length / 30) - 1)));
+      }
+    } catch (err) {
+      setActionError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="group-row group-roster-box">
+      <div className="group-roster-header">
+        <span className="group-colors-icon" style={{
+          background: `linear-gradient(135deg, ${group.primaryColor} 0 50%, ${group.secondaryColor} 50% 100%)`,
+        }} />
+        <span className="group-roster-name">{group.name}</span>
+        <button type="button" className="group-button"
+          aria-expanded={open} aria-controls={`roster-${group.id}`}
+          onClick={() => { setOpen(!open); setPage(0); }}>
+          Roster
+        </button>
+      </div>
+      {open && (
+        <div id={`roster-${group.id}`} className="group-roster-content">
+          {loading ? <p>Loading roster...</p> : error ? (
+            <p role="alert" className="group-error">{error}</p>
+          ) : (
+            <>
+              {actionError && <p role="alert" className="group-error">{actionError}</p>}
+              <ul>
+                {members.slice(page * 30, (page + 1) * 30).map((member) => {
+                  const canManage = member.id !== group.owner &&
+                    (isOwner || (isAdmin && member.role === "member"));
+                  return (
+                    <li key={member.id} className="group-roster-member">
+                      <span>
+                        {member.name}{member.id === group.owner ? <> <em>(owner)</em></> :
+                          member.role === "admin" ? <> <em>(admin)</em></> : null}
+                      </span>
+                      {canManage && (
+                        <span className="group-roster-actions">
+                          <button type="button" className="group-button" disabled={saving}
+                            onClick={() => updateMember(member, member.role === "admin" ? "member" : "admin")}
+                            aria-label={`Make ${member.name} ${member.role === "admin" ? "a member" : "an admin"}`}>
+                            {member.role === "admin" ? "↓" : "↑"}
+                          </button>
+                          <button type="button" className="group-button" disabled={saving}
+                            aria-label={`Remove ${member.name} from group`}
+                            onClick={() => updateMember(member, null)}>×</button>
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              {members.length > 30 && (
+                <div className="group-roster-pages">
+                  <button type="button" className="group-button" aria-label="Previous roster page"
+                    disabled={page === 0} onClick={() => setPage(page - 1)}>‹</button>
+                  <span>{page + 1} / {Math.ceil(members.length / 30)}</span>
+                  <button type="button" className="group-button" aria-label="Next roster page"
+                    disabled={(page + 1) * 30 >= members.length}
+                    onClick={() => setPage(page + 1)}>›</button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function GroupsScreen() {
+  const { user } = useAuth();
   const [openPanel, setOpenPanel] = useState(null);
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -49,6 +175,10 @@ export function GroupsScreen() {
     primaryColor: "#ffc72c",
     secondaryColor: "#0d0d0d",
   });
+
+  useEffect(() => {
+    if (groups.length > 0) getDefaultGroup(user.id, groups);
+  }, [groups, user.id]);
 
   useEffect(() => {
     getGroups()
@@ -175,15 +305,7 @@ export function GroupsScreen() {
           ) : (
             <div className="group-list">
               {groups.map((group) => (
-                <div className="group-row" key={group.id}>
-                  <span
-                    className="group-colors-icon"
-                    style={{
-                      background: `linear-gradient(135deg, ${group.primaryColor} 0 50%, ${group.secondaryColor} 50% 100%)`,
-                    }}
-                  />
-                  <span>{group.name}</span>
-                </div>
+                <GroupRoster key={group.id} group={group} />
               ))}
             </div>
           )}
@@ -479,6 +601,17 @@ const groupsCss = `
     background: #242424;
     font-weight: 600;
   }
+  .group-roster-box { display: block; }
+  .group-roster-header { display: flex; align-items: center; gap: 12px; }
+  .group-roster-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .group-roster-content { margin-top: 12px; border-top: 1px solid #3a3a3a; }
+  .group-roster-content ul { list-style: none; padding: 0; margin: 8px 0; }
+  .group-roster-content li { padding: 8px 0; font-weight: 400; overflow-wrap: anywhere; }
+  .group-roster-member { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+  .group-roster-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .group-roster-actions button { padding: 4px 8px; font-size: 0.75rem; }
+  .group-roster-pages { display: flex; align-items: center; justify-content: flex-end; gap: 10px; font-size: 0.8rem; }
+  .group-roster-pages button { padding: 3px 10px; }
   .group-colors-icon {
     width: 34px;
     height: 34px;
@@ -699,6 +832,31 @@ const groupsCss = `
 
 export function SettingsScreen() {
   const { user } = useAuth();
+  const [groups, setGroups] = useState([]);
+  const [defaultGroup, setDefaultGroup] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    getGroups()
+      .then((loadedGroups) => {
+        setGroups(loadedGroups);
+        setDefaultGroup(getDefaultGroup(user.id, loadedGroups));
+      })
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, [user.id]);
+
+  const changeDefaultGroup = (event) => {
+    try {
+      localStorage.setItem(`defaultGroup:${user.id}`, event.target.value);
+      setDefaultGroup(event.target.value);
+      setError("");
+    } catch {
+      setError("Could not save your default group in this browser.");
+    }
+  };
+
   return (
     <div>
       <h1 style={styles.title}>Settings</h1>
@@ -709,8 +867,26 @@ export function SettingsScreen() {
         <dd style={{ margin: 0 }}>{user?.email}</dd>
       </dl>
       <div style={styles.note}>
-        Editing your profile, changing your password, and group-level
-        preferences land here.
+        <label htmlFor="default-group" style={{ display: "block", marginBottom: 10 }}>
+          Default group
+        </label>
+        {loading ? <p>Loading groups...</p> : groups.length === 0 ? (
+          <p>No groups joined.</p>
+        ) : groups.length === 1 && groups[0].id === defaultGroup ? (
+          <strong>{groups[0].name}</strong>
+        ) : (
+          <select id="default-group" value={defaultGroup} onChange={changeDefaultGroup}
+            style={{ width: "100%", padding: "0.5rem", borderRadius: 6,
+              background: "#262626", color: "#f0f0f0", border: "1px solid #555", font: "inherit" }}>
+            {!groups.some((group) => group.id === defaultGroup) && (
+              <option value={defaultGroup} disabled>Choose a default group</option>
+            )}
+            {groups.map((group) => (
+              <option key={group.id} value={group.id}>{group.name}</option>
+            ))}
+          </select>
+        )}
+        {error && <p role="alert" style={{ color: "#ff8a80" }}>{error}</p>}
       </div>
     </div>
   );

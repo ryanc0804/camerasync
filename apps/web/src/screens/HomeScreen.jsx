@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
 import { getGroups } from "../api/groups.js";
-import { endSession, getSessions, joinSession } from "../api/recordings.js";
+import { endSession, getMyVideoCount, getSessions, joinSession } from "../api/recordings.js";
 
 function greeting() {
   const hour = new Date().getHours();
@@ -20,13 +20,13 @@ export function HomeScreen() {
   const navigate = useNavigate();
   const [groups, setGroups] = useState([]);
   const [sessions, setSessions] = useState([]);
+  const [videoCount, setVideoCount] = useState(null);
   const [loading, setLoading] = useState(true);
   const [joiningId, setJoiningId] = useState(null);
   const [endingId, setEndingId] = useState(null);
   const [confirmingEndId, setConfirmingEndId] = useState(null);
   const [error, setError] = useState("");
   const [liveIndex, setLiveIndex] = useState(0);
-  const [comingSoon, setComingSoon] = useState(false);
 
   const today = new Date().toLocaleDateString(undefined, {
     weekday: "long",
@@ -37,9 +37,10 @@ export function HomeScreen() {
   const firstName = (user?.name || user?.email || "").split(/[\s@]/)[0];
 
   useEffect(() => {
-    Promise.all([getGroups(), getSessions()])
-      .then(([loadedGroups, loadedSessions]) => {
+    Promise.all([getGroups(), getSessions(), getMyVideoCount()])
+      .then(([loadedGroups, loadedSessions, loadedVideoCount]) => {
         setGroups(loadedGroups);
+        setVideoCount(loadedVideoCount);
         setSessions(
           loadedSessions.filter((session) => session.status !== "cancelled")
         );
@@ -110,7 +111,7 @@ export function HomeScreen() {
               <button
                 type="button"
                 className="home-action"
-                onClick={() => setComingSoon(true)}
+                onClick={() => navigate("/watch")}
               >
                 Watch a Recording
               </button>
@@ -137,16 +138,14 @@ export function HomeScreen() {
             </div>
             <div className="home-stat">
               <span>Videos</span>
-              <strong>—</strong>
+              <strong>{loading ? "…" : videoCount ?? "—"}</strong>
             </div>
           </div>
 
           <h2 className="home-section">Recent Recordings</h2>
           <div className="home-panel home-panel-tall">
             <p className="home-empty">
-              {comingSoon
-                ? "Recordings are coming soon — they'll appear here once synced sessions upload their videos."
-                : "Recordings from your synced sessions will show up here."}
+              Recordings from your synced sessions will show up here.
             </p>
           </div>
         </div>

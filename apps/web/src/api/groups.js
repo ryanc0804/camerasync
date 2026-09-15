@@ -22,6 +22,12 @@ export async function getGroups() {
   return data.groups;
 }
 
+//get the roster for one of your groups
+export async function getGroupMembers(id) {
+  const data = await request(`/api/groups/${encodeURIComponent(id)}/members`);
+  return data.members;
+}
+
 //create a new group
 export async function createGroup(group) {
   const data = await request("/api/groups", {
@@ -46,4 +52,37 @@ export async function joinGroup(id, password = "") {
     body: JSON.stringify({ password }),
   });
   return data.group;
+}
+
+export async function changeGroupMemberRole(groupId, memberId, role) {
+  await request(`/api/groups/${encodeURIComponent(groupId)}/members/${memberId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ role }),
+  });
+}
+
+export async function removeGroupMember(groupId, memberId) {
+  await request(`/api/groups/${encodeURIComponent(groupId)}/members/${memberId}`, {
+    method: "DELETE",
+  });
+}
+
+// Choose the first joined group once. Only Settings replaces a saved choice.
+export function getDefaultGroup(userId, groups) {
+  const key = `defaultGroup:${userId}`;
+  let firstGroup = null;
+  for (const group of groups) {
+    if (!firstGroup || new Date(group.joinedAt || group.createdAt) <
+        new Date(firstGroup.joinedAt || firstGroup.createdAt)) {
+      firstGroup = group;
+    }
+  }
+  try {
+    const saved = localStorage.getItem(key);
+    if (saved) return saved;
+    if (firstGroup) localStorage.setItem(key, firstGroup.id);
+  } catch {
+    // Still show the first joined group if browser storage is unavailable.
+  }
+  return firstGroup?.id || "";
 }

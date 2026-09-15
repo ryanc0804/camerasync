@@ -138,3 +138,28 @@ CREATE TABLE IF NOT EXISTS socket_io_attachments (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     payload BYTEA
 );
+-- Keep session attendance even after a member leaves.
+CREATE TABLE IF NOT EXISTS recording_session_participants (
+    session_id VARCHAR(6) NOT NULL REFERENCES recording_sessions(id) ON DELETE CASCADE,
+    user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    PRIMARY KEY (session_id, user_id)
+);
+
+INSERT INTO recording_session_participants (session_id, user_id)
+SELECT session_id, user_id FROM recording_session_members
+ON CONFLICT DO NOTHING;
+
+-- One row per video saved by a participant, not per shared start command.
+CREATE TABLE IF NOT EXISTS recording_session_videos (
+    session_id VARCHAR(6) NOT NULL REFERENCES recording_sessions(id) ON DELETE CASCADE,
+    user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    started_at_ms BIGINT NOT NULL,
+    PRIMARY KEY (session_id, user_id, started_at_ms)
+);
+
+-- Older sessions did not track complete attendance or saved videos.
+ALTER TABLE recording_sessions
+    ADD COLUMN IF NOT EXISTS counts_tracked BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE recording_sessions ALTER COLUMN counts_tracked SET DEFAULT TRUE;
+
+ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS file_id TEXT;
