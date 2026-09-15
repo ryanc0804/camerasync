@@ -7,9 +7,9 @@ import {
   publicUser,
 } from "../auth/sessions.js";
 import { pool } from "../db/pool.js";
+import { corsOptions } from "../middleware/cors.js";
 import { DEFAULT_RECORDING_BUFFER_MS, EVENTS } from "./events.js";
 
-const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:5173";
 const MAX_RECORDING_BUFFER_MS = 60000;
 let io = null;
 const activeRecordings = new Map();
@@ -85,10 +85,9 @@ export async function initSocket(httpServer) {
   `);
 
   io = new Server(httpServer, {
-    cors: {
-      origin: WEB_ORIGIN,
-      credentials: true,
-    },
+    // Same allowlist as the REST API, so a device that can log in can also
+    // open the sync socket.
+    cors: corsOptions,
   });
   io.adapter(createAdapter(pool));
 

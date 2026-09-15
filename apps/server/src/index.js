@@ -12,14 +12,14 @@ import { groupRouter } from "./routes/groups.js";
 import { postRouter } from "./routes/posts.js";
 import { recordingsRouter } from './routes/recordings.js';
 import { fileRouter } from "./routes/file.js";
+import { corsOptions } from "./middleware/cors.js";
 
 const PORT = process.env.PORT || 4000;
 const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:5173";
 
 const app = express();
-// credentials:true is required for the browser to send/accept the httpOnly
-// session cookie cross-origin (Vite on :5173 -> API on :4000).
-app.use(cors({ origin: WEB_ORIGIN, credentials: true }));
+// Allowed origins (and why) live in ./middleware/cors.js.
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(cookieParser());
 
@@ -45,5 +45,8 @@ initSocket(server);
 
 server.listen(PORT, () => {
   console.log(`[camerasync] server listening on http://localhost:${PORT}`);
-  console.log(`[camerasync] socket.io ready, web origin: ${WEB_ORIGIN}`);
+  console.log(
+    `[camerasync] socket.io ready, web origin: ${WEB_ORIGIN}` +
+      (process.env.NODE_ENV === "production" ? "" : " (+ localhost/LAN in dev)")
+  );
 });
