@@ -113,3 +113,26 @@ export async function deleteSession(id) {
     method: "DELETE",
   });
 }
+
+// loads the notes left on one recording of a session
+export async function getSessionNotes(id, startedAt) {
+  const data = await request(
+    `/api/recordings/sessions/${encodeURIComponent(id)}/notes?startedAt=${startedAt}`
+  );
+  return data.notes;
+}
+
+// adds a note at a point in that recording
+export async function createSessionNote(id, startedAt, body, videoTimeMs) {
+  await request(`/api/recordings/sessions/${encodeURIComponent(id)}/notes`, {
+    method: "POST",
+    body: JSON.stringify({ startedAt, body, videoTimeMs }),
+  });
+}
+
+export async function deleteSessionNote(id, noteId) {
+  await request(
+    `/api/recordings/sessions/${encodeURIComponent(id)}/notes/${noteId}`,
+    { method: "DELETE" }
+  );
+}

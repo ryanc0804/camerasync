@@ -2,7 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
-import { getSessionVideos, uploadSessionVideo } from "../api/recordings.js";
+import {
+  createSessionNote,
+  deleteSessionNote,
+  getSessionNotes,
+  getSessionVideos,
+  uploadSessionVideo,
+} from "../api/recordings.js";
 
 export function PlaybackScreen() {
   const { sessionId } = useParams();
@@ -11,11 +17,18 @@ export function PlaybackScreen() {
   const [recordings, setRecordings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [recordingIndex, setRecordingIndex] = useState(0);
+  const [notesOpen, setNotesOpen] = useState(true);
+  const [notes, setNotes] = useState([]);
+  const [notesError, setNotesError] = useState("");
+  const videoTime = useRef(0);
+  const seek = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError("");
+    setRecordingIndex(0);
     getSessionVideos(sessionId)
       .then((data) => {
         if (cancelled) return;
@@ -27,6 +40,18 @@ export function PlaybackScreen() {
     return () => { cancelled = true; };
   }, [sessionId]);
 
+  const startedAt = recordings[recordingIndex]?.startedAt;
+
+  useEffect(() => {
+    if (!startedAt) return;
+    let cancelled = false;
+    setNotesError("");
+    getSessionNotes(sessionId, startedAt)
+      .then((loaded) => { if (!cancelled) setNotes(loaded); })
+      .catch((err) => { if (!cancelled) setNotesError(err.message); });
+    return () => { cancelled = true; };
+  }, [sessionId, startedAt]);
+
   return (
     <div className="playback-page">
       <style>{css}</style>
@@ -36,18 +61,36 @@ export function PlaybackScreen() {
       ) : (
         <>
           <h1>{session.name}</h1>
-          {recordings.length === 0 ? (
-            <p>No videos have been uploaded for this session yet.</p>
-          ) : <SessionPlayer key={sessionId} recordings={recordings}
-            sessionId={sessionId} userId={Number(user.id)} onUploaded={setRecordings} />}
+          <div className="playback-layout">
+            {recordings.length === 0 ? (
+              <p>No videos have been uploaded for this session yet.</p>
+            ) : (
+              <>
+                <SessionPlayer key={sessionId} recordings={recordings}
+                  sessionId={sessionId} userId={Number(user.id)} onUploaded={setRecordings}
+                  videoTime={videoTime} seek={seek} notes={notes}
+                  recordingIndex={recordingIndex}
+                  setRecordingIndex={setRecordingIndex} />
+                {notesOpen ? (
+                  <NotesPanel sessionId={sessionId} videoTime={videoTime}
+                    startedAt={startedAt} notes={notes} setNotes={setNotes}
+                    error={notesError} setError={setNotesError}
+                    seek={seek} onHide={() => setNotesOpen(false)} />
+                ) : (
+                  <button type="button" className="notes-show" aria-label="Show notes"
+                    title="Show notes" onClick={() => setNotesOpen(true)}>+</button>
+                )}
+              </>
+            )}
+          </div>
         </>
       )}
     </div>
   );
 }
 
-function SessionPlayer({ recordings, sessionId, userId, onUploaded }) {
-  const [recordingIndex, setRecordingIndex] = useState(0);
+function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, seek,
+  notes, recordingIndex, setRecordingIndex }) {
   const [uploading, setUploading] = useState(false);
   const [page, setPage] = useState(0);
   const [panelLayouts, setPanelLayouts] = useState({});
@@ -56,6 +99,9 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded }) {
   const [choosingPanel, setChoosingPanel] = useState(null);
   const [cameraPage, setCameraPage] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [time, setTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [liveComments, setLiveComments] = useState(false);
   const [error, setError] = useState("");
   const videoRefs = useRef([]);
   const currentTime = useRef(0);
@@ -66,6 +112,10 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded }) {
     (id) => videos.find((video) => video.userId === id) || null
   );
   const pages = Math.ceil(panels.length / 6);
+  const liveNote = !liveComments ? null : notes.filter((note) => {
+    const at = note.videoTimeMs / 1000;
+    return at <= time && time < at + 3;
+  }).at(-1);
 
   const getPanelAudio = (panelIndex) => audioSettings[recordingIndex]?.[panelIndex] || {
     volume: 1,
@@ -104,16 +154,15 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded }) {
     }
   };
 
-  const skip = async (seconds) => {
+  const seekTo = async (nextTime) => {
     const players = videoRefs.current.filter((video) => video && Number.isFinite(video.duration));
     if (players.length === 0) return;
-    const duration = Math.max(...players.map((video) => video.duration));
-    const time = Math.max(...players.map((video) => video.currentTime));
-    const nextTime = Math.max(0, Math.min(duration, time + seconds));
     currentTime.current = nextTime;
+    videoTime.current = nextTime;
+    setTime(nextTime);
     players.forEach((video) => { video.currentTime = Math.min(nextTime, video.duration); });
 
-    // A shorter video may have ended already; resume it when skipping back.
+    // A shorter video may have ended already; resume it when seeking back.
     if (playing) {
       const request = ++playRequest.current;
       try {
@@ -124,6 +173,17 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded }) {
         setError("A video could not resume. Try pressing play again.");
       }
     }
+  };
+
+  // the notes panel jumps the player through this
+  seek.current = seekTo;
+
+  const skip = (seconds) => {
+    const players = videoRefs.current.filter((video) => video && Number.isFinite(video.duration));
+    if (players.length === 0) return;
+    const longest = Math.max(...players.map((video) => video.duration));
+    const from = Math.max(...players.map((video) => video.currentTime));
+    seekTo(Math.max(0, Math.min(longest, from + seconds)));
   };
 
   const uploadMissingVideo = async (event) => {
@@ -149,6 +209,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded }) {
     if (players.length) currentTime.current = Math.max(...players.map((video) => video.currentTime));
     pause();
     videoRefs.current = [];
+    setDuration(0);
     setError("");
     setChoosingPanel(null);
     setOpenVolume(null);
@@ -186,6 +247,8 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded }) {
     pause();
     videoRefs.current = [];
     currentTime.current = 0;
+    setTime(0);
+    setDuration(0);
     setError("");
     setRecordingIndex(Number(event.target.value));
     setChoosingPanel(null);
@@ -195,6 +258,11 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded }) {
 
   return (
     <section className="playback-box">
+      <label className="playback-live-toggle">
+        <input type="checkbox" checked={liveComments}
+          onChange={(event) => setLiveComments(event.target.checked)} />
+        Live comments
+      </label>
       <div className="playback-top">
         <select aria-label="Recording" disabled={uploading} value={recordingIndex} onChange={changeRecording}>
           {recordings.map((recording, index) => (
@@ -268,6 +336,11 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded }) {
                 onLoadedMetadata={(event) => {
                   const player = event.currentTarget;
                   player.currentTime = Math.min(currentTime.current, player.duration || 0);
+                  setDuration((current) => Math.max(current, player.duration || 0));
+                }}
+                onTimeUpdate={(event) => {
+                  videoTime.current = event.currentTarget.currentTime;
+                  setTime(event.currentTarget.currentTime);
                 }}
                 onEnded={() => {
                   if (videoRefs.current.filter(Boolean).every((player) => player.ended)) {
@@ -335,6 +408,19 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded }) {
             onClick={() => changePage(page + 1)}>›</button>
         </div>
       )}
+      {liveComments && (
+        <p className="playback-live-note">
+          {liveNote && <><strong>{liveNote.author}:</strong> "{liveNote.body}"</>}
+        </p>
+      )}
+      <div className="playback-seek">
+        <span>{formatTime(time * 1000)}</span>
+        <input type="range" min="0" max={duration || 0} step="0.1"
+          aria-label="Seek" disabled={uploading || !duration}
+          value={Math.min(time, duration || 0)}
+          onChange={(event) => seekTo(Number(event.target.value))} />
+        <span>{formatTime(duration * 1000)}</span>
+      </div>
       <div className="playback-controls">
         <button type="button" className="playback-skip" aria-label="Back 5 seconds" onClick={() => skip(-5)}
           disabled={uploading || !panelVideos.some((video) => video?.url)}>
@@ -363,17 +449,94 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded }) {
   );
 }
 
+// turns 83000 into "1:23"
+function formatTime(ms) {
+  const seconds = Math.floor(ms / 1000);
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function NotesPanel({ sessionId, videoTime, startedAt, notes, setNotes,
+  error, setError, seek, onHide }) {
+  const [text, setText] = useState("");
+
+  const addNote = async () => {
+    const body = text.trim();
+    if (!body) return;
+    setError("");
+    try {
+      // videoTime holds wherever the player is right now, so the note is
+      // stamped with the moment it is about.
+      await createSessionNote(sessionId, startedAt, body, Math.round(videoTime.current * 1000));
+      setNotes(await getSessionNotes(sessionId, startedAt));
+      setText("");
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const removeNote = async (noteId) => {
+    setError("");
+    try {
+      await deleteSessionNote(sessionId, noteId);
+      setNotes((current) => current.filter((note) => note.id !== noteId));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  return (
+    <section className="notes-box">
+      <div className="notes-top">
+        <h2>Notes</h2>
+        <button type="button" className="notes-hide" aria-label="Hide notes"
+          title="Hide notes" onClick={onHide}>−</button>
+      </div>
+      <div className="notes-list">
+        {notes.length === 0 ? (
+          <p className="notes-empty">No notes yet.</p>
+        ) : notes.map((note) => (
+          <div className="notes-item" key={note.id}>
+            <button type="button" className="notes-jump"
+              title="Jump to this moment"
+              onClick={() => seek.current?.(note.videoTimeMs / 1000)}>
+              <span className="notes-item-top">
+                <strong>{note.author}</strong>
+                <time>{formatTime(note.videoTimeMs)}</time>
+              </span>
+              <span className="notes-body">{note.body}</span>
+            </button>
+            {note.canDelete && (
+              <button type="button" className="notes-delete"
+                aria-label={`Delete note by ${note.author}`}
+                onClick={() => removeNote(note.id)}>×</button>
+            )}
+          </div>
+        ))}
+      </div>
+      {error && <p className="notes-error" role="alert">{error}</p>}
+      <div className="notes-add">
+        <input value={text} placeholder="Type a note" maxLength={500}
+          aria-label="New note"
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter") addNote(); }} />
+        <button type="button" aria-label="Add note"
+          disabled={!text.trim()} onClick={addNote}>+</button>
+      </div>
+    </section>
+  );
+}
+
 const css = `
-  .playback-page { max-width: 1400px; }
+  .playback-page { max-width: 1600px; }
   .playback-page > a { color: #f2cb05; }
   .playback-page h1 { font-size: 1.4rem; margin: 1rem 0; overflow-wrap: anywhere; }
-  .playback-box { background: #1c1c1c; border: 1px solid #303030; border-radius: 12px; padding: 1rem; }
+  .playback-box { position: relative; background: #1c1c1c; border: 1px solid #303030; border-radius: 12px; padding: 1rem; }
   .playback-top, .playback-controls, .playback-pages { display: flex; justify-content: center; align-items: center; gap: 12px; }
   .playback-top { margin-bottom: 1rem; }
   .playback-box select, .playback-box button { font: inherit; color: #f0f0f0; background: #292929; border: 1px solid #555; border-radius: 6px; padding: 0.4rem 0.8rem; }
   .playback-box button { cursor: pointer; }
   .playback-box button:disabled { opacity: 0.4; cursor: default; }
-  .playback-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 12px; height: 60vh; }
+  .playback-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 12px; height: 70vh; }
   .playback-grid[hidden] { display: none; }
   .playback-grid figure { position: relative; margin: 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; grid-column: span 6; background: #000; border-radius: 6px; overflow: hidden; }
   .playback-box .playback-panel-remove { position: absolute; top: 6px; right: 6px; z-index: 3; width: 28px; height: 28px; padding: 0; border-radius: 50%; }
@@ -401,7 +564,46 @@ const css = `
   .playback-grid-5 figure:nth-child(2) { grid-column: 7 / span 4; }
   .playback-grid-5 figure:nth-child(3) { grid-column: 1 / span 4; }
   .playback-controls, .playback-pages { margin-top: 1rem; }
+  .playback-live-toggle { position: absolute; top: 1rem; left: 1rem; z-index: 1; display: flex; align-items: center; gap: 6px; color: #aaa; font-size: 0.75rem; cursor: pointer; }
+  .playback-live-toggle input { margin: 0; accent-color: #f2cb05; cursor: pointer; }
+  .playback-live-note { min-height: 1.3rem; margin: 0.75rem 0 0; text-align: center; color: #f0f0f0; font-size: 0.85rem; overflow-wrap: anywhere; }
+  .playback-live-note strong { color: #f2cb05; }
+  .playback-live-note + .playback-seek { margin-top: 0.5rem; }
+  .playback-seek { display: flex; align-items: center; gap: 10px; margin-top: 1rem; }
+  .playback-seek span { color: #999; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+  .playback-seek input { flex: 1; min-width: 0; margin: 0; accent-color: #f2cb05; cursor: pointer; }
+  .playback-seek input:disabled { opacity: 0.4; cursor: default; }
+  .playback-seek + .playback-controls { margin-top: 0.5rem; }
   .playback-controls .playback-toggle, .playback-controls .playback-skip { display: flex; align-items: center; justify-content: center; width: 52px; height: 52px; padding: 0; border-radius: 50%; }
   .playback-empty { text-align: center; padding: 3rem 1rem; color: #999; }
   .playback-error { color: #ff8a80; text-align: center; }
+  .playback-layout { position: relative; display: flex; align-items: flex-start; gap: 1rem; }
+  .playback-layout > .playback-box { flex: 1; min-width: 0; }
+  .playback-layout > p { flex: 1; }
+  .notes-box { display: flex; flex-direction: column; flex: 0 0 340px; align-self: stretch; background: #1c1c1c; border: 1px solid #303030; border-radius: 12px; padding: 1rem; box-sizing: border-box; }
+  .notes-top { display: flex; align-items: center; gap: 8px; margin-bottom: 0.75rem; }
+  .notes-top h2 { flex: 1; margin: 0; font-size: 1.1rem; }
+  .notes-box .notes-hide, .notes-show { width: 28px; height: 28px; padding: 0; display: flex; align-items: center; justify-content: center; border: 1px solid #555; border-radius: 6px; background: #292929; color: #f0f0f0; font: inherit; font-size: 1rem; line-height: 1; cursor: pointer; }
+  .notes-show { position: absolute; top: 0; right: 0; }
+  .notes-box .notes-hide:hover, .notes-show:hover { background: #3a3a3a; }
+  .notes-list { flex: 1; min-height: 120px; overflow-y: auto; }
+  .notes-empty { margin: 0; color: #999; font-size: 0.85rem; }
+  .notes-item { position: relative; border-bottom: 1px solid #2a2a2a; }
+  .notes-box .notes-jump { display: block; width: 100%; padding: 8px; border: none; border-radius: 6px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .notes-box .notes-jump:hover { background: #262626; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45); }
+  .notes-item-top { display: flex; align-items: center; gap: 8px; padding-right: 22px; }
+  .notes-item-top strong { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 0.8rem; }
+  .notes-item-top time { color: #f2cb05; font-size: 0.75rem; }
+  .notes-box .notes-delete { position: absolute; top: 8px; right: 6px; width: 22px; height: 22px; padding: 0; display: flex; align-items: center; justify-content: center; border: none; border-radius: 4px; background: transparent; color: #ff6b6b; font-size: 1rem; line-height: 1; cursor: pointer; }
+  .notes-box .notes-delete:hover { background: #472222; }
+  .notes-body { display: block; margin-top: 4px; color: #ddd; font-size: 0.85rem; line-height: 1.4; overflow-wrap: anywhere; }
+  .notes-error { margin: 8px 0 0; color: #ff8a80; font-size: 0.8rem; }
+  .notes-add { display: flex; gap: 8px; margin-top: 0.75rem; }
+  .notes-add input { flex: 1; min-width: 0; padding: 0.4rem; border: 1px solid #555; border-radius: 6px; background: #292929; color: #f0f0f0; font: inherit; font-size: 0.85rem; }
+  .notes-add button { flex: 0 0 auto; width: 34px; padding: 0; border: 1px solid #555; border-radius: 6px; background: #292929; color: #f0f0f0; font-size: 1.1rem; cursor: pointer; }
+  .notes-add button:disabled { opacity: 0.4; cursor: default; }
+  @media (max-width: 900px) {
+    .playback-layout { flex-direction: column; justify-content: flex-start; }
+    .notes-box { flex: 1 1 auto; width: 100%; }
+  }
 `;
