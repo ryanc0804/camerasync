@@ -35,3 +35,6 @@ apps/mobile/.pub/
 uploads/
 *.mp4
 *.mov
+
+# Production env (server only)
+deploy/prod.env

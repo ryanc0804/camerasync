@@ -1,0 +1,26 @@
+# Caddy config for 8kount production. DOMAIN comes from deploy/prod.env.
+# Caddy obtains and renews the Let's Encrypt certificate automatically.
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# API, real-time and clock sync go to the Express server. Same-origin means
+	# the httpOnly session cookie needs no CORS or third-party-cookie handling,
+	# and Socket.IO websockets upgrade through reverse_proxy automatically.
+	@backend path /api /api/* /socket.io /socket.io/* /timesync /timesync/* /health
+	handle @backend {
+		reverse_proxy server:4000
+	}
+
+	# Everything else is the built React app (single-page app fallback).
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	# Video uploads up to 2 GB (matches the server's multer limit).
+	request_body {
+		max_size 2GB
+	}
+}
