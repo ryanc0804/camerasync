@@ -25,6 +25,23 @@ class SessionMember {
       );
 }
 
+/// A synchronized start command, expressed in both clocks.
+///
+/// [serverStartAtEpochMs] is the instant the server chose, on the server
+/// clock. Every device in the session receives the same value, and it is the
+/// key the server files uploaded videos under, so it must be passed back
+/// unchanged when the recording is uploaded. [localStartAtEpochMs] is that
+/// same instant on this device's clock, for scheduling the actual start.
+class RecordingStartCommand {
+  const RecordingStartCommand({
+    required this.serverStartAtEpochMs,
+    required this.localStartAtEpochMs,
+  });
+
+  final int serverStartAtEpochMs;
+  final int localStartAtEpochMs;
+}
+
 /// Result of the `session:join` ack.
 class JoinResult {
   const JoinResult({required this.ok, this.error, this.sessionName});
@@ -64,7 +81,7 @@ class SyncSocket {
   bool get clockSynced => _clockSynced;
 
   final _members = StreamController<List<SessionMember>>.broadcast();
-  final _recordingStart = StreamController<int>.broadcast();
+  final _recordingStart = StreamController<RecordingStartCommand>.broadcast();
   final _recordingStop = StreamController<void>.broadcast();
   final _sessionClosed = StreamController<void>.broadcast();
   final _errors = StreamController<String>.broadcast();
@@ -72,8 +89,9 @@ class SyncSocket {
   /// Connected users in the joined session.
   Stream<List<SessionMember>> get members => _members.stream;
 
-  /// Emits the synchronized start time, already converted to *local* epoch ms.
-  Stream<int> get recordingStart => _recordingStart.stream;
+  /// Emits each synchronized start command, carrying the server's start time
+  /// and its conversion to this device's clock.
+  Stream<RecordingStartCommand> get recordingStart => _recordingStart.stream;
 
   /// Emits when recording should stop.
   Stream<void> get recordingStop => _recordingStop.stream;
@@ -128,7 +146,7 @@ class SyncSocket {
       if (data is! Map) return;
       final serverStart = (data['startAtEpochMs'] as num?)?.toInt();
       if (serverStart != null) {
-        _recordingStart.add(serverToLocal(serverStart));
+        _recordingStart.add(_startCommand(serverStart));
       }
     });
 
@@ -204,6 +222,16 @@ class SyncSocket {
 
   int serverToLocal(int serverEpochMs) => serverEpochMs + _clockOffsetMs;
 
+  /// The server clock is the shared reference, so a local instant maps back
+  /// by subtracting the same offset [serverToLocal] adds.
+  int localToServer(int localEpochMs) => localEpochMs - _clockOffsetMs;
+
+  RecordingStartCommand _startCommand(int serverStartAtEpochMs) =>
+      RecordingStartCommand(
+        serverStartAtEpochMs: serverStartAtEpochMs,
+        localStartAtEpochMs: serverToLocal(serverStartAtEpochMs),
+      );
+
   /// Joins the session's socket room. The server requires an ack callback and
   /// replies `{ok, error?, members?, recording?, session?}`; it identifies the
   /// user from the handshake cookie, so no device name is sent.
@@ -244,7 +272,7 @@ class SyncSocket {
         if (recording is Map && recording['stopAtEpochMs'] == null) {
           final serverStart = (recording['startAtEpochMs'] as num?)?.toInt();
           if (serverStart != null) {
-            _recordingStart.add(serverToLocal(serverStart));
+            _recordingStart.add(_startCommand(serverStart));
           }
         }
 
