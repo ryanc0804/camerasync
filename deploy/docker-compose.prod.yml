@@ -9,7 +9,9 @@
 #   - the web app is built once (vite build) and served as static files by Caddy
 #   - Caddy terminates HTTPS for ${DOMAIN} and proxies API, Socket.IO and timesync to the server
 #   - Postgres and the server are NOT exposed on host ports; only Caddy (80/443) is public
-#   - uploads live in a named volume so they survive redeploys
+#   - recordings go to S3 when prod.env sets S3_BUCKET; otherwise they stay in
+#     the uploads volume, which also holds in-flight uploads while they are
+#     validated
 
 services:
   db:
@@ -40,6 +42,10 @@ services:
       WEB_ORIGIN: https://${DOMAIN}
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       UPLOAD_DIR: /data/uploads
+    # Storage settings (STORAGE_DRIVER, S3_BUCKET, AWS_*) come straight from
+    # prod.env so a key that is not set stays unset for the AWS SDK.
+    env_file:
+      - ./prod.env
     volumes:
       - uploads:/data/uploads
     expose:

@@ -1,28 +1,23 @@
 // file and upload API
-
-// TODO: Swap with S3 for deployment phase
+//
+// Uploads are validated on local disk, then handed to the storage driver
+// (local disk or S3, see ../storage/index.js). Downloads go through the same
+// driver, so the client-facing URLs never change.
 
 import crypto from "node:crypto";
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { Router } from "express";
 import multer from "multer";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../middleware/requireAuth.js";
+import { storage } from "../storage/index.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
 
 export const fileRouter = Router();
 
 // 2048 MB upload limit
 const MAX_UPLOAD_BYTES = 2048 * 1024 * 1024;
-
-// upload directory
-const SERVER_ROOT = path.resolve(fileURLToPath(import.meta.url), "../../..");
-const UPLOAD_DIR = process.env.UPLOAD_DIR
-  ? path.resolve(process.env.UPLOAD_DIR)
-  : path.join(SERVER_ROOT, "uploads");
 
 // Only accept these file types to avoid malicious uploads
 const MEDIA_TYPES = {
@@ -48,8 +43,6 @@ const GENERIC_MIME_TYPES = new Set([
 
 // Regex to handle directory escape attempts or scraping
 const FILE_ID_PATTERN = /^[0-9a-f]{32}\.[a-z0-9]{2,4}$/;
-
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 // Reads the container family from a file's leading bytes. Returns null when
 // the bytes don't look like any media container we accept.
@@ -102,7 +95,8 @@ async function readHeader(filePath) {
   }
 }
 
-// disards files passively
+// Removes a temp file that never made it into storage; a no-op once put()
+// has consumed it.
 async function discard(filePath) {
   if (!filePath) return;
   await fsp.rm(filePath, { force: true }).catch(() => {});
@@ -119,7 +113,7 @@ class UnsupportedMediaError extends Error {
 // Multer upload parameters
 const upload = multer({
   storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+    destination: (req, file, cb) => cb(null, storage.incomingDir),
     filename: (req, file, cb) => {
       const ext = path.extname(file.originalname).toLowerCase();
       cb(null, `${crypto.randomUUID().replace(/-/g, "")}${ext}`);
@@ -149,8 +143,7 @@ const upload = multer({
   },
 });
 
-// Serve a previously uploaded file from local disk.
-// TODO: stream from S3 instead once uploads move off the local filesystem.
+// Serve a previously uploaded file through the storage driver.
 fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
   const fileId = String(req.params.fileId ?? "").toLowerCase();
 
@@ -186,21 +179,10 @@ fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
     return next(err);
   }
 
-  const filePath = path.join(UPLOAD_DIR, fileId);
-  try {
-    await fsp.access(filePath, fs.constants.R_OK);
-  } catch {
-    return res.status(404).json({ error: "File not found." });
-  }
-
-  res.type(mediaType.mime);
-  // sendFile handles range requests, which players need to seek.
-  res.sendFile(filePath, (err) => {
-    if (err && !res.headersSent) next(err);
-  });
+  return storage.serve(req, res, next, { fileId, contentType: mediaType.mime });
 });
 
-// Handle file uploads (locally for now, S3 later).
+// Handle file uploads.
 fileRouter.post(
   "/upload",
   requireAuth,
@@ -279,56 +261,74 @@ fileRouter.post(
       return res.status(400).json({ error: 'A "file" field is required.' });
     }
 
-    const filePath = req.file.path;
+    const tempPath = req.file.path;
+    const fileId = req.file.filename;
+    const mediaType = MEDIA_TYPES[path.extname(fileId)];
     try {
       // Handle bytes and file checksum verification to ensure theres no spoofing
-      const expectedFamily = MEDIA_TYPES[path.extname(req.file.filename)].family;
-      const family = sniffContainerFamily(await readHeader(filePath));
+      const family = sniffContainerFamily(await readHeader(tempPath));
 
-      if (family !== expectedFamily) {
-        await discard(filePath);
+      if (family !== mediaType.family) {
+        await discard(tempPath);
         return res.status(415).json({
           error: "File contents are not a supported media file.",
         });
       }
 
-      await ensureRecordingNumber(req.query.sessionId, Number(req.query.startedAt));
-      const { rows } = await pool.query(
-        `INSERT INTO recording_session_videos (session_id, user_id, started_at_ms, file_id)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (session_id, user_id, started_at_ms)
-         DO UPDATE SET file_id = EXCLUDED.file_id
-         WHERE recording_session_videos.file_id IS NULL
-         RETURNING file_id`,
-        [req.query.sessionId, req.user.id, Number(req.query.startedAt), req.file.filename]
-      );
+      // Store first, then record the row. The other way round, a failed
+      // store would leave a row pointing at nothing, and the client's retry
+      // would be refused because the row already has a file_id.
+      await storage.put({
+        fileId,
+        tempPath,
+        contentType: mediaType.mime,
+        size: req.file.size,
+      });
+
+      let rows;
+      try {
+        await ensureRecordingNumber(req.query.sessionId, Number(req.query.startedAt));
+        ({ rows } = await pool.query(
+          `INSERT INTO recording_session_videos (session_id, user_id, started_at_ms, file_id)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (session_id, user_id, started_at_ms)
+           DO UPDATE SET file_id = EXCLUDED.file_id
+           WHERE recording_session_videos.file_id IS NULL
+           RETURNING file_id`,
+          [req.query.sessionId, req.user.id, Number(req.query.startedAt), fileId]
+        ));
+      } catch (err) {
+        await storage.remove([fileId]).catch(() => {});
+        throw err;
+      }
       if (rows.length === 0) {
-        await discard(filePath);
+        // This recording already has a file (a retry after a lost reply).
+        await storage.remove([fileId]);
         return res.json({ ok: true });
       }
 
       res.status(201).json({
         file: {
-          id: req.file.filename,
+          id: fileId,
           originalName: req.file.originalname,
-          contentType: MEDIA_TYPES[path.extname(req.file.filename)].mime,
+          contentType: mediaType.mime,
           size: req.file.size,
-          url: `/api/files/get/${req.file.filename}`,
+          url: `/api/files/get/${fileId}`,
           uploadedBy: req.user.id,
           uploadedAt: new Date().toISOString(),
         },
       });
     } catch (err) {
-      await discard(filePath);
+      await discard(tempPath);
       next(err);
     }
   }
 );
 
-// Remove the uploaded files when their session is deleted.
+// Remove the stored files when their session is deleted.
 export async function deleteRecordingFiles(fileIds) {
   for (const fileId of fileIds) {
     if (!FILE_ID_PATTERN.test(fileId)) throw new Error("Invalid recording file ID.");
-    await fsp.rm(path.join(UPLOAD_DIR, fileId), { force: true });
   }
+  await storage.remove(fileIds);
 }
