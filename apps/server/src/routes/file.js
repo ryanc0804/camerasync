@@ -172,7 +172,13 @@ fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
        ) AS allowed FROM recording_session_videos v WHERE v.file_id = $1`,
       [fileId, req.user.id]
     );
-    if (rows.length > 0 && !rows[0].allowed) {
+    // A file is only reachable through the session it was recorded for.
+    // Anything else on disk (an orphan from a failed insert, or a file that
+    // predates the sessionId requirement) is not served to anyone.
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "File not found." });
+    }
+    if (!rows[0].allowed) {
       return res.status(403).json({ error: "Join this group to watch its recordings." });
     }
   } catch (err) {
@@ -197,8 +203,13 @@ fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
 fileRouter.post(
   "/upload",
   requireAuth,
+  // Every upload belongs to a session the uploader joined. Session-less
+  // uploads used to be accepted, which left files that no access check
+  // covered, so any signed-in user could fetch them by id.
   async (req, res, next) => {
-    if (!req.query.sessionId) return next();
+    if (!req.query.sessionId) {
+      return res.status(400).json({ error: "sessionId is required." });
+    }
     const startedAt = Number(req.query.startedAt);
     if (!Number.isSafeInteger(startedAt) || startedAt <= 0 || startedAt > Date.now()) {
       return res.status(400).json({ error: "Invalid recording time." });
@@ -280,20 +291,18 @@ fileRouter.post(
         });
       }
 
-      if (req.query.sessionId) {
-        const { rows } = await pool.query(
-          `INSERT INTO recording_session_videos (session_id, user_id, started_at_ms, file_id)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (session_id, user_id, started_at_ms)
-           DO UPDATE SET file_id = EXCLUDED.file_id
-           WHERE recording_session_videos.file_id IS NULL
-           RETURNING file_id`,
-          [req.query.sessionId, req.user.id, Number(req.query.startedAt), req.file.filename]
-        );
-        if (rows.length === 0) {
-          await discard(filePath);
-          return res.json({ ok: true });
-        }
+      const { rows } = await pool.query(
+        `INSERT INTO recording_session_videos (session_id, user_id, started_at_ms, file_id)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (session_id, user_id, started_at_ms)
+         DO UPDATE SET file_id = EXCLUDED.file_id
+         WHERE recording_session_videos.file_id IS NULL
+         RETURNING file_id`,
+        [req.query.sessionId, req.user.id, Number(req.query.startedAt), req.file.filename]
+      );
+      if (rows.length === 0) {
+        await discard(filePath);
+        return res.json({ ok: true });
       }
 
       res.status(201).json({
