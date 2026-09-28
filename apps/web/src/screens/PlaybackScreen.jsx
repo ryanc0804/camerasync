@@ -9,6 +9,7 @@ import {
   getSessionVideos,
   uploadSessionVideo,
 } from "../api/recordings.js";
+import { recordingDisplayName } from "../recording/localRecording.js";
 
 export function PlaybackScreen() {
   const { sessionId } = useParams();
@@ -266,7 +267,9 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
       <div className="playback-top">
         <select aria-label="Recording" disabled={uploading} value={recordingIndex} onChange={changeRecording}>
           {recordings.map((recording, index) => (
-            <option key={recording.startedAt} value={index}>Recording {index + 1}</option>
+            <option key={recording.startedAt} value={index}>
+              {recordingDisplayName(recording.startedAt, recording.number ?? index + 1)}
+            </option>
           ))}
         </select>
         <button type="button" onClick={addPanel} disabled={uploading}

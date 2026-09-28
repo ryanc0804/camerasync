@@ -54,6 +54,21 @@ export function recordingBaseName({
   return `${parts.join("-")}-${userId}-${safeName}_recording_${recordingNumber}`;
 }
 
+// Display name for a recording: "YY-MM-DD HH:MM:SS - Recording 001", with
+// the shared start time shown in the viewer's local time.
+export function recordingDisplayName(startedAtEpochMs, recordingNumber) {
+  const date = new Date(startedAtEpochMs);
+  const stamp = [
+    String(date.getFullYear()).slice(-2),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join("-");
+  const time = [date.getHours(), date.getMinutes(), date.getSeconds()]
+    .map(pad)
+    .join(":");
+  return `${stamp} ${time} - Recording ${String(recordingNumber).padStart(3, "0")}`;
+}
+
 // downloads the finished file through the browser
 export function downloadFile(blob, filename) {
   const url = URL.createObjectURL(blob);

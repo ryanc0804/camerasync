@@ -187,3 +187,29 @@ DROP INDEX IF EXISTS session_notes_session_idx;
 
 CREATE INDEX IF NOT EXISTS session_notes_recording_idx
     ON session_notes (session_id, started_at_ms, note_id);
+
+-- One row per recording in a session, numbered in the order they were first
+-- seen (the host's start command, or the first saved video for a start time
+-- the server never announced, such as a manual shutter tap on a phone).
+-- started_at_ms is the shared server-clock start that recording_session_videos
+-- and session_notes also key on. Numbers are persisted so they survive server
+-- restarts and stay stable when a device uploads late.
+CREATE TABLE IF NOT EXISTS session_recordings (
+    session_id VARCHAR(6) NOT NULL
+        REFERENCES recording_sessions(id) ON DELETE CASCADE,
+    started_at_ms BIGINT NOT NULL,
+    recording_number INTEGER NOT NULL CHECK (recording_number > 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (session_id, started_at_ms),
+    UNIQUE (session_id, recording_number)
+);
+
+-- Number the recordings saved before this table existed, in start order.
+INSERT INTO session_recordings (session_id, started_at_ms, recording_number)
+SELECT session_id, started_at_ms,
+       ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY started_at_ms)
+  FROM (SELECT DISTINCT session_id, started_at_ms
+          FROM recording_session_videos) existing
+ WHERE NOT EXISTS (SELECT 1 FROM session_recordings sr
+                    WHERE sr.session_id = existing.session_id)
+ON CONFLICT DO NOTHING;

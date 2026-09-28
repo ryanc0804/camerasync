@@ -36,10 +36,15 @@ class RecordingStartCommand {
   const RecordingStartCommand({
     required this.serverStartAtEpochMs,
     required this.localStartAtEpochMs,
+    this.recordingNumber,
   });
 
   final int serverStartAtEpochMs;
   final int localStartAtEpochMs;
+
+  /// 1-based position of this recording within the session ("Recording 3"),
+  /// as persisted by the server. Null for start commands that predate it.
+  final int? recordingNumber;
 }
 
 /// Result of the `session:join` ack.
@@ -146,7 +151,10 @@ class SyncSocket {
       if (data is! Map) return;
       final serverStart = (data['startAtEpochMs'] as num?)?.toInt();
       if (serverStart != null) {
-        _recordingStart.add(_startCommand(serverStart));
+        _recordingStart.add(_startCommand(
+          serverStart,
+          recordingNumber: (data['recordingNumber'] as num?)?.toInt(),
+        ));
       }
     });
 
@@ -226,10 +234,14 @@ class SyncSocket {
   /// by subtracting the same offset [serverToLocal] adds.
   int localToServer(int localEpochMs) => localEpochMs - _clockOffsetMs;
 
-  RecordingStartCommand _startCommand(int serverStartAtEpochMs) =>
+  RecordingStartCommand _startCommand(
+    int serverStartAtEpochMs, {
+    int? recordingNumber,
+  }) =>
       RecordingStartCommand(
         serverStartAtEpochMs: serverStartAtEpochMs,
         localStartAtEpochMs: serverToLocal(serverStartAtEpochMs),
+        recordingNumber: recordingNumber,
       );
 
   /// Joins the session's socket room. The server requires an ack callback and
@@ -272,7 +284,10 @@ class SyncSocket {
         if (recording is Map && recording['stopAtEpochMs'] == null) {
           final serverStart = (recording['startAtEpochMs'] as num?)?.toInt();
           if (serverStart != null) {
-            _recordingStart.add(_startCommand(serverStart));
+            _recordingStart.add(_startCommand(
+              serverStart,
+              recordingNumber: (recording['recordingNumber'] as num?)?.toInt(),
+            ));
           }
         }
 

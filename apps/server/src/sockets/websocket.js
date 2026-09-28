@@ -7,12 +7,15 @@ import {
   publicUser,
 } from "../auth/sessions.js";
 import { pool } from "../db/pool.js";
+import { ensureRecordingNumber } from "../recordings/numbering.js";
 import { DEFAULT_RECORDING_BUFFER_MS, EVENTS } from "./events.js";
 
 const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:5173";
 const MAX_RECORDING_BUFFER_MS = 60000;
 let io = null;
 const activeRecordings = new Map();
+// Fallback numbering for the legacy /api/recordings/update flow, whose
+// session ids are not recording_sessions rows and so cannot be persisted.
 const recordingNumbers = new Map();
 
 // keeps one socket room for each session
@@ -262,18 +265,29 @@ export async function startSessionRecording(
     throw new Error("This session is already recording.");
   }
 
-  const recordingNumber = (recordingNumbers.get(sessionId) ?? 0) + 1;
   const serverSentAtEpochMs = Date.now();
   const safeBufferMs = cleanBuffer(bufferMs);
+  const startAtEpochMs = serverSentAtEpochMs + safeBufferMs;
+
+  // The number is persisted against the start time so playback shows the
+  // same "Recording N" the host saw, even after a server restart.
+  let recordingNumber;
+  try {
+    recordingNumber = await ensureRecordingNumber(sessionId, startAtEpochMs);
+  } catch (err) {
+    if (err.code !== "23503") throw err; // not a recording_sessions row
+    recordingNumber = (recordingNumbers.get(sessionId) ?? 0) + 1;
+    recordingNumbers.set(sessionId, recordingNumber);
+  }
+
   const recording = {
     sessionId,
     recordingNumber,
     bufferMs: safeBufferMs,
     serverSentAtEpochMs,
-    startAtEpochMs: serverSentAtEpochMs + safeBufferMs,
+    startAtEpochMs,
   };
 
-  recordingNumbers.set(sessionId, recordingNumber);
   activeRecordings.set(sessionId, recording);
   getIO().to(roomName(sessionId)).emit(EVENTS.RECORDING_STARTED, recording);
   return recording;

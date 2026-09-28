@@ -12,6 +12,7 @@ import multer from "multer";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { storage } from "../storage/index.js";
+import { ensureRecordingNumber } from "../recordings/numbering.js";
 
 export const fileRouter = Router();
 
@@ -286,6 +287,7 @@ fileRouter.post(
 
       let rows;
       try {
+        await ensureRecordingNumber(req.query.sessionId, Number(req.query.startedAt));
         ({ rows } = await pool.query(
           `INSERT INTO recording_session_videos (session_id, user_id, started_at_ms, file_id)
            VALUES ($1, $2, $3, $4)
