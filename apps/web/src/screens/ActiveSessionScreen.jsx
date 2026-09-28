@@ -16,6 +16,7 @@ import {
   createLocalRecorder,
   downloadFile,
   recordingBaseName,
+  recordingDisplayName,
 } from "../recording/localRecording.js";
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
@@ -196,7 +197,7 @@ export function ActiveSessionScreen() {
             };
             setRecordingStatus("recording");
             setRecordingMessage(
-              `Recording ${command.recordingNumber} in progress`
+              `${recordingDisplayName(command.startAtEpochMs, command.recordingNumber)} in progress`
             );
           };
           recorder.onstop = () => saveRecording(recorder, extension);

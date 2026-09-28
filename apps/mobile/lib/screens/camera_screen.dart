@@ -52,6 +52,9 @@ class _CameraScreenState extends State<CameraScreen> {
   /// session shares this value, and the server groups uploads by it.
   int? _plannedStartAtEpochMs;
 
+  /// "Recording N" for the current session recording, when the server said.
+  int? _recordingNumber;
+
   /// The most recent finished recording, kept so a failed upload can be
   /// retried without recording again.
   String? _lastVideoPath;
@@ -121,6 +124,7 @@ class _CameraScreenState extends State<CameraScreen> {
 
   void _scheduleStart(RecordingStartCommand command) {
     _plannedStartAtEpochMs = command.serverStartAtEpochMs;
+    _recordingNumber = command.recordingNumber;
 
     final delay = command.localStartAtEpochMs -
         DateTime.now().millisecondsSinceEpoch;
@@ -175,6 +179,7 @@ class _CameraScreenState extends State<CameraScreen> {
 
     final startedAt = _plannedStartAtEpochMs;
     _plannedStartAtEpochMs = null;
+    _recordingNumber = null;
 
     try {
       final file = await _cameraController!.stopVideoRecording();
@@ -294,14 +299,16 @@ class _CameraScreenState extends State<CameraScreen> {
 
         // Recording indicator, kept clear of the status bar.
         if (_recording)
-          const Positioned(
+          Positioned(
             top: 60,
             left: 0,
             right: 0,
             child: Center(
               child: Text(
-                '● REC',
-                style: TextStyle(
+                _recordingNumber == null
+                    ? '● REC'
+                    : '● REC  ·  Recording ${_recordingNumber!.toString().padLeft(3, '0')}',
+                style: const TextStyle(
                   color: Colors.redAccent,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 1,

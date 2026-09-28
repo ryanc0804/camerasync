@@ -17,6 +17,7 @@ import {
 } from "../sockets/websocket.js";
 import { deleteRecordingFiles } from "./file.js";
 import { EVENTS } from "../sockets/events.js";
+import { ensureRecordingNumber } from "../recordings/numbering.js";
 
 export const recordingsRouter = Router();
 const SOCKET_STATUSES = new Set(['recording', 'stopped']);
@@ -183,17 +184,29 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
       return res.status(404).json({ error: "Session not found." });
     }
     const { rows } = await pool.query(
-      `SELECT v.started_at_ms, v.user_id, v.file_id, u.display_name
+      `SELECT v.started_at_ms, v.user_id, v.file_id, u.display_name,
+              sr.recording_number
        FROM recording_session_videos v JOIN users u ON u.user_id = v.user_id
+       LEFT JOIN session_recordings sr
+         ON sr.session_id = v.session_id AND sr.started_at_ms = v.started_at_ms
        WHERE v.session_id = $1 ORDER BY v.started_at_ms, v.user_id`,
       [req.params.id]
     );
+    // Each recording carries its persisted number; clients build the display
+    // name "YY-MM-DD HH:MM:SS - Recording 001" from startedAt and number in
+    // the viewer's local time.
     const recordings = [];
     for (const row of rows) {
       const startedAt = Number(row.started_at_ms);
       let recording = recordings[recordings.length - 1];
       if (!recording || recording.startedAt !== startedAt) {
-        recording = { startedAt, videos: [] };
+        recording = {
+          startedAt,
+          number: row.recording_number == null
+            ? recordings.length + 1
+            : Number(row.recording_number),
+          videos: [],
+        };
         recordings.push(recording);
       }
       recording.videos.push({
@@ -224,12 +237,13 @@ recordingsRouter.post("/sessions/:id/videos", requireAuth, async (req, res, next
     if (participant.rows.length === 0) {
       return res.status(403).json({ error: "You did not join this session." });
     }
+    const number = await ensureRecordingNumber(req.params.id, startedAt);
     await pool.query(
       `INSERT INTO recording_session_videos (session_id, user_id, started_at_ms)
        VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
       [req.params.id, req.user.id, startedAt]
     );
-    res.json({ ok: true });
+    res.json({ ok: true, recording: { startedAt, number } });
   } catch (err) {
     next(err);
   }
