@@ -34,7 +34,7 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.groups));
     await tester.pumpAndSettle();
-    expect(find.text('Sessions'), findsWidgets);
+    expect(find.text('My groups'), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.settings_outlined));
     await tester.pumpAndSettle();
