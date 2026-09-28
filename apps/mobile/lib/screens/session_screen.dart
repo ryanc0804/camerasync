@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'camera_screen.dart';
 
+import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
 import '../socket/sync_socket.dart';
 
@@ -151,6 +152,7 @@ class _SessionScreenState extends State<SessionScreen> {
                           builder: (_) => CameraScreen(
                             socket: socket,
                             sessionId: widget.sessionId,
+                            recordings: RecordingsApi(widget.auth.api),
                           ),
                         ),
                       );

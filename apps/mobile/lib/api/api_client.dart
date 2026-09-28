@@ -100,7 +100,45 @@ class ApiClient {
     }
 
     await _captureCookie(res);
+    return _decode(res);
+  }
 
+  /// Uploads one file from disk as a multipart form and returns the decoded
+  /// JSON reply. A 1080p recording can take minutes on a phone connection, so
+  /// this gets its own generous [timeout] rather than the 15 seconds used for
+  /// ordinary JSON requests.
+  ///
+  /// The server identifies the media type from the filename's extension and
+  /// the file's own header, so [filename] must keep the recording's extension
+  /// (`.mp4`, `.mov`, ...).
+  Future<dynamic> postFile(
+    String path, {
+    required String filePath,
+    String field = 'file',
+    String? filename,
+    Duration timeout = const Duration(minutes: 10),
+  }) async {
+    final request = http.MultipartRequest('POST', Uri.parse('$baseUrl$path'))
+      ..headers.addAll(_headers())
+      ..files.add(
+        await http.MultipartFile.fromPath(field, filePath, filename: filename),
+      );
+
+    late http.Response res;
+    try {
+      final streamed = await request.send().timeout(timeout);
+      res = await http.Response.fromStream(streamed).timeout(timeout);
+    } catch (_) {
+      throw ApiException(0, "Can't reach the server at $baseUrl.");
+    }
+
+    await _captureCookie(res);
+    return _decode(res);
+  }
+
+  /// Turns a response into its JSON payload, or throws [ApiException] with
+  /// the server's `error` message for a 4xx/5xx.
+  dynamic _decode(http.Response res) {
     if (res.statusCode == 204 || res.body.isEmpty) {
       if (res.statusCode >= 400) {
         throw ApiException(res.statusCode, 'Request failed (${res.statusCode})');

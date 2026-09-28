@@ -58,4 +58,30 @@ class RecordingsApi {
       Map<String, dynamic>.from((data as Map)['session'] as Map),
     );
   }
+
+  /// Records that this user finished a video for the recording that started
+  /// at [startedAtMs] (server clock), so the session's video counts include
+  /// it even if the upload itself fails. Safe to repeat.
+  Future<void> saveRecordingDetails(String id, int startedAtMs) =>
+      _api.post('/api/recordings/sessions/$id/videos', {
+        'startedAt': startedAtMs,
+      });
+
+  /// Uploads a finished recording so it appears in the session's playback.
+  ///
+  /// [startedAtMs] must be the server-clock start the whole session shared
+  /// (see `RecordingStartCommand.serverStartAtEpochMs`); the server lines this
+  /// angle up with every other device's by that value.
+  Future<void> uploadSessionVideo(
+    String id,
+    int startedAtMs,
+    String filePath, {
+    String? filename,
+  }) =>
+      _api.postFile(
+        '/api/files/upload'
+        '?sessionId=${Uri.encodeQueryComponent(id)}&startedAt=$startedAtMs',
+        filePath: filePath,
+        filename: filename,
+      );
 }
