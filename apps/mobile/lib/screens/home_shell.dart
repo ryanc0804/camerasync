@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../auth/auth_service.dart';
 import '../theme.dart';
 import 'calendar_tab.dart';
-import 'camera_screen.dart';
 import 'home_tab.dart';
 import 'join_screen.dart';
 import 'groups_screen.dart';
