@@ -235,6 +235,150 @@ recordingsRouter.post("/sessions/:id/videos", requireAuth, async (req, res, next
   }
 });
 
+// --- Session notes -------------------------------------------------------
+//
+// The owner outranks admins and admins outrank members. You may always delete
+// your own note; otherwise you need a strictly higher rank than its author,
+// so an admin cannot delete another admin's note and a member can only delete
+// their own.
+
+function roleRank(role) {
+  if (role === "owner") return 3;
+  if (role === "admin") return 2;
+  return 1;
+}
+
+// The current user's rank in the group that owns this session, or null when
+// they are not a member of it.
+async function getSessionRole(sessionId, userId) {
+  const { rows } = await pool.query(
+    `SELECT gm.role, g.owner_id FROM recording_sessions rs
+     JOIN groups g ON g.group_id = rs.group_id
+     JOIN group_members gm
+       ON gm.group_id = rs.group_id AND gm.user_id = $2
+     WHERE rs.id = $1`,
+    [sessionId, userId]
+  );
+  if (rows.length === 0) return null;
+  return Number(rows[0].owner_id) === Number(userId) ? "owner" : rows[0].role;
+}
+
+// The group owner is stored on groups.owner_id, so a note's author only counts
+// as "owner" when their id matches it.
+function noteAuthorRole(row) {
+  return Number(row.owner_id) === Number(row.user_id) ? "owner" : row.role || "member";
+}
+
+function canDeleteNote(row, viewerId, viewerRole) {
+  if (Number(row.user_id) === Number(viewerId)) return true;
+  return roleRank(viewerRole) > roleRank(noteAuthorRole(row));
+}
+
+// shapes note rows for the frontend
+function publicNote(row, viewerId, viewerRole) {
+  return {
+    id: Number(row.note_id),
+    body: row.body,
+    videoTimeMs: Number(row.video_time_ms),
+    author: row.display_name || "Unnamed member",
+    canDelete: canDeleteNote(row, viewerId, viewerRole),
+  };
+}
+
+// lists one recording's notes for members of the session's group
+recordingsRouter.get("/sessions/:id/notes", requireAuth, async (req, res, next) => {
+  const startedAt = Number(req.query.startedAt);
+  if (!Number.isSafeInteger(startedAt) || startedAt <= 0) {
+    return res.status(400).json({ error: "Invalid recording." });
+  }
+  try {
+    const role = await getSessionRole(req.params.id, req.user.id);
+    if (!role) {
+      return res.status(404).json({ error: "Session not found." });
+    }
+    const { rows } = await pool.query(
+      `SELECT n.note_id, n.body, n.video_time_ms, n.user_id,
+              u.display_name, g.owner_id, gm.role
+       FROM session_notes n
+       JOIN recording_sessions rs ON rs.id = n.session_id
+       JOIN groups g ON g.group_id = rs.group_id
+       JOIN users u ON u.user_id = n.user_id
+       LEFT JOIN group_members gm
+         ON gm.group_id = rs.group_id AND gm.user_id = n.user_id
+       WHERE n.session_id = $1 AND n.started_at_ms = $2
+       ORDER BY n.video_time_ms, n.note_id`,
+      [req.params.id, startedAt]
+    );
+    res.json({ notes: rows.map((row) => publicNote(row, req.user.id, role)) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// adds a note at a point in one of the session's recordings
+recordingsRouter.post("/sessions/:id/notes", requireAuth, async (req, res, next) => {
+  const body = String(req.body?.body ?? "").trim();
+  const startedAt = Number(req.body?.startedAt);
+  const videoTimeMs = Math.round(Number(req.body?.videoTimeMs ?? 0));
+  if (!body || body.length > 500) {
+    return res.status(400).json({ error: "Notes must be 1 to 500 characters." });
+  }
+  if (!Number.isSafeInteger(startedAt) || startedAt <= 0) {
+    return res.status(400).json({ error: "Invalid recording." });
+  }
+  if (!Number.isFinite(videoTimeMs) || videoTimeMs < 0) {
+    return res.status(400).json({ error: "Invalid note time." });
+  }
+  try {
+    const role = await getSessionRole(req.params.id, req.user.id);
+    if (!role) {
+      return res.status(404).json({ error: "Session not found." });
+    }
+    await pool.query(
+      `INSERT INTO session_notes (session_id, started_at_ms, user_id, body, video_time_ms)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [req.params.id, startedAt, req.user.id, body, videoTimeMs]
+    );
+    res.status(201).json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// deletes a note the current user outranks, or one of their own
+recordingsRouter.delete("/sessions/:id/notes/:noteId", requireAuth, async (req, res, next) => {
+  const noteId = Number(req.params.noteId);
+  if (!Number.isInteger(noteId)) {
+    return res.status(400).json({ error: "Invalid note." });
+  }
+  try {
+    const role = await getSessionRole(req.params.id, req.user.id);
+    if (!role) {
+      return res.status(404).json({ error: "Session not found." });
+    }
+    const { rows } = await pool.query(
+      `SELECT n.user_id, g.owner_id, gm.role
+       FROM session_notes n
+       JOIN recording_sessions rs ON rs.id = n.session_id
+       JOIN groups g ON g.group_id = rs.group_id
+       LEFT JOIN group_members gm
+         ON gm.group_id = rs.group_id AND gm.user_id = n.user_id
+       WHERE n.note_id = $1 AND n.session_id = $2`,
+      [noteId, req.params.id]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Note not found." });
+    }
+    if (!canDeleteNote(rows[0], req.user.id, role)) {
+      return res.status(403).json({ error: "You cannot delete this note." });
+    }
+    await pool.query("DELETE FROM session_notes WHERE note_id = $1", [noteId]);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // schedules a session for one of the user's groups
 recordingsRouter.post("/sessions", requireAuth, async (req, res, next) => {
   const groupId = String(req.body?.groupId ?? "").trim();

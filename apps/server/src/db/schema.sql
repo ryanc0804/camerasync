@@ -163,3 +163,27 @@ ALTER TABLE recording_sessions
 ALTER TABLE recording_sessions ALTER COLUMN counts_tracked SET DEFAULT TRUE;
 
 ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS file_id TEXT;
+
+-- Notes members leave on one recording while watching it back. A session can
+-- hold several recordings, so started_at_ms says which one the note belongs to
+-- (it matches recording_session_videos.started_at_ms). video_time_ms is the
+-- point inside that recording the note is about, not when it was written.
+CREATE TABLE IF NOT EXISTS session_notes (
+    note_id SERIAL PRIMARY KEY,
+    session_id VARCHAR(6) NOT NULL
+        REFERENCES recording_sessions(id) ON DELETE CASCADE,
+    started_at_ms BIGINT NOT NULL DEFAULT 0,
+    user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    video_time_ms INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Notes started out attached to the whole session.
+ALTER TABLE session_notes
+    ADD COLUMN IF NOT EXISTS started_at_ms BIGINT NOT NULL DEFAULT 0;
+
+DROP INDEX IF EXISTS session_notes_session_idx;
+
+CREATE INDEX IF NOT EXISTS session_notes_recording_idx
+    ON session_notes (session_id, started_at_ms, note_id);
