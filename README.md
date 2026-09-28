@@ -22,7 +22,7 @@ names and API contracts.
 - **Web:** React
 - **Mobile:** Flutter
 - **Sync:** shared server clock Timesynce offset over Socket.IO
-- **Storage/delivery:** AWS S3 + Cloudflare Stream (later)
+- **Storage/delivery:** AWS S3 (local disk in dev) + Cloudflare Stream (later)
 - **Deploy:** AWS EC2 (later)
 
 ## Local development
