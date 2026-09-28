@@ -1,4 +1,4 @@
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
+import { SERVER_URL } from "./serverUrl.js";
 
 // sends api requests with the login cookie
 async function request(path, options = {}) {

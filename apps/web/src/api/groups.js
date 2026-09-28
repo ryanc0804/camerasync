@@ -1,5 +1,5 @@
 //backend URL used by the web app
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
+import { SERVER_URL } from "./serverUrl.js";
 
 //send a request with the user's login cookie
 async function request(path, options = {}) {

@@ -10,7 +10,7 @@
 //   GET  /api/auth/me                                 -> { user } | 401
 //   POST /api/auth/logout                             -> 204
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
+import { SERVER_URL } from "./serverUrl.js";
 
 async function request(path, { method = "GET", body } = {}) {
   let res;
@@ -21,7 +21,8 @@ async function request(path, { method = "GET", body } = {}) {
       headers: body ? { "Content-Type": "application/json" } : undefined,
       body: body ? JSON.stringify(body) : undefined,
     });
-  } catch {
+  } catch(err) {
+    console.log(err)
     throw new Error(`Can't reach the server at ${SERVER_URL}. Is it running?`);
   }
 

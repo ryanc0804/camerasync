@@ -15,8 +15,8 @@ import {
   downloadFile,
   recordingBaseName,
 } from "../recording/localRecording.js";
+import { SERVER_URL } from "../api/serverUrl.js";
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
 let timesyncPromise = null;
 
 // loads the timesync browser file once
@@ -561,7 +561,7 @@ export function ActiveSessionScreen() {
       )}
 
       <span className="active-session-socket-status">
-        Socket.IO: {socketStatus}
+        Websocket Status: {socketStatus}
       </span>
     </div>
   );

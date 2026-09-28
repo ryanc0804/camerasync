@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
 import { SessionScheduler } from "../components/SessionScheduler.jsx";
-
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
+import { SERVER_URL } from "../api/serverUrl.js";
 
 // Connects to the sync hub, joins a demo session, and fires the synchronized
 // start/stop commands. Still scaffolding — replace the hardcoded session with
