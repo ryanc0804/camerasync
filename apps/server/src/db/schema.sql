@@ -225,3 +225,13 @@ CREATE TABLE IF NOT EXISTS password_resets (
 );
 
 CREATE INDEX IF NOT EXISTS password_resets_user_idx ON password_resets (user_id);
+
+-- Viewer tier (SCRUM-53): viewers can watch recordings but not record or
+-- manage. The owner keeps a plain admin row and outranks other admins via
+-- groups.owner_id, the same way permission checks always treated them.
+ALTER TABLE group_members
+    DROP CONSTRAINT IF EXISTS group_members_role_check;
+
+ALTER TABLE group_members
+    ADD CONSTRAINT group_members_role_check
+    CHECK (role IN ('admin', 'member', 'viewer'));

@@ -9,6 +9,11 @@ import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import {
+  ROLE_RANK,
+  atLeast,
+  getSessionRole,
+} from "../middleware/groupRole.js";
+import {
   createRecordingSession,
   getRecordingSession,
   startSessionRecording,
@@ -237,6 +242,10 @@ recordingsRouter.post("/sessions/:id/videos", requireAuth, async (req, res, next
     if (participant.rows.length === 0) {
       return res.status(403).json({ error: "You did not join this session." });
     }
+    // Covers participants demoted to viewer after they joined.
+    if (!atLeast(await getSessionRole(req.params.id, req.user.id), "member")) {
+      return res.status(403).json({ error: "Viewers can't save recordings." });
+    }
     const number = await ensureRecordingNumber(req.params.id, startedAt);
     await pool.query(
       `INSERT INTO recording_session_videos (session_id, user_id, started_at_ms)
@@ -251,41 +260,22 @@ recordingsRouter.post("/sessions/:id/videos", requireAuth, async (req, res, next
 
 // --- Session notes -------------------------------------------------------
 //
-// The owner outranks admins and admins outrank members. You may always delete
-// your own note; otherwise you need a strictly higher rank than its author,
-// so an admin cannot delete another admin's note and a member can only delete
-// their own.
+// Rank comes from the shared group-role ladder (viewer < member < admin <
+// owner). You may always delete your own note; otherwise you need a strictly
+// higher rank than its author, so an admin cannot delete another admin's
+// note and a member can only delete their own.
 
-function roleRank(role) {
-  if (role === "owner") return 3;
-  if (role === "admin") return 2;
-  return 1;
-}
-
-// The current user's rank in the group that owns this session, or null when
-// they are not a member of it.
-async function getSessionRole(sessionId, userId) {
-  const { rows } = await pool.query(
-    `SELECT gm.role, g.owner_id FROM recording_sessions rs
-     JOIN groups g ON g.group_id = rs.group_id
-     JOIN group_members gm
-       ON gm.group_id = rs.group_id AND gm.user_id = $2
-     WHERE rs.id = $1`,
-    [sessionId, userId]
-  );
-  if (rows.length === 0) return null;
-  return Number(rows[0].owner_id) === Number(userId) ? "owner" : rows[0].role;
-}
-
-// The group owner is stored on groups.owner_id, so a note's author only counts
-// as "owner" when their id matches it.
+// The group owner is stored on groups.owner_id, so a note's author only
+// counts as "owner" when their id matches it.
 function noteAuthorRole(row) {
-  return Number(row.owner_id) === Number(row.user_id) ? "owner" : row.role || "member";
+  return Number(row.owner_id) === Number(row.user_id)
+    ? "owner"
+    : row.role || "member";
 }
 
 function canDeleteNote(row, viewerId, viewerRole) {
   if (Number(row.user_id) === Number(viewerId)) return true;
-  return roleRank(viewerRole) > roleRank(noteAuthorRole(row));
+  return (ROLE_RANK[viewerRole] ?? 0) > (ROLE_RANK[noteAuthorRole(row)] ?? 0);
 }
 
 // shapes note rows for the frontend
@@ -347,6 +337,9 @@ recordingsRouter.post("/sessions/:id/notes", requireAuth, async (req, res, next)
     const role = await getSessionRole(req.params.id, req.user.id);
     if (!role) {
       return res.status(404).json({ error: "Session not found." });
+    }
+    if (!atLeast(role, "member")) {
+      return res.status(403).json({ error: "Viewers can't leave notes." });
     }
     await pool.query(
       `INSERT INTO session_notes (session_id, started_at_ms, user_id, body, video_time_ms)
@@ -560,12 +553,14 @@ recordingsRouter.post(
       const { rows } = await pool.query(
         `SELECT rs.id, rs.group_id, rs.name, rs.scheduled_at,
                 rs.created_at, rs.created_by, rs.status,
+                gm.role, g.owner_id,
                 EXISTS (
                   SELECT 1
                     FROM recording_session_members rsm
                    WHERE rsm.session_id = rs.id
                 ) AS has_members
            FROM recording_sessions rs
+           JOIN groups g ON g.group_id = rs.group_id
            JOIN group_members gm ON gm.group_id = rs.group_id
           WHERE rs.id = $1
             AND gm.user_id = $2`,
@@ -577,6 +572,17 @@ recordingsRouter.post(
       }
 
       const session = rows[0];
+      // Joining a session makes this device one of its cameras, which is
+      // exactly what a viewer must not be.
+      const joinRole =
+        Number(session.owner_id) === Number(req.user.id)
+          ? "owner"
+          : session.role;
+      if (!atLeast(joinRole, "member")) {
+        return res.status(403).json({
+          error: "Viewers can watch recordings but can't join and record.",
+        });
+      }
       if (!["active", "scheduled"].includes(session.status)) {
         return res.status(409).json({
           error: "This session is no longer open for joining.",

@@ -62,9 +62,11 @@ function GroupRoster({ group }) {
   const isOwner = Number(user.id) === group.owner;
   const isAdmin = members.find((member) => member.id === Number(user.id))?.role === "admin";
 
+  const roleLabel = { admin: "an admin", member: "a member", viewer: "a viewer" };
+
   const updateMember = async (member, role) => {
     const message = role
-      ? `Make ${member.name} ${role === "admin" ? "an admin" : "a member"}?`
+      ? `Make ${member.name} ${roleLabel[role]}?`
       : `Remove ${member.name} from this group?`;
     if (!window.confirm(message)) return;
     setSaving(true);
@@ -111,20 +113,31 @@ function GroupRoster({ group }) {
               <ul>
                 {members.slice(page * 30, (page + 1) * 30).map((member) => {
                   const canManage = member.id !== group.owner &&
-                    (isOwner || (isAdmin && member.role === "member"));
+                    (isOwner || (isAdmin && ["member", "viewer"].includes(member.role)));
+                  // One step up / one step down the viewer < member < admin ladder.
+                  const promoteTo = member.role === "viewer" ? "member" :
+                    member.role === "member" ? "admin" : null;
+                  const demoteTo = member.role === "admin" ? "member" :
+                    member.role === "member" ? "viewer" : null;
                   return (
                     <li key={member.id} className="group-roster-member">
                       <span>
                         {member.name}{member.id === group.owner ? <> <em>(owner)</em></> :
-                          member.role === "admin" ? <> <em>(admin)</em></> : null}
+                          member.role === "admin" ? <> <em>(admin)</em></> :
+                          member.role === "viewer" ? <> <em>(viewer)</em></> : null}
                       </span>
                       {canManage && (
                         <span className="group-roster-actions">
-                          <button type="button" className="group-button" disabled={saving}
-                            onClick={() => updateMember(member, member.role === "admin" ? "member" : "admin")}
-                            aria-label={`Make ${member.name} ${member.role === "admin" ? "a member" : "an admin"}`}>
-                            {member.role === "admin" ? "↓" : "↑"}
-                          </button>
+                          {promoteTo && (
+                            <button type="button" className="group-button" disabled={saving}
+                              onClick={() => updateMember(member, promoteTo)}
+                              aria-label={`Make ${member.name} ${roleLabel[promoteTo]}`}>↑</button>
+                          )}
+                          {demoteTo && (
+                            <button type="button" className="group-button" disabled={saving}
+                              onClick={() => updateMember(member, demoteTo)}
+                              aria-label={`Make ${member.name} ${roleLabel[demoteTo]}`}>↓</button>
+                          )}
                           <button type="button" className="group-button" disabled={saving}
                             aria-label={`Remove ${member.name} from group`}
                             onClick={() => updateMember(member, null)}>×</button>
