@@ -11,6 +11,7 @@ import { Router } from "express";
 import multer from "multer";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../middleware/requireAuth.js";
+import { atLeast, getSessionRole } from "../middleware/groupRole.js";
 import { storage } from "../storage/index.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
 
@@ -204,6 +205,11 @@ fileRouter.post(
       );
       if (rows.length === 0) {
         return res.status(403).json({ error: "You did not join this session." });
+      }
+      // Covers participants demoted to viewer after they joined.
+      const role = await getSessionRole(req.query.sessionId, req.user.id);
+      if (!atLeast(role, "member")) {
+        return res.status(403).json({ error: "Viewers can't upload recordings." });
       }
       next();
     } catch (err) {

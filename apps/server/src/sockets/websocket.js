@@ -130,8 +130,11 @@ export async function initSocket(httpServer) {
 
       try {
         const { rows } = await pool.query(
-          `SELECT rs.id, rs.name, rs.created_by, rs.status
+          `SELECT rs.id, rs.name, rs.created_by, rs.status,
+                  gm.role, g.owner_id
              FROM recording_sessions rs
+             JOIN groups g
+               ON g.group_id = rs.group_id
              JOIN group_members gm
                ON gm.group_id = rs.group_id
               AND gm.user_id = $2
@@ -147,6 +150,18 @@ export async function initSocket(httpServer) {
           return ack({
             ok: false,
             error: "This session is not live or you have not joined it.",
+          });
+        }
+
+        // The socket room is the recording fleet. Viewers watch afterwards;
+        // they never record, so they never join it (covers members demoted
+        // to viewer after joining the session).
+        const isOwner =
+          Number(rows[0].owner_id) === Number(socket.data.user.id);
+        if (!isOwner && rows[0].role === "viewer") {
+          return ack({
+            ok: false,
+            error: "Viewers can watch recordings but can't join and record.",
           });
         }
 

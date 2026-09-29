@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { pool } from "../db/pool.js";
 import { removeMemberFromGroupSessions } from "../sockets/websocket.js";
 import { requireAuth } from "../middleware/requireAuth.js";
+import { ROLE_RANK, atLeast } from "../middleware/groupRole.js";
 
 export const groupRouter = Router();
 
@@ -134,13 +135,16 @@ groupRouter.get("/:id/members", async (req, res) => {
   }
 });
 
-// Owners manage admins and members. Admins can only manage members.
+// Rank rules: you need to outrank someone to change or remove them, and you
+// can never hand out a role above your own. So the owner manages everyone,
+// admins manage members and viewers (including promoting them to admin), and
+// nobody touches the owner.
 async function changeMember(req, res) {
   const memberId = Number(req.params.memberId);
   const removing = req.method === "DELETE";
   const role = req.body?.role;
   if (!Number.isSafeInteger(memberId) || memberId <= 0 ||
-      (!removing && !["admin", "member"].includes(role))) {
+      (!removing && !["admin", "member", "viewer"].includes(role))) {
     return res.status(400).json({ error: "Invalid member or role." });
   }
 
@@ -159,9 +163,12 @@ async function changeMember(req, res) {
     const actor = members.find((member) => Number(member.user_id) === Number(req.user.id));
     const target = members.find((member) => Number(member.user_id) === memberId);
     const ownerId = Number(groups[0]?.owner_id);
+    const actorRole =
+      Number(req.user.id) === ownerId ? "owner" : actor?.role;
     const allowed = actor && target && memberId !== ownerId &&
-      (Number(req.user.id) === ownerId ||
-        (actor.role === "admin" && target.role === "member" && (removing || role === "admin")));
+      atLeast(actorRole, "admin") &&
+      ROLE_RANK[actorRole] > (ROLE_RANK[target.role] ?? 0) &&
+      (removing || ROLE_RANK[role] <= ROLE_RANK[actorRole]);
     if (!allowed) {
       await client.query("ROLLBACK");
       return res.status(403).json({ error: "You cannot change this member." });
