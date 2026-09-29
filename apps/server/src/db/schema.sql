@@ -213,3 +213,15 @@ SELECT session_id, started_at_ms,
  WHERE NOT EXISTS (SELECT 1 FROM session_recordings sr
                     WHERE sr.session_id = existing.session_id)
 ON CONFLICT DO NOTHING;
+
+-- Single-use, short-lived tokens for the forgot-password flow. Only a SHA-256
+-- hash of the emailed token is stored, so a leaked table row can't be used to
+-- reset anything.
+CREATE TABLE IF NOT EXISTS password_resets (
+    token_hash CHAR(64) PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS password_resets_user_idx ON password_resets (user_id);
