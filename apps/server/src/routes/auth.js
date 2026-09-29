@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 
@@ -105,6 +107,107 @@ authRouter.get("/me", async (req, res, next) => {
     const row = await getUserBySessionToken(req.cookies?.[SESSION_COOKIE]);
     if (!row) return res.status(401).json({ error: "Not authenticated" });
     res.json({ user: publicUser(row) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Reset links die after an hour; a forgotten password is reset within minutes,
+// and anything older is more likely a forgotten inbox than a real attempt.
+const RESET_TTL_MS = 1000 * 60 * 60;
+
+function hashResetToken(token) {
+  return crypto.createHash("sha256").update(String(token)).digest("hex");
+}
+
+// "Send" the reset email. There is no SMTP setup yet (see the nodemailer TODO
+// in middleware/auth.js), so the link goes to the server log for now.
+function sendPasswordResetEmail(email, link) {
+  console.log(`[password-reset] ${email}: ${link}`);
+}
+
+// Start a password reset. The response is identical whether or not the email
+// has an account, so this endpoint can't be used to discover which emails are
+// registered (the web client ignores the status anyway — see web/api/auth.js).
+authRouter.post("/forgot-password", async (req, res, next) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    if (!email) {
+      return res.status(400).json({ error: "Email is required." });
+    }
+
+    const { rows } = await pool.query(
+      `SELECT user_id FROM users WHERE email = $1`,
+      [email]
+    );
+    const row = rows[0];
+
+    if (row) {
+      const token = crypto.randomBytes(32).toString("hex");
+      const expires = new Date(Date.now() + RESET_TTL_MS);
+
+      // A fresh request replaces any earlier link so only the newest works.
+      await pool.query(`DELETE FROM password_resets WHERE user_id = $1`, [
+        row.user_id,
+      ]);
+      await pool.query(
+        `INSERT INTO password_resets (token_hash, user_id, expires)
+         VALUES ($1, $2, $3)`,
+        [hashResetToken(token), row.user_id, expires]
+      );
+
+      const origin = process.env.WEB_ORIGIN || "http://localhost:5173";
+      sendPasswordResetEmail(email, `${origin}/reset-password?token=${token}`);
+    }
+
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Complete a reset with the token from the emailed link. The DELETE doubles as
+// the lookup: it atomically consumes the token, so a link can't be used twice
+// even by two racing requests.
+authRouter.post("/reset-password", async (req, res, next) => {
+  try {
+    const { token, password } = req.body ?? {};
+    if (!token || !password) {
+      return res
+        .status(400)
+        .json({ error: "Token and password are required." });
+    }
+    if (String(password).length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({
+        error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
+      });
+    }
+
+    const { rows } = await pool.query(
+      `DELETE FROM password_resets
+        WHERE token_hash = $1
+          AND expires > NOW()
+        RETURNING user_id`,
+      [hashResetToken(token)]
+    );
+    const row = rows[0];
+    if (!row) {
+      return res
+        .status(400)
+        .json({ error: "This reset link is invalid or has expired." });
+    }
+
+    const passwordHash = await bcrypt.hash(String(password), BCRYPT_ROUNDS);
+    await pool.query(`UPDATE users SET password = $1 WHERE user_id = $2`, [
+      passwordHash,
+      row.user_id,
+    ]);
+
+    // The password just changed hands; every existing session goes with it so
+    // whoever prompted the reset is signed out everywhere.
+    await pool.query(`DELETE FROM sessions WHERE user_id = $1`, [row.user_id]);
+
+    res.status(204).end();
   } catch (err) {
     next(err);
   }
