@@ -99,6 +99,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
   const [openVolume, setOpenVolume] = useState(null);
   const [choosingPanel, setChoosingPanel] = useState(null);
   const [cameraPage, setCameraPage] = useState(0);
+  const [focusedPanel, setFocusedPanel] = useState(null);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -179,6 +180,20 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
   // the notes panel jumps the player through this
   seek.current = seekTo;
 
+  // Enlarging is layout-only: every panel stays mounted, so the hidden
+  // videos keep playing and stay in sync while one fills the grid.
+  const toggleFocus = (panelIndex) =>
+    setFocusedPanel((current) => (current === panelIndex ? null : panelIndex));
+
+  useEffect(() => {
+    if (focusedPanel === null) return;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setFocusedPanel(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [focusedPanel]);
+
   const skip = (seconds) => {
     const players = videoRefs.current.filter((video) => video && Number.isFinite(video.duration));
     if (players.length === 0) return;
@@ -214,6 +229,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     setError("");
     setChoosingPanel(null);
     setOpenVolume(null);
+    setFocusedPanel(null);
     setPanelLayouts((current) => ({ ...current, [recordingIndex]: nextPanels }));
   };
 
@@ -242,6 +258,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     setPage(nextPage);
     setChoosingPanel(null);
     setOpenVolume(null);
+    setFocusedPanel(null);
   };
 
   const changeRecording = (event) => {
@@ -254,6 +271,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     setRecordingIndex(Number(event.target.value));
     setChoosingPanel(null);
     setOpenVolume(null);
+    setFocusedPanel(null);
     setPage(0);
   };
 
@@ -280,17 +298,34 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
       ) : Array.from({ length: pages }, (_, pageIndex) => {
         const pageVideos = panelVideos.slice(pageIndex * 6, pageIndex * 6 + 6);
         return (
-        <div className={`playback-grid playback-grid-${pageVideos.length}`}
+        <div className={`playback-grid playback-grid-${pageVideos.length}${
+            focusedPanel !== null && Math.floor(focusedPanel / 6) === pageIndex ? " playback-grid-focused" : ""}`}
           hidden={pageIndex !== page} key={`${recordingIndex}-${pageIndex}-${panels.join(",")}`}>
           {pageVideos.map((video, index) => {
             const panelIndex = pageIndex * 6 + index;
             const audio = getPanelAudio(panelIndex);
+            const focused = focusedPanel === panelIndex;
             return (
-            <figure key={pageIndex * 6 + index}>
+            <figure key={pageIndex * 6 + index}
+              className={focused ? "playback-focused" : undefined}>
               <button type="button" className="playback-panel-remove"
                 aria-label={`Remove panel ${pageIndex * 6 + index + 1}`}
                 disabled={uploading || panels.length === 1}
                 onClick={() => removePanel(pageIndex * 6 + index)}>−</button>
+              {video?.url && panels.length > 1 && (
+                <button type="button" className="playback-panel-focus"
+                  aria-pressed={focused}
+                  aria-label={focused ? "Return to grid" : `Enlarge panel ${panelIndex + 1}`}
+                  title={focused ? "Return to grid" : "Enlarge this angle"}
+                  onClick={() => toggleFocus(panelIndex)}>
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+                    stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                    {focused
+                      ? <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
+                      : <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />}
+                  </svg>
+                </button>
+              )}
               {video?.url && (
                 <div className="playback-audio">
                   <button type="button" aria-label={`Audio for panel ${panelIndex + 1}`}
@@ -543,6 +578,11 @@ const css = `
   .playback-grid[hidden] { display: none; }
   .playback-grid figure { position: relative; margin: 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; grid-column: span 6; background: #000; border-radius: 6px; overflow: hidden; }
   .playback-box .playback-panel-remove { position: absolute; top: 6px; right: 6px; z-index: 3; width: 28px; height: 28px; padding: 0; border-radius: 50%; }
+  .playback-box .playback-panel-focus { position: absolute; top: 6px; right: 40px; z-index: 3; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 50%; }
+  .playback-grid.playback-grid-focused { display: block; }
+  .playback-grid.playback-grid-focused figure { height: 100%; }
+  /* Hidden, not unmounted: the other angles keep playing in sync offscreen. */
+  .playback-grid.playback-grid-focused figure:not(.playback-focused) { display: none; }
   .playback-audio { position: absolute; top: 6px; left: 6px; z-index: 3; display: flex; align-items: center; gap: 6px; max-width: calc(100% - 48px); }
   .playback-box .playback-audio button { display: flex; align-items: center; justify-content: center; flex: 0 0 28px; width: 28px; height: 28px; padding: 0; border-radius: 50%; }
   .playback-audio input { width: 100px; min-width: 0; margin: 0; accent-color: #f2cb05; }
