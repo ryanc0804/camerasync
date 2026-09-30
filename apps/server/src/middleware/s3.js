@@ -31,8 +31,7 @@ let client;
 function getClient() {
   client ??= new S3Client({
     region: process.env.AWS_REGION,
-    // Only pass explicit keys when provided; otherwise fall back to the
-    // default provider chain (instance role, shared profile, ...).
+    // Only pass keys if provided in env
     ...(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
       ? {
           credentials: {
