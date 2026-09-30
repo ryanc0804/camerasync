@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
 import {
@@ -33,6 +34,7 @@ const styles = {
 
 function GroupRoster({ group }) {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState("");
   const [open, setOpen] = useState(false);
@@ -97,6 +99,10 @@ function GroupRoster({ group }) {
           background: `linear-gradient(135deg, ${group.primaryColor} 0 50%, ${group.secondaryColor} 50% 100%)`,
         }} />
         <span className="group-roster-name">{group.name}</span>
+        <button type="button" className="group-button"
+          onClick={() => navigate(`/watch?group=${encodeURIComponent(group.id)}`)}>
+          Recordings
+        </button>
         <button type="button" className="group-button"
           aria-expanded={open} aria-controls={`roster-${group.id}`}
           onClick={() => { setOpen(!open); setPage(0); }}>

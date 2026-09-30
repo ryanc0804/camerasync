@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
 
@@ -21,6 +21,7 @@ export function WatchScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const navigate = useNavigate();
+  const [params] = useSearchParams();
   const [deletingId, setDeletingId] = useState(null);
   const [deleteError, setDeleteError] = useState("");
 
@@ -28,7 +29,13 @@ export function WatchScreen() {
     Promise.all([getGroups(), getSessions()])
       .then(([loadedGroups, loadedSessions]) => {
         setGroups(loadedGroups);
-        setGroupId(getDefaultGroup(user.id, loadedGroups));
+        // A group page links here with ?group= so its recordings open directly.
+        const requested = params.get("group");
+        setGroupId(
+          requested && loadedGroups.some((group) => group.id === requested)
+            ? requested
+            : getDefaultGroup(user.id, loadedGroups)
+        );
         setSessions(
           loadedSessions
             .filter((session) => session.status === "complete")
@@ -59,7 +66,7 @@ export function WatchScreen() {
   return (
     <div className="watch-page">
       <style>{css}</style>
-      <h1>Watch</h1>
+      <h1>Recordings</h1>
 
       {loading ? (
         <p>Loading recordings...</p>

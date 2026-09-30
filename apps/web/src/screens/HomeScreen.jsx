@@ -13,8 +13,8 @@ function greeting() {
 }
 
 /// Home dashboard: greeting + quick actions, stats, the live-session card,
-/// and the recordings/notifications panels. Recordings and notifications have
-/// no backing API yet, so those panels render empty states.
+/// recent recordings, and the notifications panel. Notifications have no
+/// backing API yet, so that panel renders an empty state.
 export function HomeScreen() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -52,6 +52,12 @@ export function HomeScreen() {
   const liveSessions = sessions.filter(
     (session) => session.status === "active"
   );
+  // Completed sessions are the recordings; per the design, Home is the
+  // primary way into them ("View all" opens the full list).
+  const recentRecordings = sessions
+    .filter((session) => session.status === "complete")
+    .sort((a, b) => new Date(b.scheduledAt) - new Date(a.scheduledAt))
+    .slice(0, 5);
   const live = liveSessions[Math.min(liveIndex, liveSessions.length - 1)];
   const groupName = (groupId) =>
     groups.find((group) => group.id === groupId)?.name || groupId;
@@ -142,11 +148,43 @@ export function HomeScreen() {
             </div>
           </div>
 
-          <h2 className="home-section">Recent Recordings</h2>
+          <div className="home-section-row">
+            <h2 className="home-section">Recent Recordings</h2>
+            <button
+              type="button"
+              className="home-view-all"
+              onClick={() => navigate("/watch")}
+            >
+              View all
+            </button>
+          </div>
           <div className="home-panel home-panel-tall">
-            <p className="home-empty">
-              Recordings from your synced sessions will show up here.
-            </p>
+            {recentRecordings.length === 0 ? (
+              <p className="home-empty">
+                Recordings from your synced sessions will show up here.
+              </p>
+            ) : (
+              <ul className="home-recordings">
+                {recentRecordings.map((session) => (
+                  <li key={session.id}>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/watch/${session.id}`)}
+                    >
+                      <strong>{session.name}</strong>
+                      <span>
+                        {groupName(session.groupId)}
+                        {" · "}
+                        {new Date(session.scheduledAt).toLocaleDateString(undefined, {
+                          month: "short",
+                          day: "numeric",
+                        })}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </div>
 
@@ -325,6 +363,48 @@ const css = `
     font-size: 1.25rem;
     font-weight: 700;
   }
+  .home-section-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .home-view-all {
+    font: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 0;
+    border: none;
+    background: none;
+    color: #f2cb05;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+  .home-recordings {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .home-recordings li + li { border-top: 1px solid #242424; }
+  .home-recordings button {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 4px 16px;
+    width: 100%;
+    padding: 12px 8px;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    color: #f0f0f0;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .home-recordings button:hover { background: #1e1e1e; }
+  .home-recordings strong { overflow-wrap: anywhere; }
+  .home-recordings span { color: #8a8a8a; font-size: 0.85rem; }
   .home-panel {
     padding: 20px;
     background: #141414;

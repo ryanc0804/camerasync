@@ -44,20 +44,6 @@ function CameraIcon() {
   );
 }
 
-function PlayIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="28"
-      height="28"
-      fill="currentColor"
-      aria-hidden="true"
-    >
-      <path d="M7 4v16l13-8z" />
-    </svg>
-  );
-}
-
 function HomeIcon() {
   return (
     <svg
@@ -118,7 +104,6 @@ const NAV_ITEMS = [
   { to: "/", label: "Home", icon: <HomeIcon />, end: true },
   { to: "/groups", label: "Groups", icon: <GroupsIcon /> },
   { to: "/record", label: "Record", icon: <CameraIcon /> },
-  { to: "/watch", label: "Watch", icon: <PlayIcon /> },
   { to: "/calendar", label: "Calendar", icon: <CalendarIcon /> },
   { to: "/settings", label: "Settings", icon: <GearIcon /> },
 ];
