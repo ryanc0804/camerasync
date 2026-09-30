@@ -41,5 +41,5 @@ try {
 
   await parallelUploads3.done();
 } catch (e) {
-  console.log(e);
+  console.log(e);h
 }

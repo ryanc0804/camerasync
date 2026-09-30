@@ -1,0 +1,32 @@
+# Production deploy on a single EC2 host. Pulls prebuilt images from ECR;
+# the database is AWS RDS, so there is no db service here.
+#
+#   REGISTRY=<account>.dkr.ecr.<region>.amazonaws.com
+#   docker compose -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Needs, next to this file on the EC2 host: a .env with REGISTRY=..., and a
+# server.env with the server's RDS_*, RDS_SSL_CA, WEB_ORIGIN, etc.
+services:
+  server:
+    image: ${REGISTRY}8kount-server:latest
+    container_name: 8kount-server
+    restart: unless-stopped
+    env_file:
+      - ./server.env
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+    # Not public: nginx (web) proxies /api, /socket.io, /timesync to it on the
+    # compose network. Bound to localhost only for curl debugging on the host.
+    ports:
+      - "127.0.0.1:4000:4000"
+
+  web:
+    image: ${REGISTRY}8kount-web:latest
+    container_name: 8kount-web
+    restart: unless-stopped
+    depends_on:
+      - server
+    ports:
+      - "80:80"
