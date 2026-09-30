@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../widgets/empty_state.dart';
 import '../api/api_client.dart';
 import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
@@ -127,9 +128,10 @@ class _JoinScreenState extends State<JoinScreen> {
               onAction: _loadSessions,
             )
           else if (_sessions.isEmpty)
-            const _Notice(
-              message: 'No upcoming sessions. Schedule one from the web '
-                  'dashboard, or pull down to refresh.',
+            const EmptyState(
+              title: 'No upcoming sessions',
+              message: 'When a coach schedules or starts a session for one '
+                  'of your groups, it shows up here. Pull down to refresh.',
             )
           else
             ..._sessions.map(

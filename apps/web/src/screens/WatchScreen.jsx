@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { EmptyState } from "../components/EmptyState.jsx";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
@@ -73,7 +74,10 @@ export function WatchScreen() {
       ) : error ? (
         <p role="alert" className="watch-error">{error}</p>
       ) : groups.length === 0 ? (
-        <p><Link to="/groups">Join a group</Link> to see its recordings.</p>
+        <EmptyState title="No groups yet" action="Find your group" to="/groups">
+          Recordings belong to a group's sessions. Join your team's group to
+          see them.
+        </EmptyState>
       ) : (
         <section className="watch-group">
           <div className="watch-group-header">
@@ -92,7 +96,13 @@ export function WatchScreen() {
           <div className="watch-group-content">
             {deleteError && <p role="alert" className="watch-error">{deleteError}</p>}
             {groupSessions.length === 0 ? (
-              <p>No sessions created yet.</p>
+              <EmptyState
+                title={`No recordings in ${group?.name || "this group"} yet`}
+                action="Record a practice"
+                to="/record"
+              >
+                Every completed session shows up here with its recordings.
+              </EmptyState>
             ) : groupSessions.map((session) => (
               <div className="watch-session" key={session.id}>
                 <button

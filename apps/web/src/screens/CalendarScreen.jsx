@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { EmptyState } from "../components/EmptyState.jsx";
 
 import { getGroups } from "../api/groups.js";
 import { getSessions } from "../api/recordings.js";
@@ -205,7 +206,9 @@ export function CalendarScreen() {
           {loading ? (
             <p>Loading sessions...</p>
           ) : selectedSessions.length === 0 ? (
-            <p>No scheduled sessions.</p>
+            <EmptyState compact title="Nothing scheduled" action="Schedule a session" to="/record">
+              Pick another day, or schedule one from the Record page.
+            </EmptyState>
           ) : (
             <div className="cal-agenda-list">
               {selectedSessions.map((session) => {

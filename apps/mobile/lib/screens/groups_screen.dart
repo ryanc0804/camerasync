@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../api/groups_api.dart';
 import '../auth/auth_service.dart';
 import '../theme.dart';
+import '../widgets/empty_state.dart';
 
 /// Lists the user's groups and lets them open a group's sessions.
 class GroupsScreen extends StatefulWidget {
@@ -219,8 +220,10 @@ class _GroupsScreenState extends State<GroupsScreen> {
           else if (_error != null)
             _Notice(message: _error!, actionLabel: 'Retry', onAction: _loadGroups)
           else if (_groups.isEmpty)
-            const _Notice(
-              message: 'You are not a member of any groups yet. Create or join a group from the web dashboard.',
+            const EmptyState(
+              title: 'No groups yet',
+              message: "Search for your team's group by its ID above and "
+                  'join it. Coaches create groups from the web dashboard.',
             )
           else
             ..._groups.map((g) => _GroupCard(group: g, onOpen: () => _openGroup(g))).toList(),
