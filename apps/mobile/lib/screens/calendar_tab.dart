@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
 import '../theme.dart';
+import '../widgets/empty_state.dart';
 
 const _weekdays = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
@@ -27,6 +28,7 @@ class _CalendarTabState extends State<CalendarTab> {
   late DateTime _cursor = DateTime(_today.year, _today.month);
 
   List<RecordingSession> _sessions = [];
+  bool _loaded = false;
 
   @override
   void initState() {
@@ -38,7 +40,12 @@ class _CalendarTabState extends State<CalendarTab> {
   Future<void> _load() async {
     try {
       final sessions = await _recordings.getSessions();
-      if (mounted) setState(() => _sessions = sessions);
+      if (mounted) {
+        setState(() {
+          _sessions = sessions;
+          _loaded = true;
+        });
+      }
     } catch (_) {}
   }
 
@@ -223,6 +230,15 @@ class _CalendarTabState extends State<CalendarTab> {
               for (final day in days) _dayCell(day),
             ],
           ),
+
+          if (_loaded && _sessions.isEmpty) ...[
+            const SizedBox(height: 16),
+            const EmptyState(
+              title: 'Nothing scheduled',
+              message: 'Sessions your coach schedules show up on the '
+                  'calendar. Pull down to refresh.',
+            ),
+          ],
         ],
       ),
     );

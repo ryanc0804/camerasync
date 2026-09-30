@@ -6,6 +6,7 @@ import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
 import '../config.dart';
 import '../theme.dart';
+import '../widgets/empty_state.dart';
 import 'session_screen.dart';
 
 /// Home dashboard: greeting, live-session carousel, quick actions, recent
@@ -132,6 +133,19 @@ class _HomeTabState extends State<HomeTab> {
           ),
           const SizedBox(height: 24),
 
+          // First run: nothing on this screen means anything until the user
+          // belongs to a group.
+          if (_groupCount == 0) ...[
+            EmptyState(
+              title: 'Welcome to 8kount',
+              message: "Sessions and recordings belong to a group. Start by "
+                  "finding your team's group and joining it.",
+              actionLabel: 'Find your group',
+              onAction: () => widget.onSwitchTab(0),
+            ),
+            const SizedBox(height: 20),
+          ],
+
           if (banners.isNotEmpty) ...[
             SizedBox(
               height: 132,
@@ -181,8 +195,8 @@ class _HomeTabState extends State<HomeTab> {
               Expanded(
                 child: _ActionButton(
                   label: 'Record a practice',
-                  // Sessions tab, where recording starts.
-                  onTap: () => widget.onSwitchTab(0),
+                  // Sessions tab (index 1), where recording starts.
+                  onTap: () => widget.onSwitchTab(1),
                 ),
               ),
             ],
@@ -191,16 +205,15 @@ class _HomeTabState extends State<HomeTab> {
 
           const _SectionHeader('Recent Recordings'),
           const SizedBox(height: 12),
-          const _SurfaceCard(
-            child: Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: Text(
-                'Recordings will show up here after your first synced '
-                'session.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: kMuted, height: 1.5),
-              ),
-            ),
+          EmptyState(
+            title: 'No recordings yet',
+            message: _groupCount == 0
+                ? 'Join a group first. Recordings from its sessions will '
+                    'show up here.'
+                : 'Join a session and record. Your clips will show up here '
+                    'once they upload.',
+            actionLabel: _groupCount == 0 ? null : 'Find a session',
+            onAction: () => widget.onSwitchTab(1),
           ),
           const SizedBox(height: 20),
 

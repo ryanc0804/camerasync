@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { io } from "socket.io-client";
 import { getGroups } from "../api/groups.js";
 import { SessionScheduler } from "../components/SessionScheduler.jsx";
+import { EmptyState } from "../components/EmptyState.jsx";
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
 
@@ -27,9 +27,10 @@ export function RecordScreen() {
         ) : error ? (
           <p role="alert" style={{ color: "#ff8a80" }}>{error}</p>
         ) : (
-          <p style={styles.muted}>
-            <Link to="/groups" style={{ color: "#f2cb05" }}>Join a group</Link> to record.
-          </p>
+          <EmptyState title="No groups yet" action="Find your group" to="/groups">
+            Sessions are recorded within a group. Join your team's group, or
+            create one, and come back here to schedule or start a session.
+          </EmptyState>
         )}
       </div>
     );

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
 import { getGroups } from "../api/groups.js";
+import { EmptyState } from "../components/EmptyState.jsx";
 import { endSession, getMyVideoCount, getSessions, joinSession } from "../api/recordings.js";
 
 function greeting() {
@@ -133,6 +134,20 @@ export function HomeScreen() {
 
           {error && <p className="home-error">{error}</p>}
 
+          {!loading && !error && groups.length === 0 && (
+            <div className="home-first-run">
+              <EmptyState
+                title="Welcome to 8kount"
+                action="Find your group"
+                to="/groups"
+              >
+                Everything here belongs to a group: sessions, recordings and
+                the people in them. Start by joining your team's group, or
+                create one if you're the coach.
+              </EmptyState>
+            </div>
+          )}
+
           <div className="home-stats">
             <div className="home-stat">
               <span>Groups</span>
@@ -160,9 +175,15 @@ export function HomeScreen() {
           </div>
           <div className="home-panel home-panel-tall">
             {recentRecordings.length === 0 ? (
-              <p className="home-empty">
-                Recordings from your synced sessions will show up here.
-              </p>
+              <EmptyState
+                title="No recordings yet"
+                action={groups.length > 0 ? "Record a practice" : undefined}
+                to="/record"
+              >
+                {groups.length > 0
+                  ? "Run a synced session and its recordings will show up here."
+                  : "Join a group first. Recordings from its sessions will show up here."}
+              </EmptyState>
             ) : (
               <ul className="home-recordings">
                 {recentRecordings.map((session) => (
@@ -270,11 +291,19 @@ export function HomeScreen() {
             </div>
           ) : (
             <div className="home-panel">
-              <p className="home-empty">
-                {loading
-                  ? "Checking for live sessions…"
-                  : "No sessions are live right now."}
-              </p>
+              {loading ? (
+                <p className="home-empty">Checking for live sessions…</p>
+              ) : (
+                <EmptyState
+                  compact
+                  title="Nothing live right now"
+                  action={groups.length > 0 ? "Start a session" : undefined}
+                  to="/record"
+                >
+                  When a coach starts a session, it appears here with a Join
+                  button.
+                </EmptyState>
+              )}
             </div>
           )}
 
@@ -411,6 +440,7 @@ const css = `
     border-radius: 16px;
   }
   .home-panel-tall { min-height: 180px; }
+  .home-first-run { margin-bottom: 28px; }
   .home-empty {
     margin: 0;
     padding: 28px 8px;

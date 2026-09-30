@@ -12,6 +12,7 @@ import {
   joinGroup,
   searchGroups,
 } from "../api/groups.js";
+import { EmptyState } from "../components/EmptyState.jsx";
 
 // Shells for the sections that don't have backing APIs yet. Each states what
 // it will hold so the nav is honest about what's built vs. planned.
@@ -318,9 +319,10 @@ export function GroupsScreen() {
           {loading ? (
             <p className="group-empty">Loading groups...</p>
           ) : groups.length === 0 ? (
-            <p className="group-empty">
-              You are not a member of any groups yet.
-            </p>
+            <EmptyState title="No groups yet">
+              Create your team's group with the button on the right, or search
+              for it by its ID and join.
+            </EmptyState>
           ) : (
             <div className="group-list">
               {groups.map((group) => (
