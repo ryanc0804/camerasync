@@ -1,15 +1,15 @@
 // file and upload API
 
-// TODO: Swap with S3 for deployment phase
-
 import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Router } from "express";
 import multer from "multer";
 import { requireAuth } from "../middleware/requireAuth.js";
+import { getFromS3, uploadToS3, useS3 } from "../middleware/s3.js";
 
 export const fileRouter = Router();
 
@@ -18,9 +18,12 @@ const MAX_UPLOAD_BYTES = 2048 * 1024 * 1024;
 
 // upload directory
 const SERVER_ROOT = path.resolve(fileURLToPath(import.meta.url), "../../..");
+// In production this is only a temp staging area; files end up in S3.
 const UPLOAD_DIR = process.env.UPLOAD_DIR
   ? path.resolve(process.env.UPLOAD_DIR)
-  : path.join(SERVER_ROOT, "uploads");
+  : useS3
+    ? path.join(os.tmpdir(), "camerasync-uploads")
+    : path.join(SERVER_ROOT, "uploads");
 
 // Only accept these file types to avoid malicious uploads
 const MEDIA_TYPES = {
@@ -147,8 +150,7 @@ const upload = multer({
   },
 });
 
-// Serve a previously uploaded file from local disk.
-// TODO: stream from S3 instead once uploads move off the local filesystem.
+// Serve a previously uploaded file (S3 in production, local disk otherwise).
 fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
   const fileId = String(req.params.fileId ?? "").toLowerCase();
 
@@ -160,6 +162,30 @@ fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
   const mediaType = MEDIA_TYPES[ext];
   if (!mediaType) {
     return res.status(400).json({ error: "File ID is invalid." });
+  }
+
+  if (useS3) {
+    try {
+      // Forward Range headers so players can seek.
+      const object = await getFromS3(fileId, req.headers.range);
+      if (!object) {
+        return res.status(404).json({ error: "File not found." });
+      }
+      res.status(object.partial ? 206 : 200);
+      res.type(mediaType.mime);
+      res.set("Accept-Ranges", "bytes");
+      if (object.contentLength != null) {
+        res.set("Content-Length", String(object.contentLength));
+      }
+      if (object.contentRange) res.set("Content-Range", object.contentRange);
+      object.body.on("error", next);
+      return object.body.pipe(res);
+    } catch (err) {
+      if (err.status === 416) {
+        return res.status(416).json({ error: "Range not satisfiable." });
+      }
+      return next(err);
+    }
   }
 
   const filePath = path.join(UPLOAD_DIR, fileId);
@@ -176,7 +202,7 @@ fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
   });
 });
 
-// Handle file uploads (locally for now, S3 later).
+// Handle file uploads (S3 in production, local disk otherwise).
 fileRouter.post(
   "/upload",
   requireAuth,
@@ -244,11 +270,21 @@ fileRouter.post(
         });
       }
 
+      const contentType = MEDIA_TYPES[path.extname(req.file.filename)].mime;
+      if (useS3) {
+        await uploadToS3({
+          fileId: req.file.filename,
+          body: fs.createReadStream(filePath),
+          contentType,
+        });
+        await discard(filePath);
+      }
+
       res.status(201).json({
         file: {
           id: req.file.filename,
           originalName: req.file.originalname,
-          contentType: MEDIA_TYPES[path.extname(req.file.filename)].mime,
+          contentType,
           size: req.file.size,
           url: `/api/files/get/${req.file.filename}`,
           uploadedBy: req.user.id,
