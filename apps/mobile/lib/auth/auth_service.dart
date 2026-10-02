@@ -81,6 +81,36 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Start a password reset. The server answers 204 whether or not the email
+  /// has an account, so this can't reveal which emails are registered.
+  Future<void> forgotPassword({required String email}) async {
+    await _api.post('/api/auth/forgot-password', {'email': email});
+  }
+
+  /// Exchange the emailed 6-digit code for a single-use reset token.
+  Future<String> verifyResetCode({
+    required String email,
+    required String code,
+  }) async {
+    final data = await _api.post('/api/auth/verify-reset-code', {
+      'email': email,
+      'code': code,
+    });
+    return (data as Map)['token'] as String;
+  }
+
+  /// Complete the reset. The server deletes every session for the account, so
+  /// the user signs in again with the new password afterwards.
+  Future<void> resetPassword({
+    required String token,
+    required String password,
+  }) async {
+    await _api.post('/api/auth/reset-password', {
+      'token': token,
+      'password': password,
+    });
+  }
+
   Future<void> logout() async {
     try {
       await _api.post('/api/auth/logout');

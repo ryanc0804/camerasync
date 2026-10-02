@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/api_client.dart';
 import '../auth/auth_service.dart';
 import '../theme.dart';
+import 'forgot_password_screen.dart';
 
 /// Sign-in / create-account screen, mirroring the web app's two modes and
 /// client-side validation so both clients behave the same way.
@@ -19,6 +20,7 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isSignup = false;
   bool _submitting = false;
   String? _error;
+  String? _notice;
 
   final _name = TextEditingController();
   final _email = TextEditingController();
@@ -38,9 +40,28 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() {
       _isSignup = !_isSignup;
       _error = null;
+      _notice = null;
       _password.clear();
       _confirm.clear();
     });
+  }
+
+  Future<void> _openForgotPassword() async {
+    setState(() {
+      _error = null;
+      _notice = null;
+    });
+    final reset = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => ForgotPasswordScreen(auth: widget.auth),
+      ),
+    );
+    if (reset == true && mounted) {
+      setState(() {
+        _notice = 'Password reset. Sign in with your new password.';
+        _password.clear();
+      });
+    }
   }
 
   String? _validate() {
@@ -139,6 +160,22 @@ class _LoginScreenState extends State<LoginScreen> {
                         const SizedBox(height: 16),
                       ],
 
+                      if (_notice != null) ...[
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: kSurface,
+                            border: Border.all(color: kGold),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            _notice!,
+                            style: const TextStyle(color: kGold),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+
                       if (_isSignup)
                         _labeledField(controller: _name, label: 'Name'),
 
@@ -207,6 +244,24 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                       ),
+
+                      // Per the design, password recovery is only offered in
+                      // sign-in mode, right under the mode-switch link.
+                      if (!_isSignup)
+                        Center(
+                          child: TextButton(
+                            onPressed:
+                                _submitting ? null : _openForgotPassword,
+                            child: const Text(
+                              'Forgot Password?',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                                color: kGold,
+                              ),
+                            ),
+                          ),
+                        ),
                       const SizedBox(height: 8),
                     ],
                   ),
