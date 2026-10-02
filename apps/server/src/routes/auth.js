@@ -19,6 +19,14 @@ export const authRouter = Router();
 const BCRYPT_ROUNDS = 12;
 const MIN_PASSWORD_LENGTH = 8;
 
+// Compared against when a login email is unknown, so that path pays for a
+// bcrypt verification too and response timing can't reveal which emails have
+// accounts. The plaintext is random per boot, so it never matches anyone.
+const DUMMY_HASH = bcrypt.hashSync(
+  crypto.randomBytes(16).toString("hex"),
+  BCRYPT_ROUNDS
+);
+
 // Postgres unique-constraint violation. Turns a race on the users_email_key
 // index into a clean 409 instead of a 500.
 const PG_UNIQUE_VIOLATION = "23505";
@@ -86,9 +94,14 @@ authRouter.post("/login", async (req, res, next) => {
     );
     const row = rows[0];
 
-    // Same response whether the email is unknown or the password is wrong, so
-    // this endpoint can't be used to discover which emails have accounts.
-    const ok = row && (await bcrypt.compare(String(password), row.password));
+    // Same response — and the same bcrypt cost — whether the email is unknown
+    // or the password is wrong, so neither the body nor the response timing
+    // can be used to discover which emails have accounts.
+    const match = await bcrypt.compare(
+      String(password),
+      row ? row.password : DUMMY_HASH
+    );
+    const ok = Boolean(row) && match;
     if (!ok) {
       return res.status(401).json({ error: "Incorrect email or password." });
     }
