@@ -7,7 +7,9 @@ import '../auth/auth_service.dart';
 import '../config.dart';
 import '../theme.dart';
 import '../widgets/empty_state.dart';
+import 'recordings_screen.dart';
 import 'session_screen.dart';
+import 'watch_screen.dart';
 
 /// Home dashboard: greeting, live-session carousel, quick actions, recent
 /// recordings, stats and notifications.
@@ -69,6 +71,33 @@ class _HomeTabState extends State<HomeTab> {
   String get _firstName {
     final name = widget.auth.user?.displayName ?? '';
     return name.split(RegExp(r'[\s@]')).first;
+  }
+
+  /// Newest completed sessions, for the Recent Recordings panel.
+  List<RecordingSession> get _recentRecordings {
+    final done = _sessions.where((s) => s.isComplete).toList()
+      ..sort((a, b) {
+        final at = a.scheduledAt?.millisecondsSinceEpoch ?? 0;
+        final bt = b.scheduledAt?.millisecondsSinceEpoch ?? 0;
+        return bt.compareTo(at);
+      });
+    return done.take(5).toList();
+  }
+
+  void _openRecordings() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => RecordingsScreen(auth: widget.auth),
+      ),
+    );
+  }
+
+  void _watch(RecordingSession session) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => WatchScreen(auth: widget.auth, session: session),
+      ),
+    );
   }
 
   /// Active sessions first, then upcoming ones, for the banner carousel.
@@ -185,10 +214,7 @@ class _HomeTabState extends State<HomeTab> {
               Expanded(
                 child: _ActionButton(
                   label: 'Watch a Recording',
-                  onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content: Text('Recordings are coming soon.')),
-                  ),
+                  onTap: _openRecordings,
                 ),
               ),
               const SizedBox(width: 12),
@@ -203,18 +229,38 @@ class _HomeTabState extends State<HomeTab> {
           ),
           const SizedBox(height: 28),
 
-          const _SectionHeader('Recent Recordings'),
-          const SizedBox(height: 12),
-          EmptyState(
-            title: 'No recordings yet',
-            message: _groupCount == 0
-                ? 'Join a group first. Recordings from its sessions will '
-                    'show up here.'
-                : 'Join a session and record. Your clips will show up here '
-                    'once they upload.',
-            actionLabel: _groupCount == 0 ? null : 'Find a session',
-            onAction: () => widget.onSwitchTab(1),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              const Expanded(child: _SectionHeader('Recent Recordings')),
+              if (_recentRecordings.isNotEmpty)
+                TextButton(
+                  onPressed: _openRecordings,
+                  style: TextButton.styleFrom(
+                    foregroundColor: kGold,
+                    padding: EdgeInsets.zero,
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: const Text('View all'),
+                ),
+            ],
           ),
+          const SizedBox(height: 12),
+          if (_recentRecordings.isEmpty)
+            EmptyState(
+              title: 'No recordings yet',
+              message: _groupCount == 0
+                  ? 'Join a group first. Recordings from its sessions will '
+                      'show up here.'
+                  : 'Join a session and record. Your clips will show up here '
+                      'once they upload.',
+              actionLabel: _groupCount == 0 ? null : 'Find a session',
+              onAction: () => widget.onSwitchTab(1),
+            )
+          else
+            for (final s in _recentRecordings)
+              RecordingCard(session: s, onTap: () => _watch(s)),
           const SizedBox(height: 20),
 
           _SurfaceCard(

@@ -5,6 +5,7 @@ import '../api/groups_api.dart';
 import '../auth/auth_service.dart';
 import '../theme.dart';
 import '../widgets/empty_state.dart';
+import 'recordings_screen.dart';
 
 /// Lists the user's groups and lets them open a group's sessions.
 class GroupsScreen extends StatefulWidget {
@@ -232,9 +233,18 @@ class _GroupsScreenState extends State<GroupsScreen> {
     );
   }
 
+  /// A group opens on its recordings, which is the one thing a member can
+  /// do with a group on the phone today.
   void _openGroup(Group g) {
-    //placeholder for now, will implement specific group sessions recordings/members screen later
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Open group: ${g.name}')));
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => RecordingsScreen(
+          auth: widget.auth,
+          groupId: g.id,
+          title: g.name,
+        ),
+      ),
+    );
   }
 }
 
