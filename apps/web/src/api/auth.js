@@ -89,9 +89,20 @@ export async function requestPasswordReset(email) {
   }
 }
 
-// Complete a password reset using the token from the emailed link. Unlike the
-// request step, this surfaces real errors — an invalid/expired token must tell
-// the user, so they can request a fresh link.
+// Exchange the emailed 6-digit code for a reset token (the in-app flow, as an
+// alternative to following the emailed link). Errors surface so the user knows
+// to retype or re-request the code.
+export async function verifyResetCode({ email, code }) {
+  const data = await request("/api/auth/verify-reset-code", {
+    method: "POST",
+    body: { email, code },
+  });
+  return data.token;
+}
+
+// Complete a password reset using the token from the emailed link (or from
+// verifyResetCode). Unlike the request step, this surfaces real errors — an
+// invalid/expired token must tell the user, so they can request a fresh link.
 export async function resetPassword({ token, password }) {
   return request("/api/auth/reset-password", {
     method: "POST",
