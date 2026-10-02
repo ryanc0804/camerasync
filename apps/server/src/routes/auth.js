@@ -4,6 +4,7 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 
 import { pool } from "../db/pool.js";
+import { sendPasswordResetEmail } from "../email/mailer.js";
 import {
   SESSION_COOKIE,
   createSession,
@@ -120,12 +121,6 @@ function hashResetToken(token) {
   return crypto.createHash("sha256").update(String(token)).digest("hex");
 }
 
-// "Send" the reset email. There is no SMTP setup yet (see the nodemailer TODO
-// in middleware/auth.js), so the link and code go to the server log for now.
-function sendPasswordResetEmail(email, link, code) {
-  console.log(`[password-reset] ${email}: ${link} (code ${code})`);
-}
-
 // Start a password reset. The response is identical whether or not the email
 // has an account, so this endpoint can't be used to discover which emails are
 // registered (the web client ignores the status anyway — see web/api/auth.js).
@@ -160,11 +155,15 @@ authRouter.post("/forgot-password", async (req, res, next) => {
       );
 
       const origin = process.env.WEB_ORIGIN || "http://localhost:5173";
+      // Fire-and-forget: the 204 must not wait on (or reveal anything about)
+      // the SMTP conversation, so send failures only reach the server log.
       sendPasswordResetEmail(
         email,
         `${origin}/reset-password?token=${token}`,
         code
-      );
+      ).catch((err) => {
+        console.error(`[password-reset] send to ${email} failed:`, err.message);
+      });
     }
 
     res.status(204).end();
