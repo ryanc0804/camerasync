@@ -9,7 +9,10 @@ class RecordingSession {
     required this.status,
     required this.activeMemberCount,
     required this.isJoined,
+    this.groupId,
     this.scheduledAt,
+    this.memberCount,
+    this.totalRecordings,
   });
 
   final String id;
@@ -17,10 +20,16 @@ class RecordingSession {
   final String status;
   final int activeMemberCount;
   final bool isJoined;
+  final String? groupId;
   final DateTime? scheduledAt;
+
+  /// Null for sessions that predate attendance tracking.
+  final int? memberCount;
+  final int? totalRecordings;
 
   bool get isActive => status == 'active';
   bool get isScheduled => status == 'scheduled';
+  bool get isComplete => status == 'complete';
 
   factory RecordingSession.fromJson(Map<String, dynamic> json) =>
       RecordingSession(
@@ -29,9 +38,97 @@ class RecordingSession {
         status: (json['status'] ?? '').toString(),
         activeMemberCount: (json['activeMemberCount'] as num?)?.toInt() ?? 0,
         isJoined: json['isJoined'] == true,
+        groupId: json['groupId']?.toString(),
         scheduledAt: json['scheduledAt'] == null
             ? null
             : DateTime.tryParse(json['scheduledAt'].toString())?.toLocal(),
+        memberCount: (json['memberCount'] as num?)?.toInt(),
+        totalRecordings: (json['totalRecordings'] as num?)?.toInt(),
+      );
+}
+
+/// One device's video within a recording. [url] is null when that member
+/// saved a video but has not uploaded it yet.
+class AngleVideo {
+  const AngleVideo({required this.userId, required this.name, this.url});
+
+  final int userId;
+  final String name;
+  final String? url;
+
+  factory AngleVideo.fromJson(Map<String, dynamic> json) => AngleVideo(
+        userId: (json['userId'] as num).toInt(),
+        name: (json['name'] ?? 'Unnamed member').toString(),
+        url: json['url'] as String?,
+      );
+}
+
+/// One synchronized recording within a session: every angle that shares the
+/// same server-clock start.
+class SessionRecording {
+  const SessionRecording({
+    required this.startedAtMs,
+    required this.number,
+    required this.videos,
+  });
+
+  final int startedAtMs;
+  final int number;
+  final List<AngleVideo> videos;
+
+  factory SessionRecording.fromJson(Map<String, dynamic> json) =>
+      SessionRecording(
+        startedAtMs: (json['startedAt'] as num).toInt(),
+        number: (json['number'] as num?)?.toInt() ?? 0,
+        videos: ((json['videos'] as List?) ?? const [])
+            .map((v) => AngleVideo.fromJson(Map<String, dynamic>.from(v)))
+            .toList(),
+      );
+}
+
+/// The recordings of one session, as returned by GET /sessions/:id/videos.
+class SessionVideos {
+  const SessionVideos({
+    required this.sessionId,
+    required this.sessionName,
+    required this.recordings,
+  });
+
+  final String sessionId;
+  final String sessionName;
+  final List<SessionRecording> recordings;
+
+  factory SessionVideos.fromJson(Map<String, dynamic> json) {
+    final session = Map<String, dynamic>.from(json['session'] as Map);
+    return SessionVideos(
+      sessionId: session['id'].toString(),
+      sessionName: (session['name'] ?? '').toString(),
+      recordings: ((json['recordings'] as List?) ?? const [])
+          .map((r) => SessionRecording.fromJson(Map<String, dynamic>.from(r)))
+          .toList(),
+    );
+  }
+}
+
+/// A timestamped note left on a recording.
+class SessionNote {
+  const SessionNote({
+    required this.id,
+    required this.body,
+    required this.videoTimeMs,
+    required this.authorName,
+  });
+
+  final int id;
+  final String body;
+  final int videoTimeMs;
+  final String authorName;
+
+  factory SessionNote.fromJson(Map<String, dynamic> json) => SessionNote(
+        id: (json['id'] as num).toInt(),
+        body: (json['body'] ?? '').toString(),
+        videoTimeMs: (json['videoTimeMs'] as num?)?.toInt() ?? 0,
+        authorName: (json['author'] ?? 'Unnamed member').toString(),
       );
 }
 
@@ -58,6 +155,28 @@ class RecordingsApi {
       Map<String, dynamic>.from((data as Map)['session'] as Map),
     );
   }
+
+  /// Every recording of a session with each device's video. Video URLs are
+  /// server-relative and need the session cookie; see [absoluteUrl].
+  Future<SessionVideos> getSessionVideos(String id) async {
+    final data = await _api.get('/api/recordings/sessions/$id/videos');
+    return SessionVideos.fromJson(Map<String, dynamic>.from(data as Map));
+  }
+
+  /// Notes on one recording, ordered by the moment in the video they refer to.
+  Future<List<SessionNote>> getSessionNotes(String id, int startedAtMs) async {
+    final data = await _api.get(
+      '/api/recordings/sessions/$id/notes?startedAt=$startedAtMs',
+    );
+    final notes = ((data as Map)['notes'] as List?) ?? const [];
+    return notes
+        .map((n) => SessionNote.fromJson(Map<String, dynamic>.from(n)))
+        .toList();
+  }
+
+  /// Turns a server-relative path like `/api/files/get/x.mp4` into a full URL.
+  String absoluteUrl(String path) =>
+      path.startsWith('http') ? path : '${_api.baseUrl}$path';
 
   /// Records that this user finished a video for the recording that started
   /// at [startedAtMs] (server clock), so the session's video counts include
