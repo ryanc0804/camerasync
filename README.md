@@ -102,18 +102,23 @@ npm run dev          # http://localhost:5173
 
 ### 4. Mobile startup (Flutter)
 
-Flutter isn't scaffolded yet. Once the Flutter SDK is installed:
+With the Flutter SDK installed:
 
 ```bash
 cd apps/mobile
-flutter create .
+flutter pub get
+flutter run
 ```
 
 See `apps/mobile/README.md`.
 
 ## Status
 
-Early scaffold. Implemented: repo structure, server boilerplate with a health
-check and a Socket.IO session-room + recording-command skeleton, web
-boilerplate, local Postgres. **Not** yet implemented: auth, persistence,
-recording, uploads, playback, comments.
+Working product across all three surfaces. Implemented: cookie-based auth with
+password reset (emailed link or in-app 6-digit code), groups with role ladder
+(admin/member/viewer), synchronized multi-device recording over Socket.IO,
+uploads behind a storage driver (local disk or S3), multi-angle synchronized
+playback with focus panel and timestamped comments, per-session recording
+numbering, and a production AWS deployment under `deploy/`. **Not** yet
+implemented: SMTP email delivery (reset codes/links go to the server log),
+Cloudflare Stream delivery.
