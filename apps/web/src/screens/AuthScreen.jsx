@@ -1,15 +1,16 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
-import { requestPasswordReset } from "../api/auth.js";
 
-// Combined auth screen with three modes — sign in, create account, and forgot
-// password — sharing one card + theme so the fields aren't duplicated.
+// Combined auth screen with two modes — sign in and create account — sharing
+// one card + theme so the fields aren't duplicated. Password recovery lives on
+// its own /forgot-password route (code-based reset, per the Figma designs).
 export function AuthScreen() {
   const { login, register } = useAuth();
-  const [mode, setMode] = useState("login"); // "login" | "signup" | "forgot"
+  const navigate = useNavigate();
+  const [mode, setMode] = useState("login"); // "login" | "signup"
   const isSignup = mode === "signup";
-  const isForgot = mode === "forgot";
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -17,22 +18,19 @@ export function AuthScreen() {
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
-  const [resetSent, setResetSent] = useState(false);
 
   // Switch modes, clearing transient state but keeping the typed email so the
-  // user doesn't retype it when moving between sign in and reset.
+  // user doesn't retype it.
   const go = (nextMode) => {
     setMode(nextMode);
     setError(null);
     setPassword("");
     setConfirm("");
-    setResetSent(false);
   };
 
   // Client-side checks so we don't bother the server with obviously bad input.
   const validate = () => {
     if (!email.trim()) return "Please enter your email.";
-    if (isForgot) return null; // reset only needs an email
     if (isSignup && !name.trim()) return "Please enter your name.";
     if (!password) return "Please enter your password.";
     if (isSignup && password.length < 8)
@@ -52,10 +50,7 @@ export function AuthScreen() {
     setError(null);
     setSubmitting(true);
     try {
-      if (isForgot) {
-        await requestPasswordReset(email.trim());
-        setResetSent(true);
-      } else if (isSignup) {
+      if (isSignup) {
         await register({ name: name.trim(), email: email.trim(), password });
       } else {
         await login({ email: email.trim(), password });
@@ -68,19 +63,13 @@ export function AuthScreen() {
     }
   };
 
-  const subtitle = isForgot
-    ? "Reset your password"
-    : isSignup
-      ? "Create your account"
-      : "Sign in to your account";
+  const subtitle = isSignup ? "Create your account" : "Sign in to your account";
 
   const submitLabel = submitting
     ? "Please wait…"
-    : isForgot
-      ? "Send reset link"
-      : isSignup
-        ? "Create account"
-        : "Sign in";
+    : isSignup
+      ? "Create account"
+      : "Sign in";
 
   return (
     <div style={styles.page}>
@@ -94,21 +83,7 @@ export function AuthScreen() {
 
         {error && <div style={styles.error}>{error}</div>}
 
-        {/* Forgot-password confirmation replaces the form once submitted. */}
-        {isForgot && resetSent ? (
-          <>
-            <div style={styles.success}>
-              If an account exists for <strong>{email.trim()}</strong>, we've
-              sent password reset instructions. Check your inbox.
-            </div>
-            <p style={styles.switch}>
-              <button type="button" className="cs-link" onClick={() => go("login")}>
-                Back to sign in
-              </button>
-            </p>
-          </>
-        ) : (
-          <>
+        <>
             {isSignup && (
               <label style={styles.label}>
                 Name
@@ -135,19 +110,17 @@ export function AuthScreen() {
               />
             </label>
 
-            {!isForgot && (
-              <label style={styles.label}>
-                Password
-                <input
-                  className="cs-input"
-                  type="password"
-                  autoComplete={isSignup ? "new-password" : "current-password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder={isSignup ? "At least 8 characters" : "Your password"}
-                />
-              </label>
-            )}
+            <label style={styles.label}>
+              Password
+              <input
+                className="cs-input"
+                type="password"
+                autoComplete={isSignup ? "new-password" : "current-password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={isSignup ? "At least 8 characters" : "Your password"}
+              />
+            </label>
 
             {isSignup && (
               <label style={styles.label}>
@@ -166,7 +139,11 @@ export function AuthScreen() {
             {/* Forgot-password link, only on the sign-in view. */}
             {mode === "login" && (
               <div style={styles.forgotRow}>
-                <button type="button" className="cs-link" onClick={() => go("forgot")}>
+                <button
+                  type="button"
+                  className="cs-link"
+                  onClick={() => navigate("/forgot-password")}
+                >
                   Forgot password?
                 </button>
               </div>
@@ -177,14 +154,7 @@ export function AuthScreen() {
             </button>
 
             <p style={styles.switch}>
-              {isForgot ? (
-                <>
-                  Remembered it?{" "}
-                  <button type="button" className="cs-link" onClick={() => go("login")}>
-                    Sign in
-                  </button>
-                </>
-              ) : isSignup ? (
+              {isSignup ? (
                 <>
                   Already have an account?{" "}
                   <button type="button" className="cs-link" onClick={() => go("login")}>
@@ -200,8 +170,7 @@ export function AuthScreen() {
                 </>
               )}
             </p>
-          </>
-        )}
+        </>
       </form>
     </div>
   );
@@ -252,15 +221,6 @@ const styles = {
     borderRadius: 8,
     padding: "0.6rem 0.8rem",
     fontSize: "0.85rem",
-  },
-  success: {
-    background: "#1e2a1a",
-    color: "#b5e6a0",
-    border: "1px solid #2f5a2a",
-    borderRadius: 8,
-    padding: "0.7rem 0.8rem",
-    fontSize: "0.85rem",
-    lineHeight: 1.4,
   },
   forgotRow: {
     marginTop: "-0.4rem",

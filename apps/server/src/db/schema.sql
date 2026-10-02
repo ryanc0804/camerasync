@@ -235,3 +235,10 @@ ALTER TABLE group_members
 ALTER TABLE group_members
     ADD CONSTRAINT group_members_role_check
     CHECK (role IN ('admin', 'member', 'viewer'));
+
+-- Mobile forgot-password flow: alongside the emailed web link, each reset row
+-- also carries a 6-digit code the phone app can submit directly. Only a
+-- SHA-256 hash of the code is stored, and `attempts` caps guesses before the
+-- row is burned (see /verify-reset-code in routes/auth.js).
+ALTER TABLE password_resets ADD COLUMN IF NOT EXISTS code_hash CHAR(64);
+ALTER TABLE password_resets ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;

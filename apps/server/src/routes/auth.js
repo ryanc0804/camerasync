@@ -121,9 +121,9 @@ function hashResetToken(token) {
 }
 
 // "Send" the reset email. There is no SMTP setup yet (see the nodemailer TODO
-// in middleware/auth.js), so the link goes to the server log for now.
-function sendPasswordResetEmail(email, link) {
-  console.log(`[password-reset] ${email}: ${link}`);
+// in middleware/auth.js), so the link and code go to the server log for now.
+function sendPasswordResetEmail(email, link, code) {
+  console.log(`[password-reset] ${email}: ${link} (code ${code})`);
 }
 
 // Start a password reset. The response is identical whether or not the email
@@ -144,6 +144,9 @@ authRouter.post("/forgot-password", async (req, res, next) => {
 
     if (row) {
       const token = crypto.randomBytes(32).toString("hex");
+      // The emailed 6-digit code lets the mobile app finish the reset in-app
+      // (via /verify-reset-code) instead of following the web link.
+      const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, "0");
       const expires = new Date(Date.now() + RESET_TTL_MS);
 
       // A fresh request replaces any earlier link so only the newest works.
@@ -151,16 +154,80 @@ authRouter.post("/forgot-password", async (req, res, next) => {
         row.user_id,
       ]);
       await pool.query(
-        `INSERT INTO password_resets (token_hash, user_id, expires)
-         VALUES ($1, $2, $3)`,
-        [hashResetToken(token), row.user_id, expires]
+        `INSERT INTO password_resets (token_hash, user_id, expires, code_hash)
+         VALUES ($1, $2, $3, $4)`,
+        [hashResetToken(token), row.user_id, expires, hashResetToken(code)]
       );
 
       const origin = process.env.WEB_ORIGIN || "http://localhost:5173";
-      sendPasswordResetEmail(email, `${origin}/reset-password?token=${token}`);
+      sendPasswordResetEmail(
+        email,
+        `${origin}/reset-password?token=${token}`,
+        code
+      );
     }
 
     res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// A 6-digit code only has a million possibilities, so each reset row allows a
+// handful of guesses before it is deleted and the user must request a new one.
+const MAX_CODE_ATTEMPTS = 5;
+
+// Exchange the emailed 6-digit code for a reset token (mobile flow). Every
+// failure returns the same message so the endpoint can't be used to discover
+// which emails have accounts or pending resets.
+authRouter.post("/verify-reset-code", async (req, res, next) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    const code = String(req.body?.code ?? "").trim();
+    if (!email || !code) {
+      return res.status(400).json({ error: "Email and code are required." });
+    }
+
+    const invalid = () =>
+      res.status(400).json({ error: "That code is invalid or has expired." });
+
+    // Counting the attempt in the same statement as the lookup keeps racing
+    // guesses from sharing one attempt.
+    const { rows } = await pool.query(
+      `UPDATE password_resets pr
+          SET attempts = pr.attempts + 1
+         FROM users u
+        WHERE u.user_id = pr.user_id
+          AND u.email = $1
+          AND pr.expires > NOW()
+        RETURNING pr.user_id, pr.code_hash, pr.attempts`,
+      [email]
+    );
+    const row = rows[0];
+    if (!row || !row.code_hash) return invalid();
+
+    if (row.attempts > MAX_CODE_ATTEMPTS) {
+      await pool.query(`DELETE FROM password_resets WHERE user_id = $1`, [
+        row.user_id,
+      ]);
+      return invalid();
+    }
+
+    const ok = crypto.timingSafeEqual(
+      Buffer.from(hashResetToken(code)),
+      Buffer.from(row.code_hash)
+    );
+    if (!ok) return invalid();
+
+    // Rotate the token so this response becomes the only credential that can
+    // finish the reset; the emailed link dies with the old hash.
+    const token = crypto.randomBytes(32).toString("hex");
+    await pool.query(
+      `UPDATE password_resets SET token_hash = $1 WHERE user_id = $2`,
+      [hashResetToken(token), row.user_id]
+    );
+
+    res.json({ token });
   } catch (err) {
     next(err);
   }

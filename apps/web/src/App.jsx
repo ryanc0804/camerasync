@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useSearchParams } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth/AuthContext.jsx";
 import { AppLayout } from "./layouts/AppLayout.jsx";
 import { AuthScreen } from "./screens/AuthScreen.jsx";
+import { ForgotPasswordScreen } from "./screens/ForgotPasswordScreen.jsx";
 import { ResetPasswordScreen } from "./screens/ResetPasswordScreen.jsx";
 import { RecordScreen } from "./screens/RecordScreen.jsx";
 import { PlaybackScreen } from "./screens/PlaybackScreen.jsx";
@@ -34,6 +35,7 @@ function Root() {
     <Routes>
       {/* Reachable signed out — it's how you recover an account. */}
       <Route path="/reset-password" element={<ResetPasswordRoute />} />
+      <Route path="/forgot-password" element={<ForgotPasswordScreen />} />
 
       <Route
         path="/login"
