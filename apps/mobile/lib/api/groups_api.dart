@@ -47,6 +47,28 @@ class GroupsApi {
         .toList();
   }
 
+  /// Create a group; the server makes the creator its owner and admin.
+  /// [id] must be letters and numbers only, and a private group needs a
+  /// [password] (both checked server-side too, see POST /api/groups).
+  Future<Group> createGroup({
+    required String id,
+    required String name,
+    required bool isPublic,
+    String password = '',
+    String primaryColor = '#ffc72c',
+  }) async {
+    final data = await _api.post('/api/groups', {
+      'id': id,
+      'name': name,
+      'isPublic': isPublic,
+      if (!isPublic) 'password': password,
+      'primaryColor': primaryColor,
+    });
+    return Group.fromJson(
+      Map<String, dynamic>.from((data as Map)['group'] as Map),
+    );
+  }
+
   /// Join a group (provides password if private)
   Future<Group> joinGroup(String id, [String password = '']) async {
     final data = await _api.post('/api/groups/${Uri.encodeComponent(id)}/join', password.isEmpty ? null : {'password': password});
