@@ -15,6 +15,7 @@ import {
 } from "../api/groups.js";
 import { EmptyState } from "../components/EmptyState.jsx";
 import { useGroupTheme } from "../theme/GroupThemeContext.jsx";
+import { SCALE_OPTIONS, applyScale, getSavedScale } from "../appScale.js";
 
 // Shells for the sections that don't have backing APIs yet. Each states what
 // it will hold so the nav is honest about what's built vs. planned.
@@ -947,6 +948,8 @@ const groupsCss = `
 export function SettingsScreen() {
   const { user } = useAuth();
   const { selectGroup } = useGroupTheme();
+  const [scale, setScale] = useState(getSavedScale);
+  const [scaleError, setScaleError] = useState("");
   const [groups, setGroups] = useState([]);
   const [defaultGroup, setDefaultGroup] = useState("");
   const [loading, setLoading] = useState(true);
@@ -961,6 +964,18 @@ export function SettingsScreen() {
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, [user.id]);
+
+  const changeScale = (event) => {
+    const value = Number(event.target.value);
+    setScale(value);
+    applyScale(value);
+    try {
+      localStorage.setItem("appScale", String(value));
+      setScaleError("");
+    } catch {
+      setScaleError("Size changed, but could not be saved in this browser.");
+    }
+  };
 
   const changeDefaultGroup = (event) => {
     try {
@@ -982,6 +997,19 @@ export function SettingsScreen() {
         <dt style={{ fontWeight: 600, color: "#e0e0e0" }}>Email</dt>
         <dd style={{ margin: 0 }}>{user?.email}</dd>
       </dl>
+      <div style={styles.note}>
+        <label htmlFor="app-scale" style={{ display: "block", marginBottom: 10 }}>App size</label>
+        <select id="app-scale" value={scale} onChange={changeScale}
+          style={{ width: "100%", padding: "0.5rem", borderRadius: 6,
+            background: "#262626", color: "#f0f0f0", border: "1px solid #555", font: "inherit" }}>
+          {SCALE_OPTIONS.map((value, index) => (
+            <option key={value} value={value}>
+              {["Smallest", "Small", "Default", "Large", "Largest"][index]}
+            </option>
+          ))}
+        </select>
+        {scaleError && <p role="alert" style={{ color: "#ff8a80" }}>{scaleError}</p>}
+      </div>
       <div style={styles.note}>
         <label htmlFor="default-group" style={{ display: "block", marginBottom: 10 }}>
           Default group

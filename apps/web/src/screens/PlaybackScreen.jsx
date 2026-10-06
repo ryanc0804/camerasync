@@ -20,6 +20,8 @@ export function PlaybackScreen() {
   const [error, setError] = useState("");
   const [recordingIndex, setRecordingIndex] = useState(0);
   const [notesOpen, setNotesOpen] = useState(true);
+  const [notesWidth, setNotesWidth] = useState(28);
+  const layoutRef = useRef(null);
   const [notes, setNotes] = useState([]);
   const [notesError, setNotesError] = useState("");
   const videoTime = useRef(0);
@@ -53,6 +55,13 @@ export function PlaybackScreen() {
     return () => { cancelled = true; };
   }, [sessionId, startedAt]);
 
+  const resizeNotes = (event) => {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    const bounds = layoutRef.current.getBoundingClientRect();
+    const width = ((bounds.right - event.clientX) / bounds.width) * 100;
+    setNotesWidth(Math.max(20, Math.min(50, width)));
+  };
+
   return (
     <div className="playback-page">
       <style>{css}</style>
@@ -62,7 +71,7 @@ export function PlaybackScreen() {
       ) : (
         <>
           <h1>{session.name}</h1>
-          <div className="playback-layout">
+          <div className="playback-layout" ref={layoutRef} style={{ "--notes-width": `${notesWidth}%` }}>
             {recordings.length === 0 ? (
               <p>No videos have been uploaded for this session yet.</p>
             ) : (
@@ -73,10 +82,27 @@ export function PlaybackScreen() {
                   recordingIndex={recordingIndex}
                   setRecordingIndex={setRecordingIndex} />
                 {notesOpen ? (
-                  <NotesPanel sessionId={sessionId} videoTime={videoTime}
-                    startedAt={startedAt} notes={notes} setNotes={setNotes}
-                    error={notesError} setError={setNotesError}
-                    seek={seek} onHide={() => setNotesOpen(false)} />
+                  <>
+                    <div className="notes-divider" role="separator" tabIndex={0}
+                      aria-label="Resize notes" aria-orientation="vertical"
+                      aria-valuemin={20} aria-valuemax={50} aria-valuenow={Math.round(notesWidth)}
+                      onPointerDown={(event) => {
+                        if (event.button !== 0) return;
+                        event.preventDefault();
+                        event.currentTarget.setPointerCapture(event.pointerId);
+                      }}
+                      onPointerMove={resizeNotes}
+                      onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
+                      onKeyDown={(event) => {
+                        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                        event.preventDefault();
+                        setNotesWidth((width) => Math.max(20, Math.min(50, width + (event.key === "ArrowLeft" ? 2 : -2))));
+                      }} />
+                    <NotesPanel sessionId={sessionId} videoTime={videoTime}
+                      startedAt={startedAt} notes={notes} setNotes={setNotes}
+                      error={notesError} setError={setNotesError}
+                      seek={seek} onHide={() => setNotesOpen(false)} />
+                  </>
                 ) : (
                   <button type="button" className="notes-show" aria-label="Show notes"
                     title="Show notes" onClick={() => setNotesOpen(true)}>+</button>
@@ -277,11 +303,6 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
 
   return (
     <section className="playback-box">
-      <label className="playback-live-toggle">
-        <input type="checkbox" checked={liveComments}
-          onChange={(event) => setLiveComments(event.target.checked)} />
-        Live comments
-      </label>
       <div className="playback-top">
         <select aria-label="Recording" disabled={uploading} value={recordingIndex} onChange={changeRecording}>
           {recordings.map((recording, index) => (
@@ -290,7 +311,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
             </option>
           ))}
         </select>
-        <button type="button" onClick={addPanel} disabled={uploading}
+        <button type="button" className="playback-panel-add" onClick={addPanel} disabled={uploading}
           aria-label="Add one panel">+1</button>
       </div>
       {panelVideos.length === 0 ? (
@@ -446,11 +467,9 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
             onClick={() => changePage(page + 1)}>›</button>
         </div>
       )}
-      {liveComments && (
-        <p className="playback-live-note">
-          {liveNote && <><strong>{liveNote.author}:</strong> "{liveNote.body}"</>}
-        </p>
-      )}
+      <p className="playback-live-note">
+        {liveNote && <><strong>{liveNote.author}:</strong> "{liveNote.body}"</>}
+      </p>
       <div className="playback-seek">
         <span>{formatTime(time * 1000)}</span>
         <input type="range" min="0" max={duration || 0} step="0.1"
@@ -483,6 +502,11 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
           </svg>
         </button>
       </div>
+      <label className="playback-live-toggle">
+        <input type="checkbox" checked={liveComments}
+          onChange={(event) => setLiveComments(event.target.checked)} />
+        Live comments
+      </label>
     </section>
   );
 }
@@ -539,6 +563,7 @@ function NotesPanel({ sessionId, videoTime, startedAt, notes, setNotes,
               onClick={() => seek.current?.(note.videoTimeMs / 1000)}>
               <span className="notes-item-top">
                 <strong>{note.author}</strong>
+                <span aria-hidden="true">-</span>
                 <time>{formatTime(note.videoTimeMs)}</time>
               </span>
               <span className="notes-body">{note.body}</span>
@@ -570,14 +595,16 @@ const css = `
   .playback-page h1 { font-size: 1.4rem; margin: 1rem 0; overflow-wrap: anywhere; }
   .playback-box { position: relative; background: #1c1c1c; border: 1px solid #303030; border-radius: 12px; padding: 1rem; }
   .playback-top, .playback-controls, .playback-pages { display: flex; justify-content: center; align-items: center; gap: 12px; }
-  .playback-top { margin-bottom: 1rem; }
+  .playback-top { margin-bottom: 1rem; padding-right: 28px; }
   .playback-box select, .playback-box button { font: inherit; color: #f0f0f0; background: #292929; border: 1px solid #555; border-radius: 6px; padding: 0.4rem 0.8rem; }
   .playback-box button { cursor: pointer; }
   .playback-box button:disabled { opacity: 0.4; cursor: default; }
   .playback-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 12px; height: 70vh; }
   .playback-grid[hidden] { display: none; }
   .playback-grid figure { position: relative; margin: 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; grid-column: span 6; background: #000; border-radius: 6px; overflow: hidden; }
-  .playback-box .playback-panel-remove { position: absolute; top: 6px; right: 6px; z-index: 3; width: 28px; height: 28px; padding: 0; border-radius: 50%; }
+  .playback-box .playback-panel-add { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 28px; flex-shrink: 0; padding: 0; border-radius: 0; font-size: 0.75rem; line-height: 1; }
+  .playback-box .playback-panel-remove { position: absolute; top: 6px; right: 6px; z-index: 3; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 50%; font-size: 0; }
+  .playback-panel-remove::before { content: ""; width: 10px; height: 2px; background: currentColor; }
   .playback-box .playback-panel-focus { position: absolute; top: 6px; right: 40px; z-index: 3; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 50%; }
   .playback-grid.playback-grid-focused { display: block; }
   .playback-grid.playback-grid-focused figure { height: 100%; }
@@ -607,9 +634,9 @@ const css = `
   .playback-grid-5 figure:nth-child(2) { grid-column: 7 / span 4; }
   .playback-grid-5 figure:nth-child(3) { grid-column: 1 / span 4; }
   .playback-controls, .playback-pages { margin-top: 1rem; }
-  .playback-live-toggle { position: absolute; top: 1rem; left: 1rem; z-index: 1; display: flex; align-items: center; gap: 6px; color: #aaa; font-size: 0.75rem; cursor: pointer; }
+  .playback-live-toggle { width: fit-content; margin-top: 0.5rem; display: flex; align-items: center; gap: 6px; color: #aaa; font-size: 0.75rem; cursor: pointer; }
   .playback-live-toggle input { margin: 0; accent-color: var(--accent); cursor: pointer; }
-  .playback-live-note { min-height: 1.3rem; margin: 0.75rem 0 0; text-align: center; color: #f0f0f0; font-size: 0.85rem; overflow-wrap: anywhere; }
+  .playback-live-note { height: 1.3rem; overflow: auto; margin: 0.75rem 0 0; text-align: center; color: #f0f0f0; font-size: 0.85rem; line-height: 1.3rem; overflow-wrap: anywhere; }
   .playback-live-note strong { color: var(--accent); }
   .playback-live-note + .playback-seek { margin-top: 0.5rem; }
   .playback-seek { display: flex; align-items: center; gap: 10px; margin-top: 1rem; }
@@ -620,23 +647,24 @@ const css = `
   .playback-controls .playback-toggle, .playback-controls .playback-skip { display: flex; align-items: center; justify-content: center; width: 52px; height: 52px; padding: 0; border-radius: 50%; }
   .playback-empty { text-align: center; padding: 3rem 1rem; color: #999; }
   .playback-error { color: #ff8a80; text-align: center; }
-  .playback-layout { position: relative; display: flex; align-items: flex-start; gap: 1rem; }
+  .playback-layout { position: relative; display: flex; align-items: flex-start; gap: 0; }
   .playback-layout > .playback-box { flex: 1; min-width: 0; }
   .playback-layout > p { flex: 1; }
-  .notes-box { display: flex; flex-direction: column; flex: 0 0 340px; align-self: stretch; background: #1c1c1c; border: 1px solid #303030; border-radius: 12px; padding: 1rem; box-sizing: border-box; }
-  .notes-top { display: flex; align-items: center; gap: 8px; margin-bottom: 0.75rem; }
+  .notes-divider { flex: 0 0 8px; align-self: stretch; cursor: col-resize; touch-action: none; }
+  .notes-divider:hover, .notes-divider:focus-visible { background: #555; }
+  .notes-box { position: relative; min-width: 0; display: flex; flex-direction: column; flex: 0 0 var(--notes-width); align-self: stretch; background: #1c1c1c; border: 1px solid #303030; border-radius: 12px; padding: 1rem; box-sizing: border-box; }
+  .notes-top { display: flex; align-items: center; gap: 8px; margin-bottom: 0.75rem; padding-right: 24px; }
   .notes-top h2 { flex: 1; margin: 0; font-size: 1.1rem; }
-  .notes-box .notes-hide, .notes-show { width: 28px; height: 28px; padding: 0; display: flex; align-items: center; justify-content: center; border: 1px solid #555; border-radius: 6px; background: #292929; color: #f0f0f0; font: inherit; font-size: 1rem; line-height: 1; cursor: pointer; }
-  .notes-show { position: absolute; top: 0; right: 0; }
+  .notes-box .notes-hide, .notes-show { position: absolute; top: 12px; right: 12px; z-index: 4; width: 24px; height: 24px; padding: 0; display: flex; align-items: center; justify-content: center; border: 1px solid #555; border-radius: 0; background: #292929; color: #f0f0f0; font: inherit; font-size: 0.85rem; line-height: 1; cursor: pointer; }
   .notes-box .notes-hide:hover, .notes-show:hover { background: #3a3a3a; }
   .notes-list { flex: 1; min-height: 120px; overflow-y: auto; }
   .notes-empty { margin: 0; color: #999; font-size: 0.85rem; }
   .notes-item { position: relative; border-bottom: 1px solid #2a2a2a; }
   .notes-box .notes-jump { display: block; width: 100%; padding: 8px; border: none; border-radius: 6px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
   .notes-box .notes-jump:hover { background: #262626; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45); }
-  .notes-item-top { display: flex; align-items: center; gap: 8px; padding-right: 22px; }
-  .notes-item-top strong { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 0.8rem; }
-  .notes-item-top time { color: var(--accent); font-size: 0.75rem; }
+  .notes-item-top { display: flex; align-items: baseline; gap: 8px; padding-right: 22px; font-size: 0.8rem; line-height: 1.4; }
+  .notes-item-top strong { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .notes-item-top time { flex-shrink: 0; color: var(--accent); }
   .notes-box .notes-delete { position: absolute; top: 8px; right: 6px; width: 22px; height: 22px; padding: 0; display: flex; align-items: center; justify-content: center; border: none; border-radius: 4px; background: transparent; color: #ff6b6b; font-size: 1rem; line-height: 1; cursor: pointer; }
   .notes-box .notes-delete:hover { background: #472222; }
   .notes-body { display: block; margin-top: 4px; color: #ddd; font-size: 0.85rem; line-height: 1.4; overflow-wrap: anywhere; }
@@ -647,6 +675,9 @@ const css = `
   .notes-add button:disabled { opacity: 0.4; cursor: default; }
   @media (max-width: 900px) {
     .playback-layout { flex-direction: column; justify-content: flex-start; }
+    .notes-divider { display: none; }
+    .playback-layout { gap: 8px; }
+    .playback-layout > .playback-box { width: 100%; box-sizing: border-box; }
     .notes-box { flex: 1 1 auto; width: 100%; }
   }
 `;
