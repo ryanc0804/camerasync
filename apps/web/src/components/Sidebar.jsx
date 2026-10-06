@@ -160,8 +160,10 @@ const styles = {
     left: 0,
     bottom: 0,
     width: SIDEBAR_WIDTH,
-    background: "#f2cb05",
-    color: "#000",
+    background: "var(--brand)",
+    color: "var(--brand-ink)",
+    // The group's secondary color as a two-tone edge; transparent for 8kount.
+    borderRight: "4px solid var(--brand-edge)",
     display: "flex",
     flexDirection: "column",
     fontFamily: "system-ui, sans-serif",
@@ -204,7 +206,7 @@ const css = `
     justify-content: center;
     padding: 0.9rem 0.4rem;
     border-radius: 14px;
-    color: #000;
+    color: var(--brand-ink);
     text-decoration: none;
     font-size: 0.85rem;
     font-weight: 600;
@@ -214,7 +216,8 @@ const css = `
   .kh-nav:hover { background: rgba(255,255,255,0.28); }
   .kh-nav-active,
   .kh-nav-active:hover {
-    background: #ffe870;
+    background: var(--brand-active);
+    color: #000;
   }
   .kh-logout {
     display: inline-flex;
@@ -226,7 +229,7 @@ const css = `
     border: none;
     border-radius: 10px;
     background: transparent;
-    color: #000;
+    color: var(--brand-ink);
     cursor: pointer;
     transition: background 0.12s;
   }

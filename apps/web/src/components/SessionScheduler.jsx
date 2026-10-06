@@ -593,7 +593,7 @@ const schedulerCss = `
   .session-mode-buttons button,
   .session-schedule-actions button {
     padding: 10px 14px;
-    border: 1px solid #ffc72c;
+    border: 1px solid var(--accent);
     border-radius: 7px;
     background: #262626;
     color: #f0f0f0;
@@ -609,8 +609,8 @@ const schedulerCss = `
     width: 180px;
   }
   .session-mode-buttons button.is-selected {
-    background: #ffc72c;
-    color: #0d0d0d;
+    background: var(--accent);
+    color: var(--accent-ink);
   }
   .session-schedule-form {
     display: grid;
@@ -655,9 +655,9 @@ const schedulerCss = `
     border-color: #3a3a3a;
   }
   .session-schedule-actions .session-submit-button {
-    border-color: #ffc72c;
-    background: #ffc72c;
-    color: #0d0d0d;
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-ink);
   }
   .session-schedule-actions button:disabled {
     cursor: default;
@@ -737,7 +737,7 @@ const schedulerCss = `
     font-weight: 700;
   }
   .scheduled-session code {
-    color: #ffc72c;
+    color: var(--accent);
   }
   .session-cancel-button {
     display: grid;
@@ -770,10 +770,10 @@ const schedulerCss = `
   .session-live-action {
     min-width: 72px;
     padding: 8px 12px;
-    border: 1px solid #ffc72c;
+    border: 1px solid var(--accent);
     border-radius: 7px;
-    background: #ffc72c;
-    color: #0d0d0d;
+    background: var(--accent);
+    color: var(--accent-ink);
     font: inherit;
     font-weight: 700;
     cursor: pointer;

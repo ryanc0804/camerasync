@@ -148,9 +148,9 @@ const css = `
   }
   .kh-btn:hover { background: #303030; }
   .kh-btn-primary {
-    background: #ffc72c;
-    color: #0d0d0d;
-    border-color: #ffc72c;
+    background: var(--accent);
+    color: var(--accent-ink);
+    border-color: var(--accent);
   }
-  .kh-btn-primary:hover { background: #ffd75e; }
+  .kh-btn-primary:hover { background: var(--accent-hover); }
 `;

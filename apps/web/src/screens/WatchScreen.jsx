@@ -135,7 +135,7 @@ const css = `
   .watch-page { max-width: 900px; }
   .watch-page h1 { margin: 0 0 1.5rem; font-size: 1.8rem; }
   .watch-page p { color: #999; line-height: 1.6; }
-  .watch-page a { color: #f2cb05; }
+  .watch-page a { color: var(--accent); }
   .watch-page .watch-error { color: #ff8a80; }
   .watch-group {
     border: 1px solid #2a2a2a;

@@ -354,12 +354,12 @@ const css = `
     padding: 0.85rem 1.5rem;
     border: none;
     border-radius: 12px;
-    background: #f2cb05;
-    color: #000;
+    background: var(--accent);
+    color: var(--accent-ink);
     cursor: pointer;
     transition: background 0.12s;
   }
-  .home-action:hover { background: #ffe159; }
+  .home-action:hover { background: var(--accent-hover); }
 
   .home-stats {
     display: grid;
@@ -388,7 +388,7 @@ const css = `
 
   .home-section {
     margin: 0 0 14px;
-    color: #f2cb05;
+    color: var(--accent);
     font-size: 1.25rem;
     font-weight: 700;
   }
@@ -405,7 +405,7 @@ const css = `
     padding: 0;
     border: none;
     background: none;
-    color: #f2cb05;
+    color: var(--accent);
     cursor: pointer;
     text-decoration: underline;
   }
@@ -476,13 +476,13 @@ const css = `
     background: #3a3a3a;
     cursor: pointer;
   }
-  .dot-active { background: #f2cb05; }
+  .dot-active { background: var(--accent); }
 
   .home-live-card {
     padding: 22px;
-    background: #f2cb05;
+    background: var(--accent);
     border-radius: 20px;
-    color: #000;
+    color: var(--accent-ink);
   }
   .home-live-tag {
     display: flex;

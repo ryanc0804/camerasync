@@ -3,6 +3,7 @@ import { EmptyState } from "../components/EmptyState.jsx";
 
 import { getGroups } from "../api/groups.js";
 import { getSessions } from "../api/recordings.js";
+import { groupAccent } from "../theme/groupTheme.js";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -166,7 +167,7 @@ export function CalendarScreen() {
               <span className="cal-day-events">
                 {daySessions.slice(0, 2).map((session) => {
                   const group = groupsById.get(session.groupId);
-                  const color = group?.primaryColor || "#f2cb05";
+                  const color = groupAccent(group);
                   return (
                     <span
                       className="cal-day-event"
@@ -225,7 +226,7 @@ export function CalendarScreen() {
                       )}
                     </time>
                     <span
-                      style={{ color: group?.primaryColor || "#ffc72c" }}
+                      style={{ color: groupAccent(group) }}
                     >
                       {session.name} - {group?.name || session.groupId}
                     </span>
@@ -311,11 +312,11 @@ const css = `
     padding: 0.6rem 1.4rem;
     border: none;
     border-radius: 999px;
-    background: #f2cb05;
-    color: #000;
+    background: var(--accent);
+    color: var(--accent-ink);
     cursor: pointer;
   }
-  .cal-today:hover { background: #ffe159; }
+  .cal-today:hover { background: var(--accent-hover); }
 
   .cal-day {
     font: inherit;
@@ -376,13 +377,13 @@ const css = `
   .cal-day:hover { background: #161616; }
   .cal-day-muted { color: #4a4a4a; }
   .cal-day-today .cal-day-number {
-    background: #f2cb05;
-    color: #000;
+    background: var(--accent);
+    color: var(--accent-ink);
     font-weight: 700;
   }
   .cal-day-selected {
     background: #191919;
-    box-shadow: inset 0 0 0 1.5px #f2cb05;
+    box-shadow: inset 0 0 0 1.5px var(--accent);
   }
   .cal-error {
     margin: 0 0 12px;

@@ -56,8 +56,8 @@ const css = `
     padding: 0.6rem 1.2rem;
     border: none;
     border-radius: 999px;
-    background: #f2cb05;
-    color: #000;
+    background: var(--accent);
+    color: var(--accent-ink);
     font: inherit;
     font-size: 0.9rem;
     font-weight: 700;
@@ -66,5 +66,8 @@ const css = `
     transition: background 0.12s;
   }
   a.empty-state-action:hover,
-  button.empty-state-action:hover { background: #ffe159; color: #000; }
+  button.empty-state-action:hover {
+    background: var(--accent-hover);
+    color: var(--accent-ink);
+  }
 `;
