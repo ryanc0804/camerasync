@@ -5,6 +5,10 @@ import { AppLayout } from "./layouts/AppLayout.jsx";
 import { AuthScreen } from "./screens/AuthScreen.jsx";
 import { ForgotPasswordScreen } from "./screens/ForgotPasswordScreen.jsx";
 import { ResetPasswordScreen } from "./screens/ResetPasswordScreen.jsx";
+import {
+  VerifyEmailLinkScreen,
+  VerifyEmailScreen,
+} from "./screens/VerifyEmailScreen.jsx";
 import { RecordScreen } from "./screens/RecordScreen.jsx";
 import { PlaybackScreen } from "./screens/PlaybackScreen.jsx";
 import { WatchScreen } from "./screens/WatchScreen.jsx";
@@ -25,17 +29,30 @@ export function App() {
 }
 
 function Root() {
-  const { isAuthenticated, loading } = useAuth();
+  const { isAuthenticated, loading, user } = useAuth();
 
   // Wait for the /me check so an already-signed-in user doesn't briefly see
   // the sign-in screen on refresh.
   if (loading) return <FullScreenMessage>Loading…</FullScreenMessage>;
+
+  // Signed in but not confirmed: the confirmation screen replaces the whole
+  // app (the server refuses everything else anyway) — except the emailed
+  // link's page, which must still work.
+  if (isAuthenticated && !user.emailVerified) {
+    return (
+      <Routes>
+        <Route path="/verify-email" element={<VerifyEmailLinkRoute />} />
+        <Route path="*" element={<VerifyEmailScreen />} />
+      </Routes>
+    );
+  }
 
   return (
     <Routes>
       {/* Reachable signed out — it's how you recover an account. */}
       <Route path="/reset-password" element={<ResetPasswordRoute />} />
       <Route path="/forgot-password" element={<ForgotPasswordScreen />} />
+      <Route path="/verify-email" element={<VerifyEmailLinkRoute />} />
 
       <Route
         path="/login"
@@ -65,6 +82,12 @@ function Root() {
 function ResetPasswordRoute() {
   const [params] = useSearchParams();
   return <ResetPasswordScreen token={params.get("token")} />;
+}
+
+// Same for the sign-up confirmation link.
+function VerifyEmailLinkRoute() {
+  const [params] = useSearchParams();
+  return <VerifyEmailLinkScreen token={params.get("token")} />;
 }
 
 function FullScreenMessage({ children }) {

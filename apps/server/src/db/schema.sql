@@ -242,3 +242,24 @@ ALTER TABLE group_members
 -- row is burned (see /verify-reset-code in routes/auth.js).
 ALTER TABLE password_resets ADD COLUMN IF NOT EXISTS code_hash CHAR(64);
 ALTER TABLE password_resets ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;
+
+-- Email verification (SCRUM-43). NULL email_verified_at = not confirmed yet;
+-- such accounts can sign in but every other API is closed to them.
+-- Adding the column with DEFAULT NOW() marks every account that already
+-- exists as verified (so nobody is locked out by the upgrade); dropping the
+-- default straight after makes new sign-ups start unverified. Both
+-- statements are no-ops when this file is re-run.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE users ALTER COLUMN email_verified_at DROP DEFAULT;
+
+-- One pending confirmation per user: a 6-digit code for the apps and a link
+-- token for the email button, both stored only as SHA-256 hashes. A new
+-- request replaces the row, so only the newest code and link work.
+CREATE TABLE IF NOT EXISTS email_verifications (
+    user_id BIGINT PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+    code_hash CHAR(64) NOT NULL,
+    token_hash CHAR(64) NOT NULL UNIQUE,
+    attempts INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires TIMESTAMPTZ NOT NULL
+);

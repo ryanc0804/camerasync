@@ -5,6 +5,7 @@ import 'auth/auth_service.dart';
 import 'config.dart';
 import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
+import 'screens/verify_email_screen.dart';
 
 void main() {
   final auth = AuthService(ApiClient(kServerUrl));
@@ -54,9 +55,10 @@ class AuthGate extends StatelessWidget {
             body: Center(child: CircularProgressIndicator()),
           );
         }
-        return auth.isAuthenticated
-            ? HomeShell(auth: auth)
-            : LoginScreen(auth: auth);
+        if (!auth.isAuthenticated) return LoginScreen(auth: auth);
+        // The server refuses everything else until the email is confirmed.
+        if (!auth.user!.emailVerified) return VerifyEmailScreen(auth: auth);
+        return HomeShell(auth: auth);
       },
     );
   }

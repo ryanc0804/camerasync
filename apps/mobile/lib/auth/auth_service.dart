@@ -4,16 +4,28 @@ import '../api/api_client.dart';
 
 /// The signed-in user, as returned by the server's `publicUser` shape.
 class AppUser {
-  const AppUser({required this.id, required this.email, this.name});
+  const AppUser({
+    required this.id,
+    required this.email,
+    this.name,
+    this.emailVerified = true,
+  });
 
   final int id;
   final String email;
   final String? name;
 
+  /// False until the sign-up confirmation code is entered (SCRUM-43); the
+  /// app shows only the confirm screen until then.
+  final bool emailVerified;
+
   factory AppUser.fromJson(Map<String, dynamic> json) => AppUser(
         id: json['id'] as int,
         email: json['email'] as String,
         name: json['name'] as String?,
+        // Only an explicit false locks the app, so a server that predates
+        // confirmation never strands anyone on the confirm screen.
+        emailVerified: json['emailVerified'] != false,
       );
 
   String get displayName => (name != null && name!.isNotEmpty) ? name! : email;
@@ -79,6 +91,19 @@ class AuthService extends ChangeNotifier {
     });
     _user = AppUser.fromJson((data as Map)['user'] as Map<String, dynamic>);
     notifyListeners();
+  }
+
+  /// Confirm the signed-in account with the 6-digit code from the sign-up
+  /// email. On success the user becomes verified and the app unlocks.
+  Future<void> verifyEmail({required String code}) async {
+    final data = await _api.post('/api/auth/verify-email', {'code': code});
+    _user = AppUser.fromJson((data as Map)['user'] as Map<String, dynamic>);
+    notifyListeners();
+  }
+
+  /// Email a fresh confirmation code to the signed-in, unconfirmed user.
+  Future<void> resendVerification() async {
+    await _api.post('/api/auth/resend-verification');
   }
 
   /// Start a password reset. The server answers 204 whether or not the email

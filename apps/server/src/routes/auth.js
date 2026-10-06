@@ -4,7 +4,11 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 
 import { pool } from "../db/pool.js";
-import { sendPasswordResetEmail } from "../email/mailer.js";
+import {
+  sendPasswordResetEmail,
+  sendVerificationEmail,
+} from "../email/mailer.js";
+import { signupEmailError } from "../auth/emailPolicy.js";
 import {
   SESSION_COOKIE,
   createSession,
@@ -43,6 +47,10 @@ authRouter.post("/register", async (req, res, next) => {
     if (!email || !password) {
       return res.status(400).json({ error: "Email and password are required." });
     }
+    const emailError = signupEmailError(email);
+    if (emailError) {
+      return res.status(400).json({ error: emailError });
+    }
     if (String(password).length < MIN_PASSWORD_LENGTH) {
       return res.status(400).json({
         error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
@@ -56,7 +64,7 @@ authRouter.post("/register", async (req, res, next) => {
       const result = await pool.query(
         `INSERT INTO users (email, display_name, password)
          VALUES ($1, $2, $3)
-         RETURNING user_id, email, display_name, roles`,
+         RETURNING user_id, email, display_name, roles, email_verified_at`,
         [email, name?.trim() || null, passwordHash]
       );
       row = result.rows[0];
@@ -69,6 +77,10 @@ authRouter.post("/register", async (req, res, next) => {
       throw err;
     }
 
+    await startVerification(row.user_id, row.email);
+
+    // Signed in straight away, but unverified: the apps show the "confirm
+    // your email" screen and every other API answers EMAIL_UNVERIFIED.
     const token = await createSession(row.user_id);
     res.cookie(SESSION_COOKIE, token, sessionCookieOptions());
     res.status(201).json({ user: publicUser(row) });
@@ -87,7 +99,7 @@ authRouter.post("/login", async (req, res, next) => {
     }
 
     const { rows } = await pool.query(
-      `SELECT user_id, email, display_name, roles, password
+      `SELECT user_id, email, display_name, roles, password, email_verified_at
          FROM users
         WHERE email = $1`,
       [email]
@@ -121,6 +133,144 @@ authRouter.get("/me", async (req, res, next) => {
     const row = await getUserBySessionToken(req.cookies?.[SESSION_COOKIE]);
     if (!row) return res.status(401).json({ error: "Not authenticated" });
     res.json({ user: publicUser(row) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------- email
+// confirmation (SCRUM-43). Sign-up emails a 6-digit code (typed into the web
+// or mobile app) and a link (clicked from the inbox); either one confirms.
+
+// Long enough to find the email the next morning.
+const VERIFY_TTL_MS = 1000 * 60 * 60 * 24;
+// Same guess cap as the password-reset code, for the same reason.
+const MAX_VERIFY_ATTEMPTS = 5;
+// Keeps a held-down "Resend" button from spamming an inbox.
+const RESEND_COOLDOWN_MS = 1000 * 30;
+
+// Issue (or replace) the user's pending confirmation and email it. Sending
+// is fire-and-forget so a slow or broken mail provider can't fail sign-up;
+// the user can always ask for a new code.
+async function startVerification(userId, email) {
+  const token = crypto.randomBytes(32).toString("hex");
+  const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, "0");
+  await pool.query(
+    `INSERT INTO email_verifications (user_id, code_hash, token_hash, expires)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (user_id) DO UPDATE
+        SET code_hash = EXCLUDED.code_hash,
+            token_hash = EXCLUDED.token_hash,
+            attempts = 0,
+            created_at = NOW(),
+            expires = EXCLUDED.expires`,
+    [userId, hashResetToken(code), hashResetToken(token),
+      new Date(Date.now() + VERIFY_TTL_MS)]
+  );
+
+  const origin = process.env.WEB_ORIGIN || "http://localhost:5173";
+  sendVerificationEmail(email, `${origin}/verify-email?token=${token}`, code)
+    .catch((err) => {
+      console.error(`[verify-email] send to ${email} failed:`, err.message);
+    });
+}
+
+// Confirm the account and drop its pending code; returns the updated user.
+async function markVerified(userId) {
+  await pool.query(`DELETE FROM email_verifications WHERE user_id = $1`, [userId]);
+  const { rows } = await pool.query(
+    `UPDATE users
+        SET email_verified_at = COALESCE(email_verified_at, NOW())
+      WHERE user_id = $1
+      RETURNING user_id, email, display_name, roles, email_verified_at`,
+    [userId]
+  );
+  return rows[0];
+}
+
+// Confirm with the code from the email (signed-in app) or the link token
+// (from the inbox, possibly on another device, so no session is needed).
+authRouter.post("/verify-email", async (req, res, next) => {
+  try {
+    const { code, token } = req.body ?? {};
+
+    if (token) {
+      const { rows } = await pool.query(
+        `DELETE FROM email_verifications
+          WHERE token_hash = $1 AND expires > NOW()
+          RETURNING user_id`,
+        [hashResetToken(String(token))]
+      );
+      if (rows.length === 0) {
+        return res.status(400).json({
+          error: "This confirmation link is invalid or has expired. Sign in to get a new one.",
+        });
+      }
+      return res.json({ user: publicUser(await markVerified(rows[0].user_id)) });
+    }
+
+    const user = await getUserBySessionToken(req.cookies?.[SESSION_COOKIE]);
+    if (!user) return res.status(401).json({ error: "Not authenticated" });
+    if (user.email_verified_at) return res.json({ user: publicUser(user) });
+    if (!code) return res.status(400).json({ error: "Enter the 6-digit code." });
+
+    // Counting the attempt in the lookup keeps racing guesses honest.
+    const { rows } = await pool.query(
+      `UPDATE email_verifications
+          SET attempts = attempts + 1
+        WHERE user_id = $1 AND expires > NOW()
+        RETURNING code_hash, attempts`,
+      [user.user_id]
+    );
+    const pending = rows[0];
+    if (!pending) {
+      return res.status(400).json({
+        error: "That code has expired. Send yourself a new one.",
+      });
+    }
+    if (pending.attempts > MAX_VERIFY_ATTEMPTS) {
+      await pool.query(`DELETE FROM email_verifications WHERE user_id = $1`, [
+        user.user_id,
+      ]);
+      return res.status(400).json({
+        error: "Too many wrong codes. Send yourself a new one.",
+      });
+    }
+    const ok = crypto.timingSafeEqual(
+      Buffer.from(hashResetToken(String(code).trim())),
+      Buffer.from(pending.code_hash)
+    );
+    if (!ok) {
+      return res.status(400).json({ error: "That code isn't right. Check the email and try again." });
+    }
+
+    res.json({ user: publicUser(await markVerified(user.user_id)) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Email a fresh code and link to the signed-in, unconfirmed user.
+authRouter.post("/resend-verification", async (req, res, next) => {
+  try {
+    const user = await getUserBySessionToken(req.cookies?.[SESSION_COOKIE]);
+    if (!user) return res.status(401).json({ error: "Not authenticated" });
+    if (user.email_verified_at) {
+      return res.status(400).json({ error: "Your email is already confirmed." });
+    }
+
+    const { rows } = await pool.query(
+      `SELECT created_at FROM email_verifications WHERE user_id = $1`,
+      [user.user_id]
+    );
+    if (rows[0] && Date.now() - new Date(rows[0].created_at) < RESEND_COOLDOWN_MS) {
+      return res.status(429).json({
+        error: "A code was just sent. Give it a moment before asking for another.",
+      });
+    }
+
+    await startVerification(user.user_id, user.email);
+    res.status(204).end();
   } catch (err) {
     next(err);
   }
@@ -277,10 +427,15 @@ authRouter.post("/reset-password", async (req, res, next) => {
     }
 
     const passwordHash = await bcrypt.hash(String(password), BCRYPT_ROUNDS);
-    await pool.query(`UPDATE users SET password = $1 WHERE user_id = $2`, [
-      passwordHash,
-      row.user_id,
-    ]);
+    // The reset token arrived by email, which proves the inbox is theirs, so
+    // this also confirms an account that was never verified.
+    await pool.query(
+      `UPDATE users
+          SET password = $1,
+              email_verified_at = COALESCE(email_verified_at, NOW())
+        WHERE user_id = $2`,
+      [passwordHash, row.user_id]
+    );
 
     // The password just changed hands; every existing session goes with it so
     // whoever prompted the reset is signed out everywhere.

@@ -4,6 +4,7 @@ import { createAdapter } from "@socket.io/postgres-adapter";
 import {
   SESSION_COOKIE,
   getUserBySessionToken,
+  isUnverified,
   publicUser,
 } from "../auth/sessions.js";
 import { pool } from "../db/pool.js";
@@ -113,6 +114,9 @@ export async function initSocket(httpServer) {
       const userRow = await getUserBySessionToken(token);
 
       if (!userRow) return next(new Error("Not authenticated"));
+      if (isUnverified(userRow)) {
+        return next(new Error("Confirm your email address to continue."));
+      }
 
       socket.data.user = publicUser(userRow);
       next();

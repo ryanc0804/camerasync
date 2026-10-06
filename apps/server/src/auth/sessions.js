@@ -45,7 +45,7 @@ export async function getUserBySessionToken(token) {
   if (!token) return null;
 
   const { rows } = await pool.query(
-    `SELECT u.user_id, u.email, u.display_name, u.roles
+    `SELECT u.user_id, u.email, u.display_name, u.roles, u.email_verified_at
        FROM sessions s
        JOIN users u ON u.user_id = s.user_id
       WHERE s.session_token = $1
@@ -68,5 +68,18 @@ export function publicUser(row) {
     email: row.email,
     name: row.display_name,
     roles: row.roles ?? [],
+    // Clients send unverified users to the "confirm your email" screen.
+    emailVerified: row.email_verified_at != null,
   };
 }
+
+/// Signed in but not yet confirmed: may use the auth routes (to confirm,
+/// resend or sign out) and nothing else.
+export function isUnverified(row) {
+  return row.email_verified_at == null;
+}
+
+export const UNVERIFIED_ERROR = {
+  error: "Confirm your email address to continue.",
+  code: "EMAIL_UNVERIFIED",
+};
