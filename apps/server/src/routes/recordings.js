@@ -825,7 +825,7 @@ recordingsRouter.patch(
 );
 
 // Create a new recording session (and host its websocket channel).
-recordingsRouter.post("/create", async (req, res, next) => {
+recordingsRouter.post("/create", requireAuth, async (req, res, next) => {
   try {
     // TODO: validate body, generate sessionId (crypto.randomUUID()),
     // persist the session, then createSessionSocket(io, sessionId).
@@ -859,7 +859,7 @@ recordingsRouter.post("/create", async (req, res, next) => {
 });
 
 // Fetch a session's current info / connected devices.
-recordingsRouter.get("/info", async (req, res, next) => {
+recordingsRouter.get("/info", requireAuth, async (req, res, next) => {
   try {
     const {sessionId} = req.query;
     if (!sessionId) {
@@ -885,7 +885,7 @@ recordingsRouter.get("/info", async (req, res, next) => {
 });
 
 // Update session state (e.g. start/stop recording).
-recordingsRouter.patch("/update", async (req, res, next) => {
+recordingsRouter.patch("/update", requireAuth, async (req, res, next) => {
   try {
     const {sessionId, status} = req.body ?? {};
     if (!sessionId) {
@@ -923,7 +923,7 @@ recordingsRouter.patch("/update", async (req, res, next) => {
 });
 
 // End a session and tear down its websocket channel.
-recordingsRouter.delete("/close", async (req, res, next) => {
+recordingsRouter.delete("/close", requireAuth, async (req, res, next) => {
   try {
     const {sessionId, status} = req.body ?? {};
     if (!sessionId) {
