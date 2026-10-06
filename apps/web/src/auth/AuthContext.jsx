@@ -46,6 +46,20 @@ export function AuthProvider({ children }) {
     return data;
   }, []);
 
+  // Confirming the email flips user.emailVerified, which unlocks the app.
+  const confirmEmail = useCallback(async (code) => {
+    const confirmed = await authApi.verifyEmail({ code });
+    setUser(confirmed);
+    return confirmed;
+  }, []);
+
+  // Re-read the signed-in user, e.g. after a confirmation link was used.
+  const refreshUser = useCallback(async () => {
+    const me = await authApi.fetchMe();
+    setUser(me);
+    return me;
+  }, []);
+
   const logout = useCallback(async () => {
     try {
       await authApi.logout();
@@ -62,6 +76,8 @@ export function AuthProvider({ children }) {
     login,
     register,
     logout,
+    confirmEmail,
+    refreshUser,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

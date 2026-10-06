@@ -64,8 +64,15 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  // This release is UCF-only (SCRUM-43). Mirrors the server's rule for an
+  // instant answer; the server still decides.
+  static final _ucfEmail = RegExp(r'^[^\s@]+@(knights\.)?ucf\.edu$', caseSensitive: false);
+
   String? _validate() {
     if (_email.text.trim().isEmpty) return 'Please enter your email.';
+    if (_isSignup && !_ucfEmail.hasMatch(_email.text.trim())) {
+      return 'Sign up with your UCF email (@ucf.edu or @knights.ucf.edu).';
+    }
     if (_isSignup && _name.text.trim().isEmpty) return 'Please enter your name.';
     if (_password.text.isEmpty) return 'Please enter your password.';
     if (_isSignup && _password.text.length < 8) {

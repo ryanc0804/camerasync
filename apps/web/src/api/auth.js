@@ -109,3 +109,18 @@ export async function resetPassword({ token, password }) {
     body: { token, password },
   });
 }
+
+// Confirm a new account (SCRUM-43) with the 6-digit code from the email (needs
+// the session) or the link's token (works signed out). Returns the user.
+export async function verifyEmail({ code, token }) {
+  const data = await request("/api/auth/verify-email", {
+    method: "POST",
+    body: code ? { code } : { token },
+  });
+  return data.user;
+}
+
+// Email a fresh confirmation code to the signed-in, unconfirmed user.
+export async function resendVerification() {
+  return request("/api/auth/resend-verification", { method: "POST" });
+}

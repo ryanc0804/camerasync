@@ -3,6 +3,9 @@ import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
 
+// This release is UCF-only (SCRUM-43).
+const UCF_EMAIL = /^[^\s@]+@(knights\.)?ucf\.edu$/i;
+
 // Combined auth screen with two modes — sign in and create account — sharing
 // one card + theme so the fields aren't duplicated. Password recovery lives on
 // its own /forgot-password route (code-based reset, per the Figma designs).
@@ -31,6 +34,10 @@ export function AuthScreen() {
   // Client-side checks so we don't bother the server with obviously bad input.
   const validate = () => {
     if (!email.trim()) return "Please enter your email.";
+    // Mirrors the server's rule (auth/emailPolicy.js) for an instant answer;
+    // the server still decides.
+    if (isSignup && !UCF_EMAIL.test(email.trim()))
+      return "Sign up with your UCF email (@ucf.edu or @knights.ucf.edu).";
     if (isSignup && !name.trim()) return "Please enter your name.";
     if (!password) return "Please enter your password.";
     if (isSignup && password.length < 8)
@@ -106,7 +113,7 @@ export function AuthScreen() {
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
+                placeholder={isSignup ? "you@ucf.edu" : "you@example.com"}
               />
             </label>
 

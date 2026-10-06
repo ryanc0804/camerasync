@@ -218,7 +218,7 @@ export function ForgotPasswordScreen() {
 
 // Six display boxes over one invisible input, so the code is a single string
 // and the keyboard behaves normally (paste, backspace, autofill).
-function CodeBoxes({ code, onChange }) {
+export function CodeBoxes({ code, onChange }) {
   const inputRef = useRef(null);
   const [focused, setFocused] = useState(false);
 
@@ -396,3 +396,6 @@ const css = `
   .fp-link:hover:not(:disabled) { text-decoration: underline; }
   .fp-link:disabled { opacity: 0.5; cursor: default; }
 `;
+
+// Shared with VerifyEmailScreen so the code-entry pages look the same.
+export { styles as codePageStyles, css as codePageCss, CODE_LENGTH };

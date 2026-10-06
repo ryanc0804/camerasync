@@ -5,7 +5,13 @@ import "dotenv/config";
 import cookieParser from "cookie-parser";
 import express from "express";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+// Sign-up sends a confirmation email; never let a test send real mail.
+vi.mock("../src/email/mailer.js", () => ({
+  sendPasswordResetEmail: vi.fn(async () => {}),
+  sendVerificationEmail: vi.fn(async () => {}),
+}));
 
 const { authRouter } = await import("../src/routes/auth.js");
 const { groupRouter } = await import("../src/routes/groups.js");
@@ -20,16 +26,15 @@ app.use("/api/groups", groupRouter);
 const RUN = `${Date.now()}${process.pid}`;
 const GROUP_ID = `colors${RUN}`;
 
-// Registers a user and returns their session cookie.
+// Registers a confirmed user and returns their session cookie. Confirmation
+// itself is tested in emailVerification.test.js, so it's done directly here.
 async function signUp(label) {
+  const email = `groups-test-${RUN}-${label}@ucf.edu`;
   const res = await request(app)
     .post("/api/auth/register")
-    .send({
-      name: label,
-      email: `groups-test-${RUN}-${label}@example.test`,
-      password: "groups-test-pass-1",
-    });
+    .send({ name: label, email, password: "groups-test-pass-1" });
   expect(res.status).toBe(201);
+  await pool.query("UPDATE users SET email_verified_at = NOW() WHERE email = $1", [email]);
   return res.headers["set-cookie"];
 }
 

@@ -16,6 +16,8 @@ vi.mock("../src/email/mailer.js", () => ({
   sendPasswordResetEmail: vi.fn(async (email, link, code) => {
     sentEmails.push({ email, link, code });
   }),
+  // Sign-up confirmations are covered in emailVerification.test.js.
+  sendVerificationEmail: vi.fn(async () => {}),
 }));
 
 const { authRouter } = await import("../src/routes/auth.js");
@@ -28,7 +30,8 @@ app.use(cookieParser());
 app.use("/api/auth", authRouter);
 
 const RUN = `${Date.now()}-${process.pid}`;
-const EMAIL = `auth-test-${RUN}@example.test`;
+// Sign-up only accepts UCF addresses. Nothing is sent: the mailer is mocked.
+const EMAIL = `auth-test-${RUN}@ucf.edu`;
 const PASSWORD = "original-pass-1";
 
 const lastEmail = () => sentEmails[sentEmails.length - 1];
@@ -73,8 +76,9 @@ describe("register and login", () => {
   it("rejects a short password with 400", async () => {
     const res = await request(app)
       .post("/api/auth/register")
-      .send({ email: `auth-test-${RUN}-short@example.test`, password: "short" });
+      .send({ email: `auth-test-${RUN}-short@ucf.edu`, password: "short" });
     expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/at least 8 characters/);
   });
 
   it("logs in with the right password", async () => {

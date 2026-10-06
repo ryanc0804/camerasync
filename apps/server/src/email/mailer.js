@@ -61,3 +61,39 @@ export async function sendPasswordResetEmail(email, link, code) {
   });
   console.log(`[password-reset] sent to ${email} via ${process.env.SMTP_HOST}`);
 }
+
+export async function sendVerificationEmail(email, link, code) {
+  const t = getTransport();
+  if (!t) {
+    console.log(`[verify-email] ${email}: ${link} (code ${code})`);
+    return;
+  }
+
+  await t.sendMail({
+    from: from(),
+    to: email,
+    subject: `${code} is your 8kount confirmation code`,
+    text: [
+      "Welcome to 8kount!",
+      "",
+      `Your confirmation code is ${code}.`,
+      "",
+      `Or confirm in the browser: ${link}`,
+      "",
+      "The code and link expire in 24 hours. If you didn't create an 8kount",
+      "account, you can ignore this email.",
+    ].join("\n"),
+    html: `
+      <div style="font-family:system-ui,sans-serif;max-width:480px;margin:0 auto">
+        <h2 style="color:#b89f00">Confirm your 8kount account</h2>
+        <p>Enter this code in the app:</p>
+        <p style="font-size:32px;font-weight:700;letter-spacing:8px">${code}</p>
+        <p>Or <a href="${link}">confirm your email in the browser</a>.</p>
+        <p style="color:#777;font-size:13px">
+          The code and link expire in 24 hours. If you didn't create an
+          8kount account, you can ignore this email.
+        </p>
+      </div>`,
+  });
+  console.log(`[verify-email] sent to ${email} via ${process.env.SMTP_HOST}`);
+}
