@@ -4,7 +4,7 @@ import bcrypt from "bcryptjs";
 import { pool } from "../db/pool.js";
 import { removeMemberFromGroupSessions } from "../sockets/websocket.js";
 import { requireAuth } from "../middleware/requireAuth.js";
-import { ROLE_RANK, atLeast } from "../middleware/groupRole.js";
+import { ROLE_RANK, atLeast, getGroupRole } from "../middleware/groupRole.js";
 
 export const groupRouter = Router();
 
@@ -284,6 +284,48 @@ groupRouter.post("/", async (req, res) => {
     res.status(500).json({ error: "Unable to create group." });
   } finally {
     client?.release();
+  }
+});
+
+//change a group's team colors (SCRUM-71); admins and the owner only
+groupRouter.patch("/:id", async (req, res) => {
+  const { primaryColor, secondaryColor } = req.body ?? {};
+
+  if (primaryColor === undefined && secondaryColor === undefined) {
+    return res.status(400).json({ error: "Nothing to update." });
+  }
+  for (const color of [primaryColor, secondaryColor]) {
+    if (color !== undefined && !COLOR_PATTERN.test(color)) {
+      return res.status(400).json({ error: "Group colors are invalid." });
+    }
+  }
+
+  try {
+    const role = await getGroupRole(req.params.id, req.user.id);
+    if (!atLeast(role, "admin")) {
+      return res.status(403).json({
+        error: "Only group admins can change the team colors.",
+      });
+    }
+
+    //COALESCE keeps whichever color was not sent
+    const { rows } = await pool.query(
+      `UPDATE groups g
+          SET primary_color = COALESCE($2, g.primary_color),
+              secondary_color = COALESCE($3, g.secondary_color)
+         FROM group_members gm
+        WHERE g.group_id = $1
+          AND gm.group_id = g.group_id
+          AND gm.user_id = $4
+        RETURNING g.group_id, g.name, g.is_public, g.owner_id,
+                  g.primary_color, g.secondary_color, g.created_at,
+                  gm.role, gm.joined_at`,
+      [req.params.id, primaryColor ?? null, secondaryColor ?? null, req.user.id]
+    );
+    res.json({ group: publicGroup(rows[0]) });
+  } catch (err) {
+    console.error("Unable to update group:", err);
+    res.status(500).json({ error: "Unable to update group." });
   }
 });
 

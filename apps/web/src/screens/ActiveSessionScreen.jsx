@@ -668,9 +668,9 @@ const activeSessionCss = `
     font-variant-numeric: tabular-nums;
   }
   .active-session-page .session-recording-start {
-    border-color: #ffc72c;
-    background: #ffc72c;
-    color: #111;
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-ink);
   }
   .active-session-page .session-recording-stop {
     border-color: #8c3030;

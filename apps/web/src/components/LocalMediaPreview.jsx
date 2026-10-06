@@ -180,9 +180,9 @@ const mediaCss = `
     margin-top: 1.2rem;
   }
   .media-permission .media-accept-button {
-    border-color: #ffc72c;
-    background: #ffc72c;
-    color: #0d0d0d;
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-ink);
   }
   .local-media {
     min-width: 0;

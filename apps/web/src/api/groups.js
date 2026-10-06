@@ -37,6 +37,15 @@ export async function createGroup(group) {
   return data.group;
 }
 
+//change a group's team colors (admins and the owner only)
+export async function updateGroupColors(id, { primaryColor, secondaryColor }) {
+  const data = await request(`/api/groups/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ primaryColor, secondaryColor }),
+  });
+  return data.group;
+}
+
 //search for groups by ID
 export async function searchGroups(query) {
   const data = await request(
