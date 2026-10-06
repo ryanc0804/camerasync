@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../api/groups_api.dart';
 import '../auth/auth_service.dart';
 import '../theme.dart';
+import '../widgets/create_group_dialog.dart';
 import '../widgets/empty_state.dart';
 import 'recordings_screen.dart';
 
@@ -147,6 +148,18 @@ class _GroupsScreenState extends State<GroupsScreen> {
     }
   }
 
+  Future<void> _createGroup() async {
+    final created = await showDialog<Group>(
+      context: context,
+      builder: (_) => CreateGroupDialog(groupsApi: _groupsApi),
+    );
+    if (created == null || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Created ${created.name}')),
+    );
+    await _loadGroups();
+  }
+
   @override
   Widget build(BuildContext context) {
     return RefreshIndicator(
@@ -168,7 +181,26 @@ class _GroupsScreenState extends State<GroupsScreen> {
             'Your groups let you share sessions and recordings with teammates.\nTap a group to view its sessions.',
             style: TextStyle(color: kMuted, height: 1.5),
           ),
-          const SizedBox(height: 20),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: _createGroup,
+              style: TextButton.styleFrom(padding: EdgeInsets.zero),
+              child: const Text.rich(
+                TextSpan(
+                  text: "Don't have a group? ",
+                  style: TextStyle(color: Colors.white),
+                  children: [
+                    TextSpan(
+                      text: 'Create one',
+                      style: TextStyle(color: kGold, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
 
           // Search bar
           Row(
@@ -221,10 +253,12 @@ class _GroupsScreenState extends State<GroupsScreen> {
           else if (_error != null)
             _Notice(message: _error!, actionLabel: 'Retry', onAction: _loadGroups)
           else if (_groups.isEmpty)
-            const EmptyState(
+            EmptyState(
               title: 'No groups yet',
               message: "Search for your team's group by its ID above and "
-                  'join it. Coaches create groups from the web dashboard.',
+                  'join it, or create a new one for your team.',
+              actionLabel: 'Create a group',
+              onAction: _createGroup,
             )
           else
             ..._groups.map((g) => _GroupCard(group: g, onOpen: () => _openGroup(g))).toList(),
