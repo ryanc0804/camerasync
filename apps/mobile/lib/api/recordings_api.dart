@@ -117,6 +117,7 @@ class SessionNote {
     required this.body,
     required this.videoTimeMs,
     required this.authorName,
+    this.canDelete = false,
   });
 
   final int id;
@@ -124,11 +125,16 @@ class SessionNote {
   final int videoTimeMs;
   final String authorName;
 
+  /// The server's verdict for the current user: their own note, or one by a
+  /// lower group role.
+  final bool canDelete;
+
   factory SessionNote.fromJson(Map<String, dynamic> json) => SessionNote(
         id: (json['id'] as num).toInt(),
         body: (json['body'] ?? '').toString(),
         videoTimeMs: (json['videoTimeMs'] as num?)?.toInt() ?? 0,
         authorName: (json['author'] ?? 'Unnamed member').toString(),
+        canDelete: json['canDelete'] == true,
       );
 }
 
@@ -172,6 +178,25 @@ class RecordingsApi {
     return notes
         .map((n) => SessionNote.fromJson(Map<String, dynamic>.from(n)))
         .toList();
+  }
+
+  /// Leaves a note [videoTimeMs] into the recording that started at
+  /// [startedAtMs]. Viewers get a 403 with the server's message.
+  Future<void> createSessionNote(
+    String id,
+    int startedAtMs,
+    String body,
+    int videoTimeMs,
+  ) async {
+    await _api.post('/api/recordings/sessions/$id/notes', {
+      'startedAt': startedAtMs,
+      'body': body,
+      'videoTimeMs': videoTimeMs,
+    });
+  }
+
+  Future<void> deleteSessionNote(String id, int noteId) async {
+    await _api.delete('/api/recordings/sessions/$id/notes/$noteId');
   }
 
   /// Turns a server-relative path like `/api/files/get/x.mp4` into a full URL.

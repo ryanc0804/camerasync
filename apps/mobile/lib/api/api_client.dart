@@ -72,6 +72,8 @@ class ApiClient {
   Future<dynamic> post(String path, [Map<String, dynamic>? body]) =>
       _send('POST', path, body);
 
+  Future<dynamic> delete(String path) => _send('DELETE', path);
+
   Future<dynamic> _send(
     String method,
     String path, [
@@ -93,6 +95,8 @@ class ApiClient {
               body: body == null ? null : jsonEncode(body),
             )
             .timeout(timeout),
+        'DELETE' =>
+          await http.delete(uri, headers: _headers()).timeout(timeout),
         _ => await http.get(uri, headers: _headers()).timeout(timeout),
       };
     } catch (_) {

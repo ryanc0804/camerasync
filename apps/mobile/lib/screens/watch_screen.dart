@@ -424,20 +424,63 @@ class _WatchScreenState extends State<WatchScreen> {
   }
 
   void _showNotes() {
+    final recording = _recording;
+    if (recording == null) return;
+    // Typing takes a while, so hold the picture still: a new comment is
+    // stamped with the moment on screen when the sheet opened.
+    if (_playing) _pause();
+    final at = _clock?.value.position ?? _position;
+
     showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: kGoldActive,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) => _NotesSheet(
         notes: _notes,
+        at: at,
+        onAdd: (body) => _addNote(recording, body, at),
+        onDelete: (note) => _deleteNote(recording, note),
         onSeek: (ms) {
           Navigator.of(context).pop();
           _seek(Duration(milliseconds: ms));
         },
       ),
     );
+  }
+
+  Future<List<SessionNote>> _addNote(
+    SessionRecording recording,
+    String body,
+    Duration at,
+  ) async {
+    await _recordings.createSessionNote(
+      widget.session.id,
+      recording.startedAtMs,
+      body,
+      at.inMilliseconds,
+    );
+    final notes = await _recordings.getSessionNotes(
+      widget.session.id,
+      recording.startedAtMs,
+    );
+    if (mounted && _recording == recording) setState(() => _notes = notes);
+    return notes;
+  }
+
+  Future<List<SessionNote>> _deleteNote(
+    SessionRecording recording,
+    SessionNote note,
+  ) async {
+    await _recordings.deleteSessionNote(widget.session.id, note.id);
+    final notes = [
+      for (final n in _notes)
+        if (n.id != note.id) n,
+    ];
+    if (mounted && _recording == recording) setState(() => _notes = notes);
+    return notes;
   }
 }
 
@@ -500,18 +543,87 @@ class _AngleTile extends StatelessWidget {
 }
 
 /// The comments drawer from the design, as a bottom sheet: each note shows
-/// the moment it refers to and jumps the players there when tapped.
-class _NotesSheet extends StatelessWidget {
-  const _NotesSheet({required this.notes, required this.onSeek});
+/// the moment it refers to and jumps the players there when tapped. The box
+/// at the bottom adds a note at [at], the paused position.
+class _NotesSheet extends StatefulWidget {
+  const _NotesSheet({
+    required this.notes,
+    required this.at,
+    required this.onAdd,
+    required this.onDelete,
+    required this.onSeek,
+  });
 
   final List<SessionNote> notes;
+  final Duration at;
+
+  /// Saves a note and returns the recording's refreshed notes.
+  final Future<List<SessionNote>> Function(String body) onAdd;
+  final Future<List<SessionNote>> Function(SessionNote note) onDelete;
   final ValueChanged<int> onSeek;
 
   @override
+  State<_NotesSheet> createState() => _NotesSheetState();
+}
+
+class _NotesSheetState extends State<_NotesSheet> {
+  late List<SessionNote> _notes = widget.notes;
+  final _text = TextEditingController();
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  /// Runs a save or delete, showing the server's message if it fails.
+  /// Returns whether it succeeded.
+  Future<bool> _run(Future<List<SessionNote>> Function() action) async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final notes = await action();
+      if (mounted) setState(() => _notes = notes);
+      return true;
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error =
+            e is ApiException ? e.message : 'Something went wrong. Try again.');
+      }
+      return false;
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _add() async {
+    final body = _text.text.trim();
+    if (body.isEmpty || _busy) return;
+    // On failure the text stays so it can be sent again.
+    if (await _run(() => widget.onAdd(body))) _text.clear();
+  }
+
+  Future<void> _delete(SessionNote note) async {
+    if (_busy) return;
+    await _run(() => widget.onDelete(note));
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final notes = _notes;
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+        // Keeps the comment box above the keyboard.
+        padding: EdgeInsets.fromLTRB(
+          20,
+          16,
+          20,
+          20 + MediaQuery.viewInsetsOf(context).bottom,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -540,8 +652,7 @@ class _NotesSheet extends StatelessWidget {
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 24),
                 child: Text(
-                  'No comments on this recording yet. Add them from the web '
-                  'while watching.',
+                  'No comments on this recording yet. Add the first one below.',
                   style: TextStyle(color: Colors.black54),
                 ),
               )
@@ -556,7 +667,7 @@ class _NotesSheet extends StatelessWidget {
                     final n = notes[i];
                     return ListTile(
                       contentPadding: EdgeInsets.zero,
-                      onTap: () => onSeek(n.videoTimeMs),
+                      onTap: () => widget.onSeek(n.videoTimeMs),
                       leading: Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 8,
@@ -582,10 +693,75 @@ class _NotesSheet extends StatelessWidget {
                         n.authorName,
                         style: const TextStyle(color: Colors.black54),
                       ),
+                      trailing: n.canDelete
+                          ? IconButton(
+                              onPressed: _busy ? null : () => _delete(n),
+                              tooltip: 'Delete comment',
+                              icon: const Icon(Icons.delete_outline),
+                              color: Colors.black87,
+                            )
+                          : null,
                     );
                   },
                 ),
               ),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  _error!,
+                  style: const TextStyle(color: Color(0xFFB3261E)),
+                ),
+              ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _text,
+                    enabled: !_busy,
+                    maxLength: 500,
+                    textInputAction: TextInputAction.send,
+                    onChanged: (_) => setState(() {}),
+                    onSubmitted: (_) => _add(),
+                    style: const TextStyle(color: Colors.black),
+                    cursorColor: Colors.black,
+                    decoration: InputDecoration(
+                      hintText: 'Comment at ${formatClock(widget.at)}',
+                      hintStyle: const TextStyle(color: Colors.black45),
+                      counterText: '',
+                      filled: true,
+                      fillColor: Colors.white,
+                      isDense: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  onPressed: _busy || _text.text.trim().isEmpty ? null : _add,
+                  tooltip: 'Post comment',
+                  style: IconButton.styleFrom(
+                    backgroundColor: Colors.black,
+                    foregroundColor: kGold,
+                    disabledBackgroundColor: Colors.black26,
+                  ),
+                  icon: _busy
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: kGold,
+                          ),
+                        )
+                      : const Icon(Icons.send),
+                ),
+              ],
+            ),
           ],
         ),
       ),
