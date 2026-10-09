@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../auth/auth_service.dart';
+import '../team_accent.dart';
 import '../theme.dart';
 import 'calendar_tab.dart';
 import 'home_tab.dart';
 import 'join_screen.dart';
 import 'groups_screen.dart';
+import 'settings_tab.dart';
 
 // Older imports pull the palette from this file; keep that working.
 export '../theme.dart';
@@ -38,7 +40,7 @@ class _HomeShellState extends State<HomeShell> {
         onSwitchTab: (i) => setState(() => _index = i),
       ),
       CalendarTab(auth: widget.auth),
-      _SettingsTab(auth: widget.auth),
+      SettingsTab(auth: widget.auth),
     ];
 
     return Scaffold(
@@ -57,7 +59,10 @@ class _HomeShellState extends State<HomeShell> {
   }
 }
 
-/// Rounded yellow bar that floats above the bottom edge.
+/// The floating tab bar, filled with the team color like the web sidebar: a
+/// pill with a thin lighter edge, and a darker capsule that slides to the
+/// selected tab. The capsule is wider than a tab and nearly as tall as the
+/// bar, so it reads as a capsule rather than a circle.
 class _PillNavBar extends StatelessWidget {
   const _PillNavBar({required this.index, required this.onChanged});
 
@@ -80,68 +85,84 @@ class _PillNavBar extends StatelessWidget {
     'Settings',
   ];
 
+  static const _height = 64.0;
+  static const _radius = BorderRadius.all(Radius.circular(_height / 2));
+  static const _inset = 5.0;
+
   @override
   Widget build(BuildContext context) {
+    final team = TeamAccent.of(context);
+    final fill = team.fill;
+    // Same hue, stepped toward the text color: light teams get a darker
+    // capsule, dark teams a lighter one. 8kount gold uses the design's own
+    // selected tint, as the web sidebar does.
+    final shade = team.ink == Colors.black ? Colors.black : Colors.white;
+    final capsule =
+        fill == kGold ? kGoldActive : Color.lerp(fill, shade, 0.22)!;
+    final edge = Color.lerp(fill, Colors.white, 0.35)!;
+
     return SafeArea(
       top: false,
-      child: Container(
-        margin: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-        height: 74,
-        decoration: BoxDecoration(
-          color: kGold,
-          borderRadius: BorderRadius.circular(37),
-        ),
-        // Clip so the sliding highlight can't spill past the rounded ends.
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(37),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+        child: Container(
+          height: _height,
+          decoration: BoxDecoration(
+            color: fill,
+            borderRadius: _radius,
+            border: Border.all(color: edge, width: 1.5),
+          ),
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final slotWidth = constraints.maxWidth / _items.length;
+              // Tabs are inset from the ends just enough that the capsule,
+              // 20% wider than a tab, stays centered on every icon including
+              // the first and last.
+              final slotWidth =
+                  (constraints.maxWidth - 2 * _inset) / (_items.length + 0.2);
+              final sidePadding = _inset + 0.1 * slotWidth;
+              final capsuleWidth = slotWidth * 1.2;
+              final left = sidePadding + index * slotWidth - 0.1 * slotWidth;
 
               return Stack(
                 children: [
-                  // A single highlight that travels to the selected slot,
-                  // rather than one per icon fading in place.
                   AnimatedPositioned(
                     duration: const Duration(milliseconds: 300),
                     curve: Curves.easeOutCubic,
-                    left: index * slotWidth,
-                    top: 0,
-                    bottom: 0,
-                    width: slotWidth,
-                    child: Center(
-                      child: Container(
-                        width: slotWidth - 16,
-                        height: 54,
-                        decoration: BoxDecoration(
-                          color: kGoldActive,
-                          borderRadius: BorderRadius.circular(27),
-                        ),
+                    left: left,
+                    top: _inset,
+                    bottom: _inset,
+                    width: capsuleWidth,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: capsule,
+                        borderRadius: _radius,
                       ),
                     ),
                   ),
-
-                  // Icons sit above the highlight.
-                  Row(
-                    children: List.generate(_items.length, (i) {
-                      return Expanded(
-                        child: Semantics(
-                          label: _labels[i],
-                          selected: i == index,
-                          button: true,
-                          child: InkWell(
-                            onTap: () => onChanged(i),
-                            child: Center(
-                              child: Icon(
-                                _items[i],
-                                size: 26,
-                                color: const Color(0xFF0D0D0D),
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: sidePadding),
+                    child: Row(
+                      children: List.generate(_items.length, (i) {
+                        final selected = i == index;
+                        return Expanded(
+                          child: Semantics(
+                            label: _labels[i],
+                            selected: selected,
+                            button: true,
+                            excludeSemantics: true,
+                            // No ripple: the sliding capsule is the feedback.
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: () => onChanged(i),
+                              child: Center(
+                                child:
+                                    Icon(_items[i], size: 28, color: team.ink),
                               ),
                             ),
                           ),
-                        ),
-                      );
-                    }),
+                        );
+                      }),
+                    ),
                   ),
                 ],
               );
@@ -152,65 +173,3 @@ class _PillNavBar extends StatelessWidget {
     );
   }
 }
-
-class _SettingsTab extends StatelessWidget {
-  const _SettingsTab({required this.auth});
-
-  final AuthService auth;
-
-  @override
-  Widget build(BuildContext context) {
-    final user = auth.user;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 24, 20, 110),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Settings',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 20),
-          if (user != null) ...[
-            _row('Name', user.name?.isNotEmpty == true ? user.name! : '—'),
-            _row('Email', user.email),
-            const SizedBox(height: 24),
-          ],
-          OutlinedButton.icon(
-            onPressed: auth.logout,
-            icon: const Icon(Icons.logout),
-            label: const Text('Log out'),
-            style: OutlinedButton.styleFrom(foregroundColor: kGold),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _row(String label, String value) => Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 70,
-              child: Text(
-                label,
-                style: const TextStyle(
-                  color: Color(0xFF8A8A8A),
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            Expanded(
-              child: Text(value, style: const TextStyle(color: Colors.white)),
-            ),
-          ],
-        ),
-      );
-}
-

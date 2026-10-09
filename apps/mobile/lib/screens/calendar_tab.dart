@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
+import '../team_accent.dart';
 import '../theme.dart';
 import '../widgets/empty_state.dart';
 
@@ -108,7 +109,7 @@ class _CalendarTabState extends State<CalendarTab> {
                         width: 10,
                         height: 10,
                         decoration: BoxDecoration(
-                          color: s.isActive ? kLiveRed : kGold,
+                          color: s.isActive ? kLiveRed : TeamAccent.of(context).accent,
                           shape: BoxShape.circle,
                         ),
                       ),
@@ -266,7 +267,7 @@ class _CalendarTabState extends State<CalendarTab> {
               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
               decoration: isToday
                   ? BoxDecoration(
-                      color: kGold,
+                      color: TeamAccent.of(context).fill,
                       borderRadius: BorderRadius.circular(6),
                     )
                   : null,
@@ -274,7 +275,7 @@ class _CalendarTabState extends State<CalendarTab> {
                 '${day.day}',
                 style: TextStyle(
                   color: isToday
-                      ? Colors.black
+                      ? TeamAccent.of(context).ink
                       : inMonth
                           ? Colors.white
                           : kFaint,
@@ -292,7 +293,7 @@ class _CalendarTabState extends State<CalendarTab> {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                 decoration: BoxDecoration(
-                  color: s.isActive ? kLiveRed : kGold,
+                  color: s.isActive ? kLiveRed : TeamAccent.of(context).fill,
                   borderRadius: BorderRadius.circular(5),
                 ),
                 child: Text(

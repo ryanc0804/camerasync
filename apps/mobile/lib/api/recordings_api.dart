@@ -13,6 +13,7 @@ class RecordingSession {
     this.scheduledAt,
     this.memberCount,
     this.totalRecordings,
+    this.createdBy,
   });
 
   final String id;
@@ -27,9 +28,14 @@ class RecordingSession {
   final int? memberCount;
   final int? totalRecordings;
 
+  /// Who scheduled or started it. They can end or cancel it, and so can the
+  /// group's admins and owner.
+  final int? createdBy;
+
   bool get isActive => status == 'active';
   bool get isScheduled => status == 'scheduled';
   bool get isComplete => status == 'complete';
+  bool get isCancelled => status == 'cancelled';
 
   factory RecordingSession.fromJson(Map<String, dynamic> json) =>
       RecordingSession(
@@ -44,6 +50,7 @@ class RecordingSession {
             : DateTime.tryParse(json['scheduledAt'].toString())?.toLocal(),
         memberCount: (json['memberCount'] as num?)?.toInt(),
         totalRecordings: (json['totalRecordings'] as num?)?.toInt(),
+        createdBy: (json['createdBy'] as num?)?.toInt(),
       );
 }
 
@@ -155,6 +162,55 @@ class RecordingsApi {
 
   /// Joins (or re-joins) a session, which also flips a scheduled session to
   /// active. Must succeed before the socket room will accept this user.
+  /// How many videos this account has uploaded, across all groups.
+  Future<int> getMyVideoCount() async {
+    final data = await _api.get('/api/recordings/my-video-count');
+    return ((data as Map)['count'] as num).toInt();
+  }
+
+  /// Schedule a session for one of the user's groups (admins and owner).
+  Future<RecordingSession> scheduleSession({
+    required String groupId,
+    required String name,
+    required DateTime scheduledAt,
+  }) async {
+    final data = await _api.post('/api/recordings/sessions', {
+      'groupId': groupId,
+      'name': name,
+      'scheduledAt': scheduledAt.toUtc().toIso8601String(),
+    });
+    return RecordingSession.fromJson(
+        Map<String, dynamic>.from((data as Map)['session'] as Map));
+  }
+
+  /// Start a session right now (admins and owner).
+  Future<RecordingSession> createLiveSession({
+    required String groupId,
+    required String name,
+  }) async {
+    final data = await _api.post('/api/recordings/sessions/live', {
+      'groupId': groupId,
+      'name': name,
+    });
+    return RecordingSession.fromJson(
+        Map<String, dynamic>.from((data as Map)['session'] as Map));
+  }
+
+  /// End a live session for everyone (its host, or a group admin).
+  Future<void> endSession(String id) async {
+    await _api.patch('/api/recordings/sessions/$id/end', const {});
+  }
+
+  /// Cancel a scheduled session (its creator, or a group admin).
+  Future<void> cancelSession(String id) async {
+    await _api.patch('/api/recordings/sessions/$id/cancel', const {});
+  }
+
+  /// Delete a finished session and its videos (group admins and owner).
+  Future<void> deleteSession(String id) async {
+    await _api.delete('/api/recordings/sessions/$id');
+  }
+
   Future<RecordingSession> joinSession(String id) async {
     final data = await _api.post('/api/recordings/sessions/$id/join');
     return RecordingSession.fromJson(

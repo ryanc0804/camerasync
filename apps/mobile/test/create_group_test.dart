@@ -78,7 +78,7 @@ void main() {
       'id': 'knightro',
       'name': 'Team Knightro',
       'isPublic': true,
-      'primaryColor': '#ffc72c',
+      'primaryColor': '#ead217',
     });
     expect(find.byType(Dialog), findsNothing);
     expect(find.text('Group ID: knightro'), findsOneWidget);

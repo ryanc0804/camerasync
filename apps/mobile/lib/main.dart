@@ -6,8 +6,12 @@ import 'config.dart';
 import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
 import 'screens/verify_email_screen.dart';
+import 'team_accent.dart';
 
 void main() {
+  // restoreSession reads the saved cookie through a plugin, which needs the
+  // binding; without this it fails and every launch starts signed out.
+  WidgetsFlutterBinding.ensureInitialized();
   final auth = AuthService(ApiClient(kServerUrl));
   // Fire-and-forget: the UI shows a spinner while `loading` is true.
   auth.restoreSession();
@@ -24,8 +28,7 @@ class CameraSyncApp extends StatelessWidget {
     return MaterialApp(
       title: '8kount',
       theme: ThemeData(
-        colorSchemeSeed: kGold,
-        brightness: Brightness.dark,
+        colorScheme: schemeFor(kGold),
         scaffoldBackgroundColor: kBackground,
         useMaterial3: true,
         inputDecorationTheme: const InputDecorationTheme(
@@ -33,6 +36,9 @@ class CameraSyncApp extends StatelessWidget {
           fillColor: Color(0xFF262626),
         ),
       ),
+      // Above the Navigator, so pushed screens and dialogs get the team
+      // color too.
+      builder: (context, child) => TeamAccentScope(auth: auth, child: child!),
       home: AuthGate(auth: auth),
     );
   }

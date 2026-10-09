@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../api/api_client.dart';
 import '../api/groups_api.dart';
+import '../team_accent.dart';
 import '../theme.dart';
 
 /// The "new group" overlay from the Create A Group design: name, ID,
@@ -83,10 +84,10 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text(
+            Text(
               'Create a group',
               style: TextStyle(
-                color: kGold,
+                color: TeamAccent.of(context).accent,
                 fontSize: 20,
                 fontWeight: FontWeight.w800,
               ),
@@ -124,7 +125,7 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
             ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              activeThumbColor: kGold,
+              activeThumbColor: TeamAccent.of(context).accent,
               title: const Text(
                 'Private group',
                 style: TextStyle(color: Colors.white, fontSize: 14),
@@ -198,8 +199,8 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
                 FilledButton(
                   onPressed: _submitting ? null : _submit,
                   style: FilledButton.styleFrom(
-                    backgroundColor: kGold,
-                    foregroundColor: kBackground,
+                    backgroundColor: TeamAccent.of(context).fill,
+                    foregroundColor: TeamAccent.of(context).ink,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10),
                     ),
@@ -260,7 +261,7 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: kGold, width: 1.5),
+                borderSide: BorderSide(color: TeamAccent.of(context).accent, width: 1.5),
               ),
             ),
           ),

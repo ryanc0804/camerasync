@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../team_accent.dart';
 import '../theme.dart';
 
 /// Shared empty / first-run card: what's missing, why, and the one action
@@ -51,8 +52,8 @@ class EmptyState extends StatelessWidget {
             FilledButton(
               onPressed: onAction,
               style: FilledButton.styleFrom(
-                backgroundColor: kGold,
-                foregroundColor: Colors.black,
+                backgroundColor: TeamAccent.of(context).fill,
+                foregroundColor: TeamAccent.of(context).ink,
                 shape: const StadiumBorder(),
                 padding:
                     const EdgeInsets.symmetric(horizontal: 22, vertical: 12),

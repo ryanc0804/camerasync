@@ -6,7 +6,7 @@ import 'package:camerasync_mobile/theme.dart';
 
 void main() {
   test('parses #rrggbb team colors and rejects anything else', () {
-    expect(parseHexColor('#ffc72c'), const Color(0xFFFFC72C));
+    expect(parseHexColor('#ead217'), const Color(0xFFEAD217));
     expect(parseHexColor('#7C3AED'), const Color(0xFF7C3AED));
     expect(parseHexColor('#fff'), isNull);
     expect(parseHexColor('gold'), isNull);
@@ -14,7 +14,7 @@ void main() {
   });
 
   test('puts black text on light colors and white on dark ones', () {
-    expect(inkOn(const Color(0xFFFFC72C)), Colors.black);
+    expect(inkOn(const Color(0xFFEAD217)), Colors.black);
     expect(inkOn(const Color(0xFF0EA5E9)), Colors.black);
     expect(inkOn(const Color(0xFF002D72)), Colors.white);
     expect(inkOn(const Color(0xFF7C3AED)), Colors.white);
@@ -35,8 +35,8 @@ void main() {
       'id': 'ucfcheer',
       'name': 'UCF Cheer',
       'isPublic': true,
-      'primaryColor': '#ffc72c',
+      'primaryColor': '#ead217',
     });
-    expect(group.primaryColor, '#ffc72c');
+    expect(group.primaryColor, '#ead217');
   });
 }
