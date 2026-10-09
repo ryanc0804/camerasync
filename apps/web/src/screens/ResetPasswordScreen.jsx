@@ -148,7 +148,7 @@ const styles = {
     margin: 0,
     fontSize: "1.8rem",
     textAlign: "center",
-    color: "#ffc72c",
+    color: "#ead217",
     letterSpacing: "0.5px",
   },
   subtitle: { margin: "0 0 0.5rem", textAlign: "center", color: "#999" },
@@ -199,8 +199,8 @@ const css = `
   }
   .cs-input::placeholder { color: #777; }
   .cs-input:focus {
-    border-color: #ffc72c;
-    box-shadow: 0 0 0 3px rgba(255,199,44,0.2);
+    border-color: #ead217;
+    box-shadow: 0 0 0 3px rgba(234,210,23,0.2);
   }
   .cs-button {
     font: inherit;
@@ -209,19 +209,19 @@ const css = `
     padding: 0.7rem;
     border: none;
     border-radius: 8px;
-    background: #ffc72c;
+    background: #ead217;
     color: #0d0d0d;
     cursor: pointer;
     transition: background 0.15s;
   }
-  .cs-button:hover:not(:disabled) { background: #ffd75e; }
+  .cs-button:hover:not(:disabled) { background: #f0df5d; }
   .cs-button:disabled { opacity: 0.5; cursor: default; }
   .cs-link {
     background: none;
     border: none;
     padding: 0;
     font: inherit;
-    color: #ffc72c;
+    color: #ead217;
     font-weight: 600;
     cursor: pointer;
     text-decoration: underline;

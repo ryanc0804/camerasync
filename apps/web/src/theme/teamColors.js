@@ -3,7 +3,7 @@
 // one of them), so group tiles and the themed sidebar never end up with
 // unreadable labels.
 export const TEAM_COLORS = [
-  { name: "Gold", hex: "#ffc72c" },
+  { name: "Gold", hex: "#ead217" },
   { name: "Orange", hex: "#f97316" },
   { name: "Red", hex: "#dc2626" },
   { name: "Maroon", hex: "#7f1d1d" },

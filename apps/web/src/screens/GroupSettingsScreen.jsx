@@ -7,8 +7,11 @@ import {
   getGroupMembers,
   getGroups,
   removeGroupMember,
-  setDefaultGroup,
+  deleteGroup,
+  leaveGroup,
+  transferGroup,
   updateGroupColor,
+  updateGroupDetails,
 } from "../api/groups.js";
 import { EmptyState } from "../components/EmptyState.jsx";
 import { TeamColorPicker } from "../components/TeamColorPicker.jsx";
@@ -24,13 +27,14 @@ const ROLE_LABEL = { admin: "an admin", member: "a member", viewer: "a viewer" }
 /// team color (admins and the owner), and its roster.
 export function GroupSettingsScreen() {
   const { id } = useParams();
-  const { user } = useAuth();
-  const { activeGroup, selectGroup, refresh: refreshTheme } = useGroupTheme();
+  const { user, updateProfile } = useAuth();
+  const { activeGroup, refresh: refreshTheme } = useGroupTheme();
   const navigate = useNavigate();
   const [group, setGroup] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [primaryError, setPrimaryError] = useState("");
+  const [savingPrimary, setSavingPrimary] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,13 +65,15 @@ export function GroupSettingsScreen() {
   const isPrimary = activeGroup?.id === group.id;
   const yourRole = isOwner ? "the owner" : ROLE_LABEL[group.role] ?? "a member";
 
-  const makePrimary = () => {
+  const makePrimary = async () => {
+    setSavingPrimary(true);
+    setPrimaryError("");
     try {
-      setDefaultGroup(user.id, group.id);
-      selectGroup(group.id);
-      setPrimaryError("");
-    } catch {
-      setPrimaryError("Could not save your primary group in this browser.");
+      await updateProfile({ primaryGroupId: group.id });
+    } catch (err) {
+      setPrimaryError(err.message);
+    } finally {
+      setSavingPrimary(false);
     }
   };
 
@@ -98,8 +104,9 @@ export function GroupSettingsScreen() {
         ) : (
           <>
             <p>Your primary group sets the app's color.</p>
-            <button type="button" className="gs-button gs-button-primary" onClick={makePrimary}>
-              Make {group.name} my primary group
+            <button type="button" className="gs-button gs-button-primary"
+              disabled={savingPrimary} onClick={makePrimary}>
+              {savingPrimary ? "Saving..." : `Make ${group.name} my primary group`}
             </button>
           </>
         )}
@@ -116,8 +123,224 @@ export function GroupSettingsScreen() {
         />
       )}
 
+      <InviteSection group={group} />
+
       <MembersSection group={group} isOwner={isOwner} />
+
+      {isOwner ? (
+        <OwnerSection
+          group={group}
+          onSaved={(updated) => setGroup((current) => ({ ...current, ...updated }))}
+          onGone={() => {
+            refreshTheme().catch(() => {});
+            navigate("/groups");
+          }}
+        />
+      ) : (
+        <LeaveSection
+          group={group}
+          onLeft={() => {
+            refreshTheme().catch(() => {});
+            navigate("/groups");
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/// The owner's controls: the group's name and privacy, handing the group to
+/// someone else (after which they can leave), and deleting it.
+function OwnerSection({ group, onSaved, onGone }) {
+  const { user } = useAuth();
+  const [name, setName] = useState(group.name);
+  const [isPublic, setIsPublic] = useState(group.isPublic);
+  const [password, setPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
+  const [members, setMembers] = useState([]);
+  const [newOwner, setNewOwner] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [dangerError, setDangerError] = useState("");
+
+  useEffect(() => {
+    getGroupMembers(group.id)
+      .then((loaded) => setMembers(loaded.filter((m) => m.id !== Number(user.id))))
+      .catch(() => {});
+  }, [group.id, user.id]);
+
+  const changed = name.trim() !== group.name || isPublic !== group.isPublic || password;
+
+  const saveDetails = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setSaved(false);
+    setError("");
+    try {
+      onSaved(await updateGroupDetails(group.id, { name: name.trim(), isPublic, password }));
+      setPassword("");
+      setSaved(true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handOver = async () => {
+    const member = members.find((m) => m.id === Number(newOwner));
+    if (!member) return;
+    if (!window.confirm(`Make ${member.name} the owner of ${group.name}? You'll stay on as an admin.`)) return;
+    setBusy(true);
+    setDangerError("");
+    try {
+      onSaved(await transferGroup(group.id, member.id));
+      setNewOwner("");
+    } catch (err) {
+      setDangerError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!window.confirm(`Delete ${group.name} with all of its sessions, recordings and comments? This can't be undone.`)) return;
+    setBusy(true);
+    setDangerError("");
+    try {
+      await deleteGroup(group.id);
+      onGone();
+    } catch (err) {
+      setDangerError(err.message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <section className="gs-card">
+        <h2>Group details</h2>
+        <form className="gs-form" onSubmit={saveDetails}>
+          <label>
+            Name
+            <input value={name} maxLength={100} required
+              onChange={(event) => { setName(event.target.value); setSaved(false); }} />
+          </label>
+          <label className="gs-check">
+            <input type="checkbox" checked={!isPublic}
+              onChange={(event) => { setIsPublic(!event.target.checked); setSaved(false); }} />
+            Private: people need a password to join
+          </label>
+          {!isPublic && (
+            <label>
+              {group.isPublic ? "Password" : "New password (leave blank to keep the current one)"}
+              <input type="password" value={password} required={group.isPublic}
+                onChange={(event) => { setPassword(event.target.value); setSaved(false); }} />
+            </label>
+          )}
+          {error && <p role="alert" className="gs-error">{error}</p>}
+          <div className="gs-actions">
+            {saved && !changed && <span className="gs-saved">Saved</span>}
+            <button type="submit" className="gs-button gs-button-primary" disabled={saving || !changed}>
+              {saving ? "Saving..." : "Save"}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section className="gs-card gs-danger-card">
+        <h2>Owner</h2>
+        <p>Hand the group to someone else. You'll stay on as an admin and can leave afterwards.</p>
+        <div className="gs-inline">
+          <select value={newOwner} onChange={(event) => setNewOwner(event.target.value)}
+            aria-label="New owner" disabled={busy || members.length === 0}>
+            <option value="">{members.length ? "Choose a member" : "No one else in the group"}</option>
+            {members.map((member) => (
+              <option key={member.id} value={member.id}>{member.name}</option>
+            ))}
+          </select>
+          <button type="button" className="gs-button" disabled={busy || !newOwner} onClick={handOver}>
+            Hand over
+          </button>
+        </div>
+        <p className="gs-spaced">Deleting the group removes every session, recording and comment in it.</p>
+        <button type="button" className="gs-button gs-button-danger" disabled={busy} onClick={remove}>
+          Delete group
+        </button>
+        {dangerError && <p role="alert" className="gs-error">{dangerError}</p>}
+      </section>
+    </>
+  );
+}
+
+/// The group's invite link, to copy or (where the browser can) share.
+function InviteSection({ group }) {
+  const [copied, setCopied] = useState(false);
+  const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
+  const message = `Join ${group.name} on 8kount`;
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(group.inviteUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      window.prompt("Copy this invite link:", group.inviteUrl);
+    }
+  };
+
+  const share = () => {
+    navigator.share({ title: message, text: message, url: group.inviteUrl }).catch(() => {});
+  };
+
+  return (
+    <section className="gs-card">
+      <h2>Invite people</h2>
+      <p>
+        Anyone with this link can join
+        {group.isPublic ? "." : " once they enter the group password."}
+      </p>
+      <div className="gs-inline">
+        <input className="gs-invite-link" value={group.inviteUrl} readOnly
+          aria-label="Invite link" onFocus={(event) => event.target.select()} />
+        <button type="button" className="gs-button gs-button-primary" onClick={copy}>
+          {copied ? "Copied" : "Copy link"}
+        </button>
+        {canShare && (
+          <button type="button" className="gs-button" onClick={share}>Share</button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function LeaveSection({ group, onLeft }) {
+  const [leaving, setLeaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const leave = async () => {
+    if (!window.confirm(`Leave ${group.name}? You'll need its ID${group.isPublic ? "" : " and password"} to join again.`)) return;
+    setLeaving(true);
+    setError("");
+    try {
+      await leaveGroup(group.id);
+      onLeft();
+    } catch (err) {
+      setError(err.message);
+      setLeaving(false);
+    }
+  };
+
+  return (
+    <section className="gs-card">
+      <h2>Leave group</h2>
+      <p>You'll stop seeing its sessions and recordings.</p>
+      <button type="button" className="gs-button gs-button-danger" disabled={leaving} onClick={leave}>
+        {leaving ? "Leaving..." : "Leave group"}
+      </button>
+      {error && <p role="alert" className="gs-error">{error}</p>}
+    </section>
   );
 }
 
@@ -180,11 +403,10 @@ function MembersSection({ group, isOwner }) {
 
   const isAdmin = members.find((member) => member.id === Number(user.id))?.role === "admin";
 
+  // A role change saves straight away (it's easy to undo); removing someone
+  // asks first.
   const updateMember = async (member, role) => {
-    const message = role
-      ? `Make ${member.name} ${ROLE_LABEL[role]}?`
-      : `Remove ${member.name} from this group?`;
-    if (!window.confirm(message)) return;
+    if (!role && !window.confirm(`Remove ${member.name} from this group?`)) return;
     setSaving(true);
     setActionError("");
     try {
@@ -218,38 +440,34 @@ function MembersSection({ group, isOwner }) {
           {actionError && <p role="alert" className="gs-error">{actionError}</p>}
           <ul className="gs-members">
             {members.slice(page * ROSTER_PAGE_SIZE, (page + 1) * ROSTER_PAGE_SIZE).map((member) => {
+              // The owner manages everyone else; admins manage members and
+              // viewers (the server enforces the same rule).
               const canManage = member.id !== group.owner &&
+                member.id !== Number(user.id) &&
                 (isOwner || (isAdmin && ["member", "viewer"].includes(member.role)));
-              // One step up / one step down the viewer < member < admin ladder.
-              const promoteTo = member.role === "viewer" ? "member" :
-                member.role === "member" ? "admin" : null;
-              const demoteTo = member.role === "admin" ? "member" :
-                member.role === "member" ? "viewer" : null;
               return (
                 <li key={member.id}>
-                  <span>
+                  <span className="gs-member-name">
                     {member.name}
-                    <span className="gs-role">
-                      {member.id === group.owner ? "Owner" :
-                        member.role === "admin" ? "Admin" :
-                        member.role === "viewer" ? "Viewer" : "Member"}
-                    </span>
+                    {member.id === group.owner && <span className="gs-role">Owner</span>}
                   </span>
-                  {canManage && (
+                  {canManage ? (
                     <span className="gs-member-actions">
-                      {promoteTo && (
-                        <button type="button" className="gs-button" disabled={saving}
-                          onClick={() => updateMember(member, promoteTo)}
-                          aria-label={`Make ${member.name} ${ROLE_LABEL[promoteTo]}`}>↑</button>
-                      )}
-                      {demoteTo && (
-                        <button type="button" className="gs-button" disabled={saving}
-                          onClick={() => updateMember(member, demoteTo)}
-                          aria-label={`Make ${member.name} ${ROLE_LABEL[demoteTo]}`}>↓</button>
-                      )}
-                      <button type="button" className="gs-button" disabled={saving}
+                      <select value={member.role} disabled={saving}
+                        aria-label={`Role for ${member.name}`}
+                        onChange={(event) => updateMember(member, event.target.value)}>
+                        <option value="admin">Admin</option>
+                        <option value="member">Member</option>
+                        <option value="viewer">Viewer</option>
+                      </select>
+                      <button type="button" className="gs-remove" disabled={saving}
                         aria-label={`Remove ${member.name} from group`}
-                        onClick={() => updateMember(member, null)}>×</button>
+                        title="Remove from group"
+                        onClick={() => updateMember(member, null)} />
+                    </span>
+                  ) : member.id !== group.owner && (
+                    <span className="gs-role">
+                      {member.role === "admin" ? "Admin" : member.role === "viewer" ? "Viewer" : "Member"}
                     </span>
                   )}
                 </li>
@@ -280,9 +498,7 @@ const css = `
   }
   .gs-banner h1 { margin: 0 0 6px; font-size: 1.8rem; overflow-wrap: anywhere; }
   .gs-banner p { margin: 0; opacity: 0.8; font-size: 0.9rem; }
-  .gs-card {
-    padding: 18px 20px; border: 1px solid #2a2a2a; border-radius: 12px; background: #1c1c1c;
-  }
+  .gs-card { padding: 18px 20px; border-radius: 14px; background: #151515; }
   .gs-card h2 { margin: 0 0 8px; font-size: 1.1rem; }
   .gs-card p { margin: 0 0 12px; color: #aaa; font-size: 0.9rem; line-height: 1.5; }
   .gs-button {
@@ -298,15 +514,47 @@ const css = `
   .gs-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 14px; }
   .gs-saved { color: #8bd48b; font-size: 0.85rem; }
   .gs-error { color: #ff8a80 !important; }
+  .gs-form { display: flex; flex-direction: column; gap: 12px; }
+  .gs-form label { display: flex; flex-direction: column; gap: 6px; color: #ddd; font-size: 0.85rem; font-weight: 600; }
+  .gs-form input:not([type=checkbox]), .gs-inline select {
+    box-sizing: border-box; padding: 8px 10px; border: 1px solid #3a3a3a; border-radius: 7px;
+    background: #262626; color: #f0f0f0; font: inherit;
+  }
+  .gs-form .gs-check { flex-direction: row; align-items: center; gap: 8px; font-weight: 500; }
+  .gs-check input { accent-color: var(--accent); width: 16px; height: 16px; }
+  .gs-inline { display: flex; flex-wrap: wrap; gap: 10px; }
+  .gs-inline select { flex: 1; min-width: 180px; }
+  .gs-invite-link {
+    flex: 1; min-width: 200px; box-sizing: border-box; padding: 8px 10px;
+    border: 1px solid #3a3a3a; border-radius: 7px; background: #262626;
+    color: #f0f0f0; font: inherit; font-size: 0.85rem;
+  }
+  .gs-spaced { margin-top: 18px !important; }
+  .gs-button-danger { border-color: #5a2a2a; background: #2a1414; color: #ff8a80; }
+  .gs-button-danger:hover { background: #3a1a1a; }
   .gs-members { list-style: none; margin: 0; padding: 0; }
   .gs-members li {
     display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
-    padding: 9px 0; border-top: 1px solid #2a2a2a; overflow-wrap: anywhere;
+    padding: 9px 0; border-top: 1px solid rgba(255,255,255,0.05); overflow-wrap: anywhere;
   }
   .gs-members li:first-child { border-top: none; }
   .gs-role { margin-left: 10px; color: #999; font-size: 0.8rem; }
-  .gs-member-actions { display: flex; gap: 6px; }
-  .gs-member-actions .gs-button { padding: 4px 10px; font-size: 0.8rem; }
+  .gs-member-actions { display: flex; align-items: center; gap: 10px; }
+  .gs-member-actions select {
+    padding: 5px 8px; border: 1px solid #3a3a3a; border-radius: 7px;
+    background: #262626; color: #f0f0f0; font: inherit; font-size: 0.85rem;
+  }
+  /* A plain red line, drawn rather than typed so it sits dead center. */
+  .gs-remove {
+    display: flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; padding: 0; border: none; border-radius: 7px;
+    background: transparent; cursor: pointer;
+  }
+  .gs-remove::before {
+    content: ""; width: 16px; height: 3px; border-radius: 2px; background: #e5484d;
+  }
+  .gs-remove:hover { background: rgba(229, 72, 77, 0.15); }
+  .gs-remove:disabled { opacity: 0.5; cursor: default; }
   .gs-pages { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 10px; font-size: 0.85rem; }
   @media (max-width: 600px) {
     .gs-banner { flex-direction: column; align-items: flex-start; }

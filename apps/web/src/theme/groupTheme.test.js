@@ -24,9 +24,9 @@ describe("themeFor", () => {
   });
 
   it("uses a readable color exactly as chosen", () => {
-    const theme = themeFor({ primaryColor: "#ffc72c" });
-    expect(theme["--brand"]).toBe("#ffc72c");
-    expect(theme["--accent"]).toBe("#ffc72c");
+    const theme = themeFor({ primaryColor: "#ead217" });
+    expect(theme["--brand"]).toBe("#ead217");
+    expect(theme["--accent"]).toBe("#ead217");
   });
 
   it("keeps a dark team color on the sidebar but lightens the accent", () => {
@@ -39,13 +39,13 @@ describe("themeFor", () => {
   });
 
   it("puts black text on the sidebar for a light team color", () => {
-    expect(themeFor({ primaryColor: "#ffc72c" })["--brand-ink"]).toBe("#000000");
+    expect(themeFor({ primaryColor: "#ead217" })["--brand-ink"]).toBe("#000000");
   });
 });
 
 describe("legibleOnDark", () => {
   it("leaves already-readable colors alone", () => {
-    expect(legibleOnDark("#ffc72c")).toBe("#ffc72c");
+    expect(legibleOnDark("#ead217")).toBe("#ead217");
   });
 
   it("makes every color readable on black, even pure black", () => {
@@ -57,8 +57,8 @@ describe("legibleOnDark", () => {
 
 describe("groupTile", () => {
   it("fills the tile with the team color and picks readable text", () => {
-    expect(groupTile({ primaryColor: "#ffc72c" })).toEqual({
-      fill: "#ffc72c", ink: "#000000", dark: false,
+    expect(groupTile({ primaryColor: "#ead217" })).toEqual({
+      fill: "#ead217", ink: "#000000", dark: false,
     });
     expect(groupTile({ primaryColor: "#1e3a8a" })).toEqual({
       fill: "#1e3a8a", ink: "#ffffff", dark: true,

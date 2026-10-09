@@ -60,6 +60,14 @@ export function AuthProvider({ children }) {
     return me;
   }, []);
 
+  // Settings: name and primary group live on the account, so the change
+  // shows up on every device.
+  const updateProfile = useCallback(async (changes) => {
+    const updated = await authApi.updateProfile(changes);
+    setUser(updated);
+    return updated;
+  }, []);
+
   const logout = useCallback(async () => {
     try {
       await authApi.logout();
@@ -78,6 +86,7 @@ export function AuthProvider({ children }) {
     logout,
     confirmEmail,
     refreshUser,
+    updateProfile,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

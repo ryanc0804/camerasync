@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes, useSearchParams } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
 
 import { AuthProvider, useAuth } from "./auth/AuthContext.jsx";
 import { AppLayout } from "./layouts/AppLayout.jsx";
@@ -16,10 +16,10 @@ import { ActiveSessionScreen } from "./screens/ActiveSessionScreen.jsx";
 import { CalendarScreen } from "./screens/CalendarScreen.jsx";
 import { HomeScreen } from "./screens/HomeScreen.jsx";
 import { GroupSettingsScreen } from "./screens/GroupSettingsScreen.jsx";
-import {
-  GroupsScreen,
-  SettingsScreen,
-} from "./screens/PlaceholderScreens.jsx";
+import { JoinGroupScreen } from "./screens/JoinGroupScreen.jsx";
+import { GroupsScreen } from "./screens/PlaceholderScreens.jsx";
+import { NotificationsScreen } from "./screens/NotificationsScreen.jsx";
+import { SettingsScreen } from "./screens/SettingsScreen.jsx";
 
 export function App() {
   return (
@@ -55,23 +55,20 @@ function Root() {
       <Route path="/forgot-password" element={<ForgotPasswordScreen />} />
       <Route path="/verify-email" element={<VerifyEmailLinkRoute />} />
 
-      <Route
-        path="/login"
-        element={isAuthenticated ? <Navigate to="/" replace /> : <AuthScreen />}
-      />
+      <Route path="/login" element={<LoginRoute />} />
 
       {/* Everything inside the layout requires a session. */}
-      <Route
-        element={isAuthenticated ? <AppLayout /> : <Navigate to="/login" replace />}
-      >
+      <Route element={<SignedInOnly />}>
         <Route path="/" element={<HomeScreen />} />
         <Route path="/groups" element={<GroupsScreen />} />
         <Route path="/groups/:id" element={<GroupSettingsScreen />} />
+        <Route path="/join/:id" element={<JoinGroupScreen />} />
         <Route path="/record" element={<RecordScreen />} />
         <Route path="/record/:sessionId" element={<ActiveSessionScreen />} />
         <Route path="/watch" element={<WatchScreen />} />
         <Route path="/watch/:sessionId" element={<PlaybackScreen />} />
         <Route path="/calendar" element={<CalendarScreen />} />
+        <Route path="/notifications" element={<NotificationsScreen />} />
         <Route path="/settings" element={<SettingsScreen />} />
       </Route>
 
@@ -81,6 +78,26 @@ function Root() {
 }
 
 // Pulls ?token= out of the reset link's URL.
+// Signed-out visits to an app page (an invite link, say) go to sign-in and
+// come back afterwards.
+function SignedInOnly() {
+  const { isAuthenticated } = useAuth();
+  const location = useLocation();
+  if (isAuthenticated) return <AppLayout />;
+  const next = encodeURIComponent(location.pathname + location.search);
+  return <Navigate to={`/login?next=${next}`} replace />;
+}
+
+function LoginRoute() {
+  const { isAuthenticated } = useAuth();
+  const [params] = useSearchParams();
+  const next = params.get("next") ?? "";
+  // Only pages inside this app, so a crafted link can't bounce people to
+  // another site after they sign in.
+  const target = next.startsWith("/") && !next.startsWith("//") ? next : "/";
+  return isAuthenticated ? <Navigate to={target} replace /> : <AuthScreen />;
+}
+
 function ResetPasswordRoute() {
   const [params] = useSearchParams();
   return <ResetPasswordScreen token={params.get("token")} />;

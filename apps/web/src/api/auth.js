@@ -9,6 +9,8 @@
 //   POST /api/auth/login    { email, password }       -> { user }
 //   GET  /api/auth/me                                 -> { user } | 401
 //   POST /api/auth/logout                             -> 204
+//   PATCH /api/auth/me   { name?, primaryGroupId? }   -> { user }
+//   POST /api/auth/change-password { currentPassword, newPassword } -> 204
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
 
@@ -123,4 +125,19 @@ export async function verifyEmail({ code, token }) {
 // Email a fresh confirmation code to the signed-in, unconfirmed user.
 export async function resendVerification() {
   return request("/api/auth/resend-verification", { method: "POST" });
+}
+
+// Settings page: change the display name and/or the primary group (the group
+// whose color the apps take; null falls back to the first joined group).
+export async function updateProfile(changes) {
+  const data = await request("/api/auth/me", { method: "PATCH", body: changes });
+  return data.user;
+}
+
+// Change the password while signed in; other devices get signed out.
+export async function changePassword({ currentPassword, newPassword }) {
+  return request("/api/auth/change-password", {
+    method: "POST",
+    body: { currentPassword, newPassword },
+  });
 }

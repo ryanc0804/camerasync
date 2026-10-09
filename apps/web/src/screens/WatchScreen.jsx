@@ -4,7 +4,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
 
-import { getDefaultGroup, getGroups } from "../api/groups.js";
+import { getGroups, getPrimaryGroupId } from "../api/groups.js";
 import { deleteSession, getSessions } from "../api/recordings.js";
 
 function sessionLabel(session) {
@@ -35,7 +35,7 @@ export function WatchScreen() {
         setGroupId(
           requested && loadedGroups.some((group) => group.id === requested)
             ? requested
-            : getDefaultGroup(user.id, loadedGroups)
+            : getPrimaryGroupId(user, loadedGroups)
         );
         setSessions(
           loadedSessions
@@ -115,7 +115,8 @@ export function WatchScreen() {
                     <span>Total Recordings: {session.totalRecordings ?? "—"}</span>
                   </span>
                 </button>
-                {group.owner === Number(user.id) && (
+                {/* Admins and the owner (who keeps an admin role) can delete. */}
+                {group.role === "admin" && (
                   <button type="button" className="watch-delete"
                     aria-label={`Delete ${sessionLabel(session)}`}
                     title="Delete session and videos"

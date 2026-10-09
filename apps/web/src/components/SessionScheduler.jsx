@@ -67,6 +67,12 @@ export function SessionScheduler() {
     () => groups.filter((group) => group.role === "admin"),
     [groups]
   );
+
+  // A session's creator can end or cancel it, and so can its group's admins
+  // and owner (the owner keeps an admin role), for when the host is absent.
+  const canManageSession = (session) =>
+    session.createdBy === user?.id ||
+    groups.some((group) => group.id === session.groupId && group.role === "admin");
   const sortedSessions = useMemo(
     () => sortSessions(sessions, currentTime),
     [sessions, currentTime]
@@ -471,11 +477,11 @@ export function SessionScheduler() {
 
                 {(session.status === "active" ||
                   (session.status === "scheduled" &&
-                    session.createdBy === user?.id) ||
+                    canManageSession(session)) ||
                   session.isJoined ||
                   canJoin(session)) && (
                   <div className="session-card-actions">
-                    {session.createdBy === user?.id &&
+                    {canManageSession(session) &&
                       session.status === "scheduled" && (
                         <button
                           className="session-cancel-button"
@@ -515,7 +521,7 @@ export function SessionScheduler() {
                       </button>
                     ) : null}
 
-                    {session.createdBy === user?.id &&
+                    {canManageSession(session) &&
                       session.status === "active" && (
                         <button
                           className="session-end-button"

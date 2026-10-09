@@ -17,12 +17,12 @@ const MIN_ACCENT_CONTRAST = 4.5;
 
 /// 8kount branding, used when no group is selected.
 export const DEFAULT_THEME = {
-  "--brand": "#f2cb05",
+  "--brand": "#ead217",
   "--brand-ink": "#000000",
-  "--brand-active": "#ffe870",
-  "--accent": "#ffc72c",
+  "--brand-active": "#ffeb4c",
+  "--accent": "#ead217",
   "--accent-ink": "#0d0d0d",
-  "--accent-hover": "#ffd75e",
+  "--accent-hover": "#f0df5d",
 };
 
 const HEX = /^#([0-9a-f]{6})$/i;
