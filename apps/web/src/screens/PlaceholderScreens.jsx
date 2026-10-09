@@ -4,17 +4,18 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext.jsx";
 import {
   createGroup,
-  changeGroupMemberRole,
-  removeGroupMember,
   getGroups,
   getDefaultGroup,
-  getGroupMembers,
   joinGroup,
+  setDefaultGroup,
   searchGroups,
-  updateGroupColors,
 } from "../api/groups.js";
 import { EmptyState } from "../components/EmptyState.jsx";
+import { GearIcon } from "../components/Sidebar.jsx";
+import { TeamColorPicker } from "../components/TeamColorPicker.jsx";
 import { useGroupTheme } from "../theme/GroupThemeContext.jsx";
+import { groupTile } from "../theme/groupTheme.js";
+import { DEFAULT_TEAM_COLOR } from "../theme/teamColors.js";
 
 // Shells for the sections that don't have backing APIs yet. Each states what
 // it will hold so the nav is honest about what's built vs. planned.
@@ -35,219 +36,37 @@ const styles = {
   },
 };
 
-// Admin-only editor for a group's two team colors (SCRUM-71). Saving reports
-// the updated group up so the list and the app theme can refresh.
-function GroupColorEditor({ group, onSaved, onCancel }) {
-  const [primaryColor, setPrimaryColor] = useState(group.primaryColor);
-  const [secondaryColor, setSecondaryColor] = useState(group.secondaryColor);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-
-  const save = async (event) => {
-    event.preventDefault();
-    setSaving(true);
-    setError("");
-    try {
-      onSaved(await updateGroupColors(group.id, { primaryColor, secondaryColor }));
-    } catch (err) {
-      setError(err.message);
-      setSaving(false);
-    }
-  };
-
-  return (
-    <form className="group-roster-content group-color-editor" onSubmit={save}>
-      {error && <p role="alert" className="group-error">{error}</p>}
-      <div className="group-colors">
-        <label className="group-field">
-          Primary color
-          <input type="color" value={primaryColor}
-            onChange={(event) => setPrimaryColor(event.target.value)} />
-        </label>
-        <label className="group-field">
-          Secondary color
-          <input type="color" value={secondaryColor}
-            onChange={(event) => setSecondaryColor(event.target.value)} />
-        </label>
-      </div>
-      <p className="group-color-hint">
-        Everyone whose default group is {group.name} sees the app in these colors.
-      </p>
-      <div className="group-actions">
-        <button type="button" className="group-button" onClick={onCancel} disabled={saving}>
-          Cancel
-        </button>
-        <button type="submit" className="group-button group-button-primary" disabled={saving}>
-          {saving ? "Saving..." : "Save colors"}
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function GroupRoster({ group, onUpdated }) {
-  const { user } = useAuth();
+// One group on the Groups list: filled with its team color, with its
+// recordings and a gear that opens the group's settings page.
+function GroupTile({ group, isPrimary }) {
   const navigate = useNavigate();
-  const [saving, setSaving] = useState(false);
-  const [actionError, setActionError] = useState("");
-  const [open, setOpen] = useState(false);
-  const [editingColors, setEditingColors] = useState(false);
-  const [members, setMembers] = useState([]);
-  const [page, setPage] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    setLoading(true);
-    setError("");
-    getGroupMembers(group.id)
-      .then((loadedMembers) => {
-        if (!cancelled) setMembers(loadedMembers);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err.message);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [open, group.id]);
-
-  const isOwner = Number(user.id) === group.owner;
-  const isAdmin = members.find((member) => member.id === Number(user.id))?.role === "admin";
-  // The group list carries the user's own role, so this works before the
-  // roster has been opened.
-  const canEditColors = isOwner || group.role === "admin";
-
-  const roleLabel = { admin: "an admin", member: "a member", viewer: "a viewer" };
-
-  const updateMember = async (member, role) => {
-    const message = role
-      ? `Make ${member.name} ${roleLabel[role]}?`
-      : `Remove ${member.name} from this group?`;
-    if (!window.confirm(message)) return;
-    setSaving(true);
-    setActionError("");
-    try {
-      if (role) {
-        await changeGroupMemberRole(group.id, member.id, role);
-        setMembers((current) => current.map((item) =>
-          item.id === member.id ? { ...item, role } : item
-        ));
-      } else {
-        await removeGroupMember(group.id, member.id);
-        const remaining = members.filter((item) => item.id !== member.id);
-        setMembers(remaining);
-        setPage(Math.min(page, Math.max(0, Math.ceil(remaining.length / 30) - 1)));
-      }
-    } catch (err) {
-      setActionError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
+  const tile = groupTile(group);
 
   return (
-    <div className="group-row group-roster-box">
-      <div className="group-roster-header">
-        <span className="group-colors-icon" style={{
-          background: `linear-gradient(135deg, ${group.primaryColor} 0 50%, ${group.secondaryColor} 50% 100%)`,
-        }} />
-        <span className="group-roster-name">{group.name}</span>
-        <button type="button" className="group-button"
-          onClick={() => navigate(`/watch?group=${encodeURIComponent(group.id)}`)}>
-          Recordings
-        </button>
-        {canEditColors && (
-          <button type="button" className="group-button"
-            aria-expanded={editingColors}
-            onClick={() => setEditingColors(!editingColors)}>
-            Colors
-          </button>
-        )}
-        <button type="button" className="group-button"
-          aria-expanded={open} aria-controls={`roster-${group.id}`}
-          onClick={() => { setOpen(!open); setPage(0); }}>
-          Roster
-        </button>
-      </div>
-      {editingColors && (
-        <GroupColorEditor
-          group={group}
-          onCancel={() => setEditingColors(false)}
-          onSaved={(updated) => {
-            setEditingColors(false);
-            onUpdated(updated);
-          }}
-        />
-      )}
-      {open && (
-        <div id={`roster-${group.id}`} className="group-roster-content">
-          {loading ? <p>Loading roster...</p> : error ? (
-            <p role="alert" className="group-error">{error}</p>
-          ) : (
-            <>
-              {actionError && <p role="alert" className="group-error">{actionError}</p>}
-              <ul>
-                {members.slice(page * 30, (page + 1) * 30).map((member) => {
-                  const canManage = member.id !== group.owner &&
-                    (isOwner || (isAdmin && ["member", "viewer"].includes(member.role)));
-                  // One step up / one step down the viewer < member < admin ladder.
-                  const promoteTo = member.role === "viewer" ? "member" :
-                    member.role === "member" ? "admin" : null;
-                  const demoteTo = member.role === "admin" ? "member" :
-                    member.role === "member" ? "viewer" : null;
-                  return (
-                    <li key={member.id} className="group-roster-member">
-                      <span>
-                        {member.name}{member.id === group.owner ? <> <em>(owner)</em></> :
-                          member.role === "admin" ? <> <em>(admin)</em></> :
-                          member.role === "viewer" ? <> <em>(viewer)</em></> : null}
-                      </span>
-                      {canManage && (
-                        <span className="group-roster-actions">
-                          {promoteTo && (
-                            <button type="button" className="group-button" disabled={saving}
-                              onClick={() => updateMember(member, promoteTo)}
-                              aria-label={`Make ${member.name} ${roleLabel[promoteTo]}`}>↑</button>
-                          )}
-                          {demoteTo && (
-                            <button type="button" className="group-button" disabled={saving}
-                              onClick={() => updateMember(member, demoteTo)}
-                              aria-label={`Make ${member.name} ${roleLabel[demoteTo]}`}>↓</button>
-                          )}
-                          <button type="button" className="group-button" disabled={saving}
-                            aria-label={`Remove ${member.name} from group`}
-                            onClick={() => updateMember(member, null)}>×</button>
-                        </span>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-              {members.length > 30 && (
-                <div className="group-roster-pages">
-                  <button type="button" className="group-button" aria-label="Previous roster page"
-                    disabled={page === 0} onClick={() => setPage(page - 1)}>‹</button>
-                  <span>{page + 1} / {Math.ceil(members.length / 30)}</span>
-                  <button type="button" className="group-button" aria-label="Next roster page"
-                    disabled={(page + 1) * 30 >= members.length}
-                    onClick={() => setPage(page + 1)}>›</button>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
+    <div
+      className={`group-row${tile ? ` group-tile ${tile.dark ? "group-tile-dark" : "group-tile-light"}` : ""}`}
+      style={tile ? { background: tile.fill, color: tile.ink, borderColor: tile.fill } : undefined}
+    >
+      <span className="group-tile-name">
+        {group.name}
+        {isPrimary && <span className="group-tile-badge">Primary</span>}
+      </span>
+      <button type="button" className="group-button"
+        onClick={() => navigate(`/watch?group=${encodeURIComponent(group.id)}`)}>
+        Recordings
+      </button>
+      <button type="button" className="group-button group-gear"
+        aria-label={`Settings for ${group.name}`} title="Group settings"
+        onClick={() => navigate(`/groups/${encodeURIComponent(group.id)}`)}>
+        <GearIcon size={20} />
+      </button>
     </div>
   );
 }
 
 export function GroupsScreen() {
   const { user } = useAuth();
-  const { refresh: refreshTheme } = useGroupTheme();
+  const { activeGroup, refresh: refreshTheme } = useGroupTheme();
   const [openPanel, setOpenPanel] = useState(null);
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -266,8 +85,7 @@ export function GroupsScreen() {
     id: "",
     isPublic: true,
     password: "",
-    primaryColor: "#ffc72c",
-    secondaryColor: "#0d0d0d",
+    primaryColor: DEFAULT_TEAM_COLOR,
   });
 
   useEffect(() => {
@@ -342,8 +160,7 @@ export function GroupsScreen() {
         id: "",
         isPublic: true,
         password: "",
-        primaryColor: "#ffc72c",
-        secondaryColor: "#0d0d0d",
+        primaryColor: DEFAULT_TEAM_COLOR,
       });
       setOpenPanel(null);
     } catch (err) {
@@ -403,15 +220,10 @@ export function GroupsScreen() {
           ) : (
             <div className="group-list">
               {groups.map((group) => (
-                <GroupRoster
+                <GroupTile
                   key={group.id}
                   group={group}
-                  onUpdated={(updated) => {
-                    setGroups((current) => current.map((item) =>
-                      item.id === updated.id ? { ...item, ...updated } : item
-                    ));
-                    refreshTheme().catch(() => {});
-                  }}
+                  isPrimary={activeGroup?.id === group.id}
                 />
               ))}
             </div>
@@ -493,27 +305,12 @@ export function GroupsScreen() {
                   </label>
                 </div>
 
-                <div className="group-colors">
-                  <label className="group-field">
-                    Primary color
-                    <input
-                      type="color"
-                      value={form.primaryColor}
-                      onChange={(event) =>
-                        updateForm("primaryColor", event.target.value)
-                      }
-                    />
-                  </label>
-                  <label className="group-field">
-                    Secondary color
-                    <input
-                      type="color"
-                      value={form.secondaryColor}
-                      onChange={(event) =>
-                        updateForm("secondaryColor", event.target.value)
-                      }
-                    />
-                  </label>
+                <div className="group-field">
+                  Team color
+                  <TeamColorPicker
+                    value={form.primaryColor}
+                    onChange={(hex) => updateForm("primaryColor", hex)}
+                  />
                 </div>
 
                 <div className="group-actions">
@@ -708,24 +505,20 @@ const groupsCss = `
     background: #242424;
     font-weight: 600;
   }
-  .group-roster-box { display: block; }
-  .group-roster-header { display: flex; align-items: center; gap: 12px; }
-  .group-roster-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-  .group-roster-content { margin-top: 12px; border-top: 1px solid #3a3a3a; }
-  .group-roster-content ul { list-style: none; padding: 0; margin: 8px 0; }
-  .group-roster-content li { padding: 8px 0; font-weight: 400; overflow-wrap: anywhere; }
-  .group-roster-member { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
-  .group-roster-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-  .group-roster-actions button { padding: 4px 8px; font-size: 0.75rem; }
-  .group-roster-pages { display: flex; align-items: center; justify-content: flex-end; gap: 10px; font-size: 0.8rem; }
-  .group-roster-pages button { padding: 3px 10px; }
-  .group-colors-icon {
-    width: 34px;
-    height: 34px;
-    flex: 0 0 34px;
-    border: 1px solid #555;
-    border-radius: 50%;
+  .group-tile-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .group-tile-badge {
+    margin-left: 8px; padding: 2px 8px; border-radius: 999px;
+    background: rgba(127,127,127,0.25); font-size: 0.7rem; font-weight: 700;
+    vertical-align: middle;
   }
+  .group-gear { display: flex; align-items: center; justify-content: center; padding: 7px 9px; }
+  /* A colored tile keeps its buttons readable on any team color by tinting
+     them toward the tile's own text color. */
+  .group-tile .group-button { color: inherit; }
+  .group-tile-light .group-button { background: rgba(0,0,0,0.12); border-color: rgba(0,0,0,0.3); }
+  .group-tile-light .group-button:hover { background: rgba(0,0,0,0.22); }
+  .group-tile-dark .group-button { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.35); }
+  .group-tile-dark .group-button:hover { background: rgba(255,255,255,0.24); }
   .group-error {
     margin: 0 0 14px;
     padding: 9px 11px;
@@ -876,27 +669,6 @@ const groupsCss = `
   .group-join-password input:focus {
     border-color: var(--accent);
   }
-  .group-colors {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 14px;
-  }
-  .group-color-editor { padding-top: 14px; }
-  .group-color-hint {
-    margin: 0 0 12px;
-    color: #999;
-    font-size: 0.8rem;
-    font-weight: 400;
-  }
-  .group-field input[type="color"] {
-    width: 100%;
-    height: 38px;
-    padding: 3px;
-    border: 1px solid #3a3a3a;
-    border-radius: 7px;
-    background: #262626;
-    cursor: pointer;
-  }
   .group-actions {
     display: flex;
     justify-content: flex-end;
@@ -948,7 +720,7 @@ export function SettingsScreen() {
   const { user } = useAuth();
   const { selectGroup } = useGroupTheme();
   const [groups, setGroups] = useState([]);
-  const [defaultGroup, setDefaultGroup] = useState("");
+  const [primaryGroup, setPrimaryGroup] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -956,20 +728,20 @@ export function SettingsScreen() {
     getGroups()
       .then((loadedGroups) => {
         setGroups(loadedGroups);
-        setDefaultGroup(getDefaultGroup(user.id, loadedGroups));
+        setPrimaryGroup(getDefaultGroup(user.id, loadedGroups));
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, [user.id]);
 
-  const changeDefaultGroup = (event) => {
+  const changePrimaryGroup = (event) => {
     try {
-      localStorage.setItem(`defaultGroup:${user.id}`, event.target.value);
-      setDefaultGroup(event.target.value);
+      setDefaultGroup(user.id, event.target.value);
+      setPrimaryGroup(event.target.value);
       selectGroup(event.target.value);
       setError("");
     } catch {
-      setError("Could not save your default group in this browser.");
+      setError("Could not save your primary group in this browser.");
     }
   };
 
@@ -983,22 +755,22 @@ export function SettingsScreen() {
         <dd style={{ margin: 0 }}>{user?.email}</dd>
       </dl>
       <div style={styles.note}>
-        <label htmlFor="default-group" style={{ display: "block", marginBottom: 10 }}>
-          Default group
+        <label htmlFor="primary-group" style={{ display: "block", marginBottom: 10 }}>
+          Primary group
         </label>
         <p style={{ margin: "0 0 10px", fontSize: "0.8rem", color: "#999" }}>
-          The app uses this group's team colors.
+          The app uses this group's team color. You can also set it from a group's settings page.
         </p>
         {loading ? <p>Loading groups...</p> : groups.length === 0 ? (
           <p>No groups joined.</p>
-        ) : groups.length === 1 && groups[0].id === defaultGroup ? (
+        ) : groups.length === 1 && groups[0].id === primaryGroup ? (
           <strong>{groups[0].name}</strong>
         ) : (
-          <select id="default-group" value={defaultGroup} onChange={changeDefaultGroup}
+          <select id="primary-group" value={primaryGroup} onChange={changePrimaryGroup}
             style={{ width: "100%", padding: "0.5rem", borderRadius: 6,
               background: "#262626", color: "#f0f0f0", border: "1px solid #555", font: "inherit" }}>
-            {!groups.some((group) => group.id === defaultGroup) && (
-              <option value={defaultGroup} disabled>Choose a default group</option>
+            {!groups.some((group) => group.id === primaryGroup) && (
+              <option value={primaryGroup} disabled>Choose a primary group</option>
             )}
             {groups.map((group) => (
               <option key={group.id} value={group.id}>{group.name}</option>

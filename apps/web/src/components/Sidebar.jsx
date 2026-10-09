@@ -79,12 +79,12 @@ function CalendarIcon() {
   );
 }
 
-function GearIcon() {
+export function GearIcon({ size = 28 }) {
   return (
     <svg
       viewBox="0 0 24 24"
-      width="28"
-      height="28"
+      width={size}
+      height={size}
       fill="none"
       stroke="currentColor"
       strokeWidth="2"
@@ -162,8 +162,6 @@ const styles = {
     width: SIDEBAR_WIDTH,
     background: "var(--brand)",
     color: "var(--brand-ink)",
-    // The group's secondary color as a two-tone edge; transparent for 8kount.
-    borderRight: "4px solid var(--brand-edge)",
     display: "flex",
     flexDirection: "column",
     fontFamily: "system-ui, sans-serif",

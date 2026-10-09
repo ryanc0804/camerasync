@@ -30,7 +30,7 @@ export function GroupThemeProvider({ children }) {
 
   useEffect(() => {
     applyTheme(themeFor(activeGroup));
-  }, [activeGroup?.id, activeGroup?.primaryColor, activeGroup?.secondaryColor]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeGroup?.id, activeGroup?.primaryColor]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Signing out unmounts the app shell; don't leave a team's colors behind on
   // the sign-in screen.

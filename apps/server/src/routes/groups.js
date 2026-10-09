@@ -5,13 +5,13 @@ import { pool } from "../db/pool.js";
 import { removeMemberFromGroupSessions } from "../sockets/websocket.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { ROLE_RANK, atLeast, getGroupRole } from "../middleware/groupRole.js";
+import { DEFAULT_TEAM_COLOR, teamColor } from "../groups/teamColors.js";
 
 export const groupRouter = Router();
 
 //group IDs can only use letters and numbers
 const GROUP_ID_PATTERN = /^[A-Za-z0-9]+$/;
-//colors use a standard six-digit hex value
-const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+const COLOR_ERROR = "Pick one of the team colors.";
 
 //shape a group before sending it to the frontend
 function publicGroup(row) {
@@ -21,7 +21,6 @@ function publicGroup(row) {
     isPublic: row.is_public,
     owner: Number(row.owner_id),
     primaryColor: row.primary_color,
-    secondaryColor: row.secondary_color,
     createdAt: row.created_at,
     joinedAt: row.joined_at,
     role: row.role,
@@ -46,7 +45,7 @@ groupRouter.get("/", async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT g.group_id, g.name, g.is_public, g.owner_id,
-              g.primary_color, g.secondary_color, g.created_at, gm.role, gm.joined_at
+              g.primary_color, g.created_at, gm.role, gm.joined_at
          FROM groups g
          JOIN group_members gm ON gm.group_id = g.group_id
         WHERE gm.user_id = $1
@@ -207,8 +206,7 @@ groupRouter.post("/", async (req, res) => {
   const name = String(req.body?.name ?? "").trim();
   const isPublic = req.body?.isPublic;
   const password = String(req.body?.password ?? "");
-  const primaryColor = req.body?.primaryColor ?? "#ffc72c";
-  const secondaryColor = req.body?.secondaryColor ?? "#0d0d0d";
+  const primaryColor = teamColor(req.body?.primaryColor ?? DEFAULT_TEAM_COLOR);
 
   if (!name) {
     return res.status(400).json({ error: "Group name is required." });
@@ -226,11 +224,8 @@ groupRouter.post("/", async (req, res) => {
       error: "Private groups require a password.",
     });
   }
-  if (
-    !COLOR_PATTERN.test(primaryColor) ||
-    !COLOR_PATTERN.test(secondaryColor)
-  ) {
-    return res.status(400).json({ error: "Group colors are invalid." });
+  if (!primaryColor) {
+    return res.status(400).json({ error: COLOR_ERROR });
   }
 
   //public groups do not save a password
@@ -246,21 +241,12 @@ groupRouter.post("/", async (req, res) => {
 
     const { rows } = await client.query(
       `INSERT INTO groups (
-         group_id, name, is_public, password_hash, owner_id,
-         primary_color, secondary_color
+         group_id, name, is_public, password_hash, owner_id, primary_color
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING group_id, name, is_public, owner_id,
-                 primary_color, secondary_color, created_at`,
-      [
-        id,
-        name,
-        isPublic,
-        passwordHash,
-        req.user.id,
-        primaryColor,
-        secondaryColor,
-      ]
+                 primary_color, created_at`,
+      [id, name, isPublic, passwordHash, req.user.id, primaryColor]
     );
 
     await client.query(
@@ -287,17 +273,14 @@ groupRouter.post("/", async (req, res) => {
   }
 });
 
-//change a group's team colors (SCRUM-71); admins and the owner only
+//change a group's team color (SCRUM-71); admins and the owner only
 groupRouter.patch("/:id", async (req, res) => {
-  const { primaryColor, secondaryColor } = req.body ?? {};
-
-  if (primaryColor === undefined && secondaryColor === undefined) {
+  if (req.body?.primaryColor === undefined) {
     return res.status(400).json({ error: "Nothing to update." });
   }
-  for (const color of [primaryColor, secondaryColor]) {
-    if (color !== undefined && !COLOR_PATTERN.test(color)) {
-      return res.status(400).json({ error: "Group colors are invalid." });
-    }
+  const primaryColor = teamColor(req.body.primaryColor);
+  if (!primaryColor) {
+    return res.status(400).json({ error: COLOR_ERROR });
   }
 
   try {
@@ -308,19 +291,16 @@ groupRouter.patch("/:id", async (req, res) => {
       });
     }
 
-    //COALESCE keeps whichever color was not sent
     const { rows } = await pool.query(
       `UPDATE groups g
-          SET primary_color = COALESCE($2, g.primary_color),
-              secondary_color = COALESCE($3, g.secondary_color)
+          SET primary_color = $2
          FROM group_members gm
         WHERE g.group_id = $1
           AND gm.group_id = g.group_id
-          AND gm.user_id = $4
+          AND gm.user_id = $3
         RETURNING g.group_id, g.name, g.is_public, g.owner_id,
-                  g.primary_color, g.secondary_color, g.created_at,
-                  gm.role, gm.joined_at`,
-      [req.params.id, primaryColor ?? null, secondaryColor ?? null, req.user.id]
+                  g.primary_color, g.created_at, gm.role, gm.joined_at`,
+      [req.params.id, primaryColor, req.user.id]
     );
     res.json({ group: publicGroup(rows[0]) });
   } catch (err) {
@@ -341,7 +321,7 @@ groupRouter.post("/:id/join", async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT g.group_id, g.name, g.is_public, g.password_hash, g.owner_id,
-              g.primary_color, g.secondary_color, g.created_at, gm.role
+              g.primary_color, g.created_at, gm.role
          FROM groups g
          LEFT JOIN group_members gm
            ON gm.group_id = g.group_id

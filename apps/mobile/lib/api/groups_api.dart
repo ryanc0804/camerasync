@@ -8,6 +8,7 @@ class Group {
     required this.name,
     required this.isPublic,
     this.isMember = false,
+    this.primaryColor,
   });
 
   final String id;
@@ -15,11 +16,15 @@ class Group {
   final bool isPublic;
   final bool isMember;
 
+  /// The team color as `#rrggbb`, when the server sent one.
+  final String? primaryColor;
+
   factory Group.fromJson(Map<String, dynamic> json) => Group(
         id: json['id'].toString(),
         name: (json['name'] ?? '').toString(),
         isPublic: json['isPublic'] == true,
         isMember: json['isMember'] == true || json['is_member'] == true,
+        primaryColor: json['primaryColor'] as String?,
       );
 }
 

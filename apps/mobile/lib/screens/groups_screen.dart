@@ -288,19 +288,35 @@ class _GroupCard extends StatelessWidget {
   final Group group;
   final VoidCallback onOpen;
 
+  /// The card is filled with the team color, matching the web's group tiles.
   @override
   Widget build(BuildContext context) {
+    final fill = parseHexColor(group.primaryColor);
+    final ink = fill == null ? Colors.white : inkOn(fill);
+
     return Card(
-      color: const Color(0xFF1C1C1C),
+      color: fill ?? const Color(0xFF1C1C1C),
       margin: const EdgeInsets.only(bottom: 12),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         title: Text(
           group.name,
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+          style: TextStyle(color: ink, fontWeight: FontWeight.w600),
         ),
-        subtitle: Text('Group ID: ${group.id}', style: const TextStyle(color: kMuted)),
-        trailing: FilledButton(onPressed: onOpen, child: const Text('Open')),
+        subtitle: Text(
+          'Group ID: ${group.id}',
+          style: TextStyle(
+            color: fill == null ? kMuted : ink.withValues(alpha: 0.75),
+          ),
+        ),
+        trailing: FilledButton(
+          onPressed: onOpen,
+          style: fill == null
+              ? null
+              : FilledButton.styleFrom(
+                  backgroundColor: ink, foregroundColor: fill),
+          child: const Text('Open'),
+        ),
       ),
     );
   }

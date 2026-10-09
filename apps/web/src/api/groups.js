@@ -37,11 +37,11 @@ export async function createGroup(group) {
   return data.group;
 }
 
-//change a group's team colors (admins and the owner only)
-export async function updateGroupColors(id, { primaryColor, secondaryColor }) {
+//change a group's team color (admins and the owner only)
+export async function updateGroupColor(id, primaryColor) {
   const data = await request(`/api/groups/${encodeURIComponent(id)}`, {
     method: "PATCH",
-    body: JSON.stringify({ primaryColor, secondaryColor }),
+    body: JSON.stringify({ primaryColor }),
   });
   return data.group;
 }
@@ -76,7 +76,8 @@ export async function removeGroupMember(groupId, memberId) {
   });
 }
 
-// Choose the first joined group once. Only Settings replaces a saved choice.
+// The user's primary group, whose color the app takes. Defaults to the first
+// joined group; Settings and a group's own page replace the saved choice.
 export function getDefaultGroup(userId, groups) {
   const key = `defaultGroup:${userId}`;
   let firstGroup = null;
@@ -94,4 +95,10 @@ export function getDefaultGroup(userId, groups) {
     // Still show the first joined group if browser storage is unavailable.
   }
   return firstGroup?.id || "";
+}
+
+// Saves the user's primary group in this browser. Throws when browser storage
+// is unavailable, so callers can say the choice wasn't kept.
+export function setDefaultGroup(userId, groupId) {
+  localStorage.setItem(`defaultGroup:${userId}`, groupId);
 }

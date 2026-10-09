@@ -15,6 +15,7 @@ import { WatchScreen } from "./screens/WatchScreen.jsx";
 import { ActiveSessionScreen } from "./screens/ActiveSessionScreen.jsx";
 import { CalendarScreen } from "./screens/CalendarScreen.jsx";
 import { HomeScreen } from "./screens/HomeScreen.jsx";
+import { GroupSettingsScreen } from "./screens/GroupSettingsScreen.jsx";
 import {
   GroupsScreen,
   SettingsScreen,
@@ -65,6 +66,7 @@ function Root() {
       >
         <Route path="/" element={<HomeScreen />} />
         <Route path="/groups" element={<GroupsScreen />} />
+        <Route path="/groups/:id" element={<GroupSettingsScreen />} />
         <Route path="/record" element={<RecordScreen />} />
         <Route path="/record/:sessionId" element={<ActiveSessionScreen />} />
         <Route path="/watch" element={<WatchScreen />} />
