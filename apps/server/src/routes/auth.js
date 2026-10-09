@@ -9,6 +9,7 @@ import {
   sendVerificationEmail,
 } from "../email/mailer.js";
 import { signupEmailError } from "../auth/emailPolicy.js";
+import { requireAuth } from "../middleware/requireAuth.js";
 import {
   SESSION_COOKIE,
   createSession,
@@ -64,7 +65,7 @@ authRouter.post("/register", async (req, res, next) => {
       const result = await pool.query(
         `INSERT INTO users (email, display_name, password)
          VALUES ($1, $2, $3)
-         RETURNING user_id, email, display_name, roles, email_verified_at`,
+         RETURNING user_id, email, display_name, roles, email_verified_at, settings`,
         [email, name?.trim() || null, passwordHash]
       );
       row = result.rows[0];
@@ -99,7 +100,8 @@ authRouter.post("/login", async (req, res, next) => {
     }
 
     const { rows } = await pool.query(
-      `SELECT user_id, email, display_name, roles, password, email_verified_at
+      `SELECT user_id, email, display_name, roles, password, email_verified_at,
+              settings
          FROM users
         WHERE email = $1`,
       [email]
@@ -182,7 +184,7 @@ async function markVerified(userId) {
     `UPDATE users
         SET email_verified_at = COALESCE(email_verified_at, NOW())
       WHERE user_id = $1
-      RETURNING user_id, email, display_name, roles, email_verified_at`,
+      RETURNING user_id, email, display_name, roles, email_verified_at, settings`,
     [userId]
   );
   return rows[0];
@@ -441,6 +443,96 @@ authRouter.post("/reset-password", async (req, res, next) => {
     // whoever prompted the reset is signed out everywhere.
     await pool.query(`DELETE FROM sessions WHERE user_id = $1`, [row.user_id]);
 
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+const MAX_NAME_LENGTH = 63; // users.display_name is VARCHAR(63)
+
+// Settings page: change the display name and/or the primary group (the group
+// whose color the apps take). Send primaryGroupId: null to fall back to the
+// first joined group.
+authRouter.patch("/me", requireAuth, async (req, res, next) => {
+  try {
+    const body = req.body ?? {};
+    const hasName = body.name !== undefined;
+    const hasGroup = body.primaryGroupId !== undefined;
+    if (!hasName && !hasGroup) {
+      return res.status(400).json({ error: "Nothing to update." });
+    }
+
+    const name = hasName ? String(body.name ?? "").trim() : null;
+    if (hasName && (!name || name.length > MAX_NAME_LENGTH)) {
+      return res.status(400).json({
+        error: `Name must be 1 to ${MAX_NAME_LENGTH} characters.`,
+      });
+    }
+
+    let groupId = null;
+    if (hasGroup && body.primaryGroupId !== null) {
+      // Stored with the group's own capitalization, and only for a group the
+      // user actually belongs to.
+      const { rows } = await pool.query(
+        `SELECT group_id FROM group_members
+          WHERE user_id = $1 AND LOWER(group_id) = LOWER($2)`,
+        [req.user.id, String(body.primaryGroupId)]
+      );
+      if (rows.length === 0) {
+        return res.status(400).json({ error: "You're not a member of that group." });
+      }
+      groupId = rows[0].group_id;
+    }
+
+    const { rows } = await pool.query(
+      `UPDATE users
+          SET display_name = COALESCE($2, display_name),
+              settings = CASE WHEN $3::boolean
+                THEN (COALESCE(settings::jsonb, '{}'::jsonb)
+                      || jsonb_build_object('primaryGroupId', $4::text))::json
+                ELSE settings END
+        WHERE user_id = $1
+        RETURNING user_id, email, display_name, roles, email_verified_at, settings`,
+      [req.user.id, name, hasGroup, groupId]
+    );
+    res.json({ user: publicUser(rows[0]) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Change the password while signed in. Every other session is signed out, so
+// a device someone else was using loses access; this one stays signed in.
+authRouter.post("/change-password", requireAuth, async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword } = req.body ?? {};
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: "Enter your current and new password." });
+    }
+    if (String(newPassword).length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({
+        error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`,
+      });
+    }
+
+    const { rows } = await pool.query(
+      "SELECT password FROM users WHERE user_id = $1",
+      [req.user.id]
+    );
+    if (!(await bcrypt.compare(String(currentPassword), rows[0].password))) {
+      return res.status(400).json({ error: "Current password is incorrect." });
+    }
+
+    const passwordHash = await bcrypt.hash(String(newPassword), BCRYPT_ROUNDS);
+    await pool.query("UPDATE users SET password = $1 WHERE user_id = $2", [
+      passwordHash,
+      req.user.id,
+    ]);
+    await pool.query(
+      "DELETE FROM sessions WHERE user_id = $1 AND session_token <> $2",
+      [req.user.id, req.cookies[SESSION_COOKIE]]
+    );
     res.status(204).end();
   } catch (err) {
     next(err);

@@ -3,7 +3,7 @@
 // never end up with unreadable labels. The web (src/theme/teamColors.js) and
 // mobile (lib/theme.dart) pickers offer this same list.
 export const TEAM_COLORS = [
-  { name: "Gold", hex: "#ffc72c" },
+  { name: "Gold", hex: "#ead217" },
   { name: "Orange", hex: "#f97316" },
   { name: "Red", hex: "#dc2626" },
   { name: "Maroon", hex: "#7f1d1d" },

@@ -130,7 +130,7 @@ describe("POST /api/groups (team color)", () => {
       .set("Cookie", owner)
       .send({ id: `${GROUP_ID}b`, name: "Default Color", isPublic: true });
     expect(created.status).toBe(201);
-    expect(created.body.group.primaryColor).toBe("#ffc72c");
+    expect(created.body.group.primaryColor).toBe("#ead217");
 
     const rejected = await request(app)
       .post("/api/groups")

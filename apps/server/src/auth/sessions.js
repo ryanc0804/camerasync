@@ -45,7 +45,8 @@ export async function getUserBySessionToken(token) {
   if (!token) return null;
 
   const { rows } = await pool.query(
-    `SELECT u.user_id, u.email, u.display_name, u.roles, u.email_verified_at
+    `SELECT u.user_id, u.email, u.display_name, u.roles, u.email_verified_at,
+            u.settings
        FROM sessions s
        JOIN users u ON u.user_id = s.user_id
       WHERE s.session_token = $1
@@ -70,6 +71,8 @@ export function publicUser(row) {
     roles: row.roles ?? [],
     // Clients send unverified users to the "confirm your email" screen.
     emailVerified: row.email_verified_at != null,
+    // The group whose color the apps take; null means "first joined group".
+    primaryGroupId: row.settings?.primaryGroupId ?? null,
   };
 }
 
