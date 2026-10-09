@@ -38,3 +38,6 @@ uploads/
 
 # Production env (server only)
 deploy/prod.env
+
+# Claude Code personal settings
+.claude/settings.local.json
