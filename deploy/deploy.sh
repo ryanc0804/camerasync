@@ -17,4 +17,10 @@ git pull --ff-only
 docker compose --env-file "$ENV_FILE" -f deploy/docker-compose.prod.yml up -d --build
 docker compose --env-file "$ENV_FILE" -f deploy/docker-compose.prod.yml run --rm db-init
 docker compose --env-file "$ENV_FILE" -f deploy/docker-compose.prod.yml ps
+
+# Nightly database dump at 03:15 UTC (see deploy/backup.sh). Replaces any
+# earlier entry, so re-running this script never adds a second one.
+mkdir -p deploy/backups
+BACKUP_JOB="15 3 * * * cd $(pwd) && bash deploy/backup.sh >> deploy/backups/backup.log 2>&1"
+( crontab -l 2>/dev/null | grep -v 'deploy/backup.sh' || true; echo "$BACKUP_JOB" ) | crontab -
 echo "Deployed. Health: curl -s https://$(grep ^DOMAIN= "$ENV_FILE" | cut -d= -f2)/health"
