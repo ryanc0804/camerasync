@@ -24,6 +24,7 @@ import { deleteRecordingFiles } from "./file.js";
 import { EVENTS } from "../sockets/events.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
 import { startOffsetMs } from "../recordings/startOffset.js";
+import { startOffsetFromBeep } from "../recordings/syncBeep.js";
 
 export const recordingsRouter = Router();
 const SOCKET_STATUSES = new Set(['recording', 'stopped']);
@@ -190,7 +191,7 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
     }
     const { rows } = await pool.query(
       `SELECT v.started_at_ms, v.user_id, v.file_id, v.start_offset_ms,
-              u.display_name, sr.recording_number
+              v.beep_at_ms, u.display_name, sr.recording_number
        FROM recording_session_videos v JOIN users u ON u.user_id = v.user_id
        LEFT JOIN session_recordings sr
          ON sr.session_id = v.session_id AND sr.started_at_ms = v.started_at_ms
@@ -219,8 +220,13 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
         name: row.display_name || "Unnamed member",
         url: row.file_id ? `/api/files/get/${row.file_id}` : null,
         // How much later this camera really started than startedAt; players
-        // shift the angle by it. null when the device didn't report it.
-        startOffsetMs: row.start_offset_ms == null ? null : Number(row.start_offset_ms),
+        // shift the angle by it. From the sync beep when this video heard
+        // it, else the time the device reported, else null.
+        startOffsetMs: row.beep_at_ms != null
+          ? startOffsetFromBeep(Number(row.beep_at_ms))
+          : row.start_offset_ms == null ? null : Number(row.start_offset_ms),
+        syncedBy: row.beep_at_ms != null ? "beep"
+          : row.start_offset_ms != null ? "device" : null,
       });
     }
     res.json({ session: sessions[0], recordings });

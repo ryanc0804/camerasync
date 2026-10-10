@@ -9,6 +9,7 @@ import {
 } from "../auth/sessions.js";
 import { pool } from "../db/pool.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
+import { SYNC_BEEP_DELAY_MS } from "../recordings/syncBeep.js";
 import { DEFAULT_RECORDING_BUFFER_MS, EVENTS } from "./events.js";
 
 const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:5173";
@@ -316,6 +317,8 @@ export async function startSessionRecording(
     bufferMs: safeBufferMs,
     serverSentAtEpochMs,
     startAtEpochMs,
+    // The device that asked for the start plays the sync beep at this time.
+    beepAtEpochMs: startAtEpochMs + SYNC_BEEP_DELAY_MS,
   };
 
   activeRecordings.set(sessionId, recording);

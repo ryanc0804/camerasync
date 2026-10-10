@@ -15,6 +15,7 @@ import { atLeast, getSessionRole } from "../middleware/groupRole.js";
 import { storage } from "../storage/index.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
 import { startOffsetMs } from "../recordings/startOffset.js";
+import { findSyncBeep } from "../recordings/syncBeep.js";
 
 export const fileRouter = Router();
 
@@ -282,6 +283,11 @@ fileRouter.post(
         });
       }
 
+      // Listen for the sync beep while the file is still on local disk.
+      // findSyncBeep never throws; null just means playback falls back to
+      // the start time the device reported.
+      const beepAtMs = await findSyncBeep(tempPath);
+
       // Store first, then record the row. The other way round, a failed
       // store would leave a row pointing at nothing, and the client's retry
       // would be refused because the row already has a file_id.
@@ -297,16 +303,18 @@ fileRouter.post(
         await ensureRecordingNumber(req.query.sessionId, Number(req.query.startedAt));
         ({ rows } = await pool.query(
           `INSERT INTO recording_session_videos
-             (session_id, user_id, started_at_ms, file_id, start_offset_ms)
-           VALUES ($1, $2, $3, $4, $5)
+             (session_id, user_id, started_at_ms, file_id, start_offset_ms, beep_at_ms)
+           VALUES ($1, $2, $3, $4, $5, $6)
            ON CONFLICT (session_id, user_id, started_at_ms)
            DO UPDATE SET file_id = EXCLUDED.file_id,
              start_offset_ms = COALESCE(recording_session_videos.start_offset_ms,
-                                        EXCLUDED.start_offset_ms)
+                                        EXCLUDED.start_offset_ms),
+             beep_at_ms = EXCLUDED.beep_at_ms
            WHERE recording_session_videos.file_id IS NULL
            RETURNING file_id`,
           [req.query.sessionId, req.user.id, Number(req.query.startedAt), fileId,
-            startOffsetMs(req.query.actualStartedAt, Number(req.query.startedAt))]
+            startOffsetMs(req.query.actualStartedAt, Number(req.query.startedAt)),
+            beepAtMs]
         ));
       } catch (err) {
         await storage.remove([fileId]).catch(() => {});
