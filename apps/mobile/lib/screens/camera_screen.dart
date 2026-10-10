@@ -19,6 +19,7 @@ class CameraScreen extends StatefulWidget {
     this.sessionId,
     this.recordings,
     this.embedded = false,
+    this.canControl = false,
   });
 
   final SyncSocket? socket;
@@ -31,6 +32,11 @@ class CameraScreen extends StatefulWidget {
   /// True when hosted inside a tab (no Scaffold/AppBar of its own, and room
   /// left at the bottom for the floating dock).
   final bool embedded;
+
+  /// In a session, whether this user's shutter starts and stops the take for
+  /// every device (the session's creator, or a group admin or owner). Other
+  /// members' cameras just follow the host.
+  final bool canControl;
 
   bool get isSolo => socket == null;
 
@@ -93,7 +99,11 @@ class _CameraScreenState extends State<CameraScreen> {
     final socket = widget.socket;
     if (socket != null) {
       _subs.add(socket.recordingStart.listen(_scheduleStart));
-      _subs.add(socket.recordingStop.listen((_) => _stopRecording()));
+      // A stop that lands before the shared start cancels it too.
+      _subs.add(socket.recordingStop.listen((_) {
+        _pendingStart?.cancel();
+        _stopRecording();
+      }));
     }
   }
 
@@ -440,10 +450,60 @@ class _CameraScreenState extends State<CameraScreen> {
     );
   }
 
+  /// A start or stop request is on its way to the server.
+  bool _requesting = false;
+
+  /// The host's shutter starts or stops the take on every device; the server
+  /// then sends the shared start (or stop) back here like everywhere else.
+  Future<void> _hostShutter() async {
+    final socket = widget.socket;
+    final sessionId = widget.sessionId;
+    if (socket == null || sessionId == null || _requesting) return;
+    final stopping = _recording || (_pendingStart?.isActive ?? false);
+    setState(() => _requesting = true);
+    final error = stopping
+        ? await socket.requestStop(sessionId)
+        : await socket.requestStart(sessionId);
+    if (!mounted) return;
+    setState(() => _requesting = false);
+    if (error != null) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error)));
+    }
+  }
+
   Widget _shutter() {
+    // In a session only the host's shutter does anything; everyone else's
+    // camera follows the host's start and stop.
+    if (!widget.isSolo && !widget.canControl) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Opacity(opacity: 0.35, child: _shutterButton()),
+          const SizedBox(height: 10),
+          Text(
+            _recording ? 'Recording' : 'Waiting for the host to start',
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+              shadows: [Shadow(blurRadius: 6, color: Colors.black)],
+            ),
+          ),
+        ],
+      );
+    }
     return GestureDetector(
-      onTap: _recording ? _stopRecording : _startRecording,
-      child: Container(
+      onTap: widget.isSolo
+          ? (_recording ? _stopRecording : _startRecording)
+          : _hostShutter,
+      child: _shutterButton(),
+    );
+  }
+
+  Widget _shutterButton() {
+    final active =
+        _recording || (!widget.isSolo && (_pendingStart?.isActive ?? false));
+    return Container(
         width: 72,
         height: 72,
         decoration: BoxDecoration(
@@ -454,15 +514,14 @@ class _CameraScreenState extends State<CameraScreen> {
         child: Center(
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
-            width: _recording ? 28 : 56,
-            height: _recording ? 28 : 56,
+            width: active ? 28 : 56,
+            height: active ? 28 : 56,
             decoration: BoxDecoration(
               color: Colors.redAccent,
-              borderRadius: BorderRadius.circular(_recording ? 6 : 28),
+              borderRadius: BorderRadius.circular(active ? 6 : 28),
             ),
           ),
         ),
-      ),
-    );
+      );
   }
 }

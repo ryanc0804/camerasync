@@ -64,20 +64,30 @@ function cleanBuffer(bufferMs) {
   return Math.min(MAX_RECORDING_BUFFER_MS, Math.max(0, Math.round(number)));
 }
 
+// Who may start and stop takes for everyone in a session: whoever created
+// it, plus the group's admins and owner, from any device.
+export function canControlRecording({ created_by, role, owner_id }, userId) {
+  return (
+    Number(created_by) === Number(userId) ||
+    Number(owner_id) === Number(userId) ||
+    role === "admin"
+  );
+}
+
 async function isSessionHost(socket, sessionId) {
   if (socket.data.sessionId !== sessionId) return false;
 
-  const result = await pool.query(
-    `SELECT 1
+  const { rows } = await pool.query(
+    `SELECT rs.created_by, gm.role, g.owner_id
        FROM recording_sessions rs
+       JOIN groups g ON g.group_id = rs.group_id
        JOIN group_members gm ON gm.group_id = rs.group_id AND gm.user_id = $2
       WHERE rs.id = $1
-        AND rs.created_by = $2
         AND rs.status = 'active'`,
     [sessionId, socket.data.user.id]
   );
 
-  return result.rowCount > 0;
+  return rows.length > 0 && canControlRecording(rows[0], socket.data.user.id);
 }
 
 export async function initSocket(httpServer) {
@@ -188,6 +198,7 @@ export async function initSocket(httpServer) {
             name: rows[0].name,
             createdBy: Number(rows[0].created_by),
             status: rows[0].status,
+            canControl: canControlRecording(rows[0], socket.data.user.id),
           },
         });
       } catch (err) {
@@ -213,7 +224,7 @@ export async function initSocket(httpServer) {
           if (!(await isSessionHost(socket, sessionId))) {
             return ack({
               ok: false,
-              error: "Only the session creator can start recording.",
+              error: "Only the session's host or a group admin can start recording.",
             });
           }
 
@@ -236,7 +247,7 @@ export async function initSocket(httpServer) {
           if (!(await isSessionHost(socket, sessionId))) {
             return ack({
               ok: false,
-              error: "Only the session creator can stop recording.",
+              error: "Only the session's host or a group admin can stop recording.",
             });
           }
 

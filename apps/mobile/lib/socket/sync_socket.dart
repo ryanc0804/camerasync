@@ -49,11 +49,20 @@ class RecordingStartCommand {
 
 /// Result of the `session:join` ack.
 class JoinResult {
-  const JoinResult({required this.ok, this.error, this.sessionName});
+  const JoinResult({
+    required this.ok,
+    this.error,
+    this.sessionName,
+    this.canControl = false,
+  });
 
   final bool ok;
   final String? error;
   final String? sessionName;
+
+  /// This user may start and stop takes for everyone: the session's creator,
+  /// or an admin or the owner of its group.
+  final bool canControl;
 }
 
 /// Wraps the Socket.IO connection to the 8kount server and estimates this
@@ -296,6 +305,7 @@ class SyncSocket {
           ok: true,
           sessionName:
               session is Map ? session['name']?.toString() : null,
+          canControl: session is Map && session['canControl'] == true,
         ));
       },
     );
@@ -306,6 +316,37 @@ class SyncSocket {
         ok: false,
         error: 'The server did not answer the join request.',
       ),
+    );
+  }
+
+  /// Asks the server to start a take on every device in [sessionId], at a
+  /// shared time [bufferMs] from now. Returns null when it started, or the
+  /// reason it didn't.
+  Future<String?> requestStart(String sessionId, {int bufferMs = 1500}) =>
+      _command(Events.startRecording,
+          {'sessionId': sessionId, 'bufferMs': bufferMs}, 'start');
+
+  /// Asks the server to stop the take on every device in [sessionId].
+  Future<String?> requestStop(String sessionId) =>
+      _command(Events.stopRecording, {'sessionId': sessionId}, 'stop');
+
+  Future<String?> _command(
+      String event, Map<String, dynamic> payload, String verb) {
+    final socket = _socket;
+    if (socket == null || !socket.connected) {
+      return Future.value('Not connected to the server.');
+    }
+    final completer = Completer<String?>();
+    socket.emitWithAck(event, payload, ack: (reply) {
+      if (completer.isCompleted) return;
+      completer.complete(reply is Map && reply['ok'] == true
+          ? null
+          : (reply is Map ? reply['error'] : null)?.toString() ??
+              'Unable to $verb recording.');
+    });
+    return completer.future.timeout(
+      const Duration(seconds: 10),
+      onTimeout: () => 'The server did not answer.',
     );
   }
 
