@@ -218,6 +218,45 @@ class _JoinScreenState extends State<JoinScreen> {
     }
   }
 
+  /// Joins any live session by its 6-character code: how people get into a
+  /// session that has no group.
+  Future<void> _joinWithCode() async {
+    final controller = TextEditingController();
+    final code = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: kSurface,
+        title: const Text('Join with a code'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 6,
+          textCapitalization: TextCapitalization.none,
+          decoration: const InputDecoration(hintText: 'abc123'),
+          onSubmitted: (value) => Navigator.of(context).pop(value),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.of(context).pop(controller.text),
+              child: const Text('Join')),
+        ],
+      ),
+    );
+    controller.dispose();
+    final id = code?.trim().toLowerCase() ?? '';
+    if (id.isEmpty || !mounted) return;
+    try {
+      final session = await _recordings.joinSession(id);
+      if (!mounted) return;
+      await _openSession(session);
+    } on ApiException catch (e) {
+      _toast(e.message);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final team = TeamAccent.of(context);
@@ -238,10 +277,10 @@ class _JoinScreenState extends State<JoinScreen> {
             'starts and stops everyone at once.',
             style: TextStyle(color: kMuted, height: 1.5),
           ),
-          if (_adminGroups.isNotEmpty) ...[
-            const SizedBox(height: 18),
-            Row(
-              children: [
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              if (_adminGroups.isNotEmpty) ...[
                 Expanded(
                   child: OutlinedButton(
                     onPressed: () => _schedule(live: false),
@@ -254,20 +293,31 @@ class _JoinScreenState extends State<JoinScreen> {
                   ),
                 ),
                 const SizedBox(width: 10),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: () => _schedule(live: true),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: team.fill,
-                      foregroundColor: team.ink,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                    child: const Text('Create Session'),
-                  ),
-                ),
               ],
+              Expanded(
+                child: FilledButton(
+                  onPressed: () => _schedule(live: true),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: team.fill,
+                    foregroundColor: team.ink,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  child: const Text('Create Session'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: _joinWithCode,
+            icon: const Icon(Icons.pin_outlined, size: 18),
+            label: const Text('Join with a code'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white,
+              side: const BorderSide(color: kSurfaceLight),
+              padding: const EdgeInsets.symmetric(vertical: 12),
             ),
-          ],
+          ),
           const SizedBox(height: 24),
           const Text(
             'Sessions',
@@ -297,7 +347,10 @@ class _JoinScreenState extends State<JoinScreen> {
             for (final s in _sessions)
               _SessionCard(
                 session: s,
-                groupName: _groupOf(s)?.name ?? '',
+                // A session without a group shows its code, to share.
+                groupName: s.groupId == null
+                    ? 'No group · code ${s.id}'
+                    : _groupOf(s)?.name ?? '',
                 busy: _busyId == s.id,
                 canManage: _canManage(s),
                 canJoin: _canJoin(s),
@@ -488,7 +541,9 @@ class _NewSessionSheet extends StatefulWidget {
 
 class _NewSessionSheetState extends State<_NewSessionSheet> {
   final _name = TextEditingController();
-  late String _groupId = widget.groups.first.id;
+  // '' means no group, which only a live session can have.
+  late String _groupId =
+      widget.groups.isEmpty ? '' : widget.groups.first.id;
   late DateTime _when = DateTime.now()
       .add(const Duration(hours: 1))
       .copyWith(minute: 0, second: 0, millisecond: 0, microsecond: 0);
@@ -535,8 +590,8 @@ class _NewSessionSheetState extends State<_NewSessionSheet> {
     });
     try {
       final session = widget.live
-          ? await widget.recordings
-              .createLiveSession(groupId: _groupId, name: name)
+          ? await widget.recordings.createLiveSession(
+              groupId: _groupId.isEmpty ? null : _groupId, name: name)
           : await widget.recordings.scheduleSession(
               groupId: _groupId, name: name, scheduledAt: _when);
       if (mounted) Navigator.of(context).pop(session);
@@ -576,6 +631,9 @@ class _NewSessionSheetState extends State<_NewSessionSheet> {
               items: [
                 for (final g in widget.groups)
                   DropdownMenuItem(value: g.id, child: Text(g.name)),
+                if (widget.live)
+                  const DropdownMenuItem(
+                      value: '', child: Text('No group (share the code)')),
               ],
               onChanged: _saving
                   ? null

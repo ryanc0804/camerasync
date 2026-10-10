@@ -7,8 +7,8 @@ import {
   joinGroup,
   searchGroups,
 } from "../api/groups.js";
+import { useAuth } from "../auth/AuthContext.jsx";
 import { EmptyState } from "../components/EmptyState.jsx";
-import { GearIcon } from "../components/Sidebar.jsx";
 import { TeamColorPicker } from "../components/TeamColorPicker.jsx";
 import { useGroupTheme } from "../theme/GroupThemeContext.jsx";
 import { groupTile } from "../theme/groupTheme.js";
@@ -24,29 +24,29 @@ const styles = {
 
 // One group on the Groups list: filled with its team color, with its
 // recordings and a gear that opens the group's settings page.
-function GroupTile({ group, isPrimary }) {
+function GroupTile({ group, isPrimary, dragging, dragHandlers }) {
   const navigate = useNavigate();
   const tile = groupTile(group);
 
+  // The whole tile opens the group's page: its recordings, starting a
+  // session, and its settings.
   return (
-    <div
-      className={`group-row${tile ? ` group-tile ${tile.dark ? "group-tile-dark" : "group-tile-light"}` : ""}`}
+    <button
+      type="button"
+      draggable
+      {...dragHandlers}
+      className={`group-row group-row-link${dragging ? " group-row-dragging" : ""}${tile ? ` group-tile ${tile.dark ? "group-tile-dark" : "group-tile-light"}` : ""}`}
       style={tile ? { background: tile.fill, color: tile.ink, borderColor: tile.fill } : undefined}
+      onClick={() => navigate(`/groups/${encodeURIComponent(group.id)}`)}
     >
+      <span className="group-tile-grip" aria-hidden="true" title="Drag to reorder">⠿</span>
       <span className="group-tile-name">
         {group.name}
         {isPrimary && <span className="group-tile-badge">Primary</span>}
       </span>
-      <button type="button" className="group-button"
-        onClick={() => navigate(`/watch?group=${encodeURIComponent(group.id)}`)}>
-        Recordings
-      </button>
-      <button type="button" className="group-button group-gear"
-        aria-label={`Settings for ${group.name}`} title="Group settings"
-        onClick={() => navigate(`/groups/${encodeURIComponent(group.id)}`)}>
-        <GearIcon size={20} />
-      </button>
-    </div>
+      <span className="group-tile-id">{group.id}</span>
+      <span className="group-tile-chevron" aria-hidden="true">›</span>
+    </button>
   );
 }
 
@@ -89,8 +89,12 @@ function GroupModal({ title, onClose, children }) {
 
 export function GroupsScreen() {
   const { activeGroup, refresh: refreshTheme } = useGroupTheme();
+  const { updateProfile } = useAuth();
   const [openPanel, setOpenPanel] = useState(null);
   const [groups, setGroups] = useState([]);
+  // The group being dragged to a new place in the list, by ID.
+  const [draggingId, setDraggingId] = useState(null);
+  const [orderError, setOrderError] = useState("");
   const [loading, setLoading] = useState(true);
   const [createSubmitting, setCreateSubmitting] = useState(false);
   const [createError, setCreateError] = useState("");
@@ -247,11 +251,39 @@ export function GroupsScreen() {
               Create your team's group, or use Join Group to find it by its ID.
             </EmptyState>
           ) : (
-            <div className="group-list">
+            <div className={`group-list${draggingId ? " group-list-dragging" : ""}`}>
+              {orderError && <p role="alert" className="group-error">{orderError}</p>}
               {groups.map((group) => (
                 <GroupTile
                   key={group.id}
                   group={group}
+                  dragging={draggingId === group.id}
+                  dragHandlers={{
+                    onDragStart: (event) => {
+                      event.dataTransfer.effectAllowed = "move";
+                      setDraggingId(group.id);
+                    },
+                    // Moves the dragged group to where it's hovering, so the
+                    // list shows the new order before it's dropped.
+                    onDragOver: (event) => {
+                      event.preventDefault();
+                      if (!draggingId || draggingId === group.id) return;
+                      setGroups((current) => {
+                        const from = current.findIndex((g) => g.id === draggingId);
+                        const to = current.findIndex((g) => g.id === group.id);
+                        const next = [...current];
+                        next.splice(to, 0, next.splice(from, 1)[0]);
+                        return next;
+                      });
+                    },
+                    onDrop: (event) => event.preventDefault(),
+                    onDragEnd: () => {
+                      setDraggingId(null);
+                      setOrderError("");
+                      updateProfile({ groupOrder: groups.map((g) => g.id) })
+                        .catch(() => setOrderError("Couldn't save the new order. Try again."));
+                    },
+                  }}
                   isPrimary={activeGroup?.id === group.id}
                 />
               ))}
@@ -537,7 +569,30 @@ const groupsCss = `
     background: rgba(127,127,127,0.25); font-size: 0.7rem; font-weight: 700;
     vertical-align: middle;
   }
-  .group-gear { display: flex; align-items: center; justify-content: center; padding: 7px 9px; }
+  .group-row-link {
+    width: 100%;
+    color: #f0f0f0;
+    font: inherit;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    transition: filter 0.12s;
+  }
+  .group-row-link:hover { filter: brightness(1.08); }
+  .group-tile-id { opacity: 0.7; font-size: 0.82rem; font-weight: 500; }
+  .group-tile-grip { opacity: 0.55; font-size: 1.1rem; line-height: 1; cursor: grab; }
+  .group-row-link:hover .group-tile-grip { opacity: 0.9; }
+  /* Where the dragged group will land: a faded copy with a dashed outline,
+     while the browser carries the tile under the pointer. */
+  .group-row-dragging {
+    opacity: 0.35;
+    outline: 2px dashed var(--accent);
+    outline-offset: 3px;
+    transform: scale(0.97);
+  }
+  .group-list-dragging, .group-list-dragging * { cursor: grabbing !important; }
+  .group-list-dragging .group-row-link:not(.group-row-dragging) { transition: transform 0.15s; }
+  .group-tile-chevron { font-size: 1.5rem; line-height: 1; opacity: 0.75; }
   /* A colored tile keeps its buttons readable on any team color by tinting
      them toward the tile's own text color. */
   .group-tile .group-button { color: inherit; }

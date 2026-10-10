@@ -81,10 +81,11 @@ async function isSessionHost(socket, sessionId) {
   const { rows } = await pool.query(
     `SELECT rs.created_by, gm.role, g.owner_id
        FROM recording_sessions rs
-       JOIN groups g ON g.group_id = rs.group_id
-       JOIN group_members gm ON gm.group_id = rs.group_id AND gm.user_id = $2
+       LEFT JOIN groups g ON g.group_id = rs.group_id
+       LEFT JOIN group_members gm ON gm.group_id = rs.group_id AND gm.user_id = $2
       WHERE rs.id = $1
-        AND rs.status = 'active'`,
+        AND rs.status = 'active'
+        AND (gm.user_id IS NOT NULL OR rs.group_id IS NULL)`,
     [sessionId, socket.data.user.id]
   );
 
@@ -148,16 +149,17 @@ export async function initSocket(httpServer) {
           `SELECT rs.id, rs.name, rs.created_by, rs.status,
                   gm.role, g.owner_id
              FROM recording_sessions rs
-             JOIN groups g
+             LEFT JOIN groups g
                ON g.group_id = rs.group_id
-             JOIN group_members gm
+             LEFT JOIN group_members gm
                ON gm.group_id = rs.group_id
               AND gm.user_id = $2
              JOIN recording_session_members rsm
                ON rsm.session_id = rs.id
               AND rsm.user_id = $2
             WHERE rs.id = $1
-              AND rs.status = 'active'`,
+              AND rs.status = 'active'
+              AND (gm.user_id IS NOT NULL OR rs.group_id IS NULL)`,
           [sessionId, socket.data.user.id]
         );
 

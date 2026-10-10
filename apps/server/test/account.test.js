@@ -46,13 +46,68 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await pool.query("DELETE FROM groups WHERE group_id = $1", [GROUP_ID]);
+  await pool.query("DELETE FROM groups WHERE group_id LIKE $1", [`${GROUP_ID}%`]);
   await pool.query(
     "DELETE FROM sessions WHERE user_id IN (SELECT user_id FROM users WHERE email = $1)",
     [EMAIL]
   );
   await pool.query("DELETE FROM users WHERE email = $1", [EMAIL]);
   await pool.end();
+});
+
+describe("group order", () => {
+  it("lists groups in the order the user dragged them into", async () => {
+    for (const suffix of ["x", "y"]) {
+      expect((await request(app).post("/api/groups").set("Cookie", cookie)
+        .send({ id: `${GROUP_ID}${suffix}`, name: `Order ${suffix}`, isPublic: true })).status).toBe(201);
+    }
+    const ids = async () =>
+      (await request(app).get("/api/groups").set("Cookie", cookie)).body.groups.map((g) => g.id);
+    // Newest first until an order is saved.
+    expect(await ids()).toEqual([`${GROUP_ID}y`, `${GROUP_ID}x`, GROUP_ID]);
+
+    const saved = await request(app).patch("/api/auth/me").set("Cookie", cookie)
+      .send({ groupOrder: [GROUP_ID, `${GROUP_ID}y`, "notmine"] });
+    expect(saved.status).toBe(200);
+    // Placed ones first in that order; the rest after, newest first.
+    expect(await ids()).toEqual([GROUP_ID, `${GROUP_ID}y`, `${GROUP_ID}x`]);
+  });
+
+  it("only takes a list of group IDs", async () => {
+    for (const groupOrder of ["abc", [1, 2], ["has space"], null]) {
+      const res = await request(app).patch("/api/auth/me").set("Cookie", cookie)
+        .send({ groupOrder });
+      expect(res.status).toBe(400);
+    }
+  });
+});
+
+describe("notification settings", () => {
+  it("start with everything on", async () => {
+    const res = await request(app).get("/api/auth/me").set("Cookie", cookie);
+    expect(res.body.user.notificationPrefs).toEqual({
+      push: true, comments: true, joins: true, sessions: true,
+    });
+  });
+
+  it("save one switch at a time and keep the rest", async () => {
+    await request(app).patch("/api/auth/me").set("Cookie", cookie)
+      .send({ notificationPrefs: { joins: false } });
+    const res = await request(app).patch("/api/auth/me").set("Cookie", cookie)
+      .send({ notificationPrefs: { push: false } });
+    expect(res.status).toBe(200);
+    expect(res.body.user.notificationPrefs).toEqual({
+      push: false, comments: true, joins: false, sessions: true,
+    });
+  });
+
+  it("only take the known switches, as true or false", async () => {
+    for (const notificationPrefs of [{ joins: "no" }, { everything: false }, ["push"], null]) {
+      const res = await request(app).patch("/api/auth/me").set("Cookie", cookie)
+        .send({ notificationPrefs });
+      expect(res.status).toBe(400);
+    }
+  });
 });
 
 describe("PATCH /api/auth/me", () => {

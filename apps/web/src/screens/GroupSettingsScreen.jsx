@@ -13,6 +13,7 @@ import {
   updateGroupColor,
   updateGroupDetails,
 } from "../api/groups.js";
+import { createLiveSession, getSessions, joinSession } from "../api/recordings.js";
 import { EmptyState } from "../components/EmptyState.jsx";
 import { TeamColorPicker } from "../components/TeamColorPicker.jsx";
 import { useGroupTheme } from "../theme/GroupThemeContext.jsx";
@@ -20,11 +21,13 @@ import { groupTile } from "../theme/groupTheme.js";
 import { teamColor } from "../theme/teamColors.js";
 
 const ROSTER_PAGE_SIZE = 30;
+const RECORDINGS_ON_PAGE = 4;
 const ROLE_LABEL = { admin: "an admin", member: "a member", viewer: "a viewer" };
 
-/// One group's settings page, opened from the gear on its Groups tile:
-/// whether it is the user's primary group (whose color the app takes), its
-/// team color (admins and the owner), and its roster.
+/// One group's page, opened by tapping it on the Groups screen: its live
+/// session (to join) or starting one, its recordings, and below them its
+/// settings: whether it is the user's primary group (whose color the app
+/// takes), its team color (admins and the owner), invites and its roster.
 export function GroupSettingsScreen() {
   const { id } = useParams();
   const { user, updateProfile } = useAuth();
@@ -91,11 +94,11 @@ export function GroupSettingsScreen() {
             ID {group.id} · {group.isPublic ? "Public" : "Private"} · You're {yourRole}
           </p>
         </div>
-        <button type="button" className="gs-button gs-on-banner"
-          onClick={() => navigate(`/watch?group=${encodeURIComponent(group.id)}`)}>
-          Recordings
-        </button>
       </header>
+
+      <GroupSessions group={group} canManage={canManage} />
+
+      <h2 className="gs-heading">Settings</h2>
 
       <section className="gs-card">
         <h2>Primary group</h2>
@@ -125,7 +128,8 @@ export function GroupSettingsScreen() {
 
       <InviteSection group={group} />
 
-      <MembersSection group={group} isOwner={isOwner} />
+      <MembersSection group={group} isOwner={isOwner}
+        onTransferred={(updated) => setGroup((current) => ({ ...current, ...updated }))} />
 
       {isOwner ? (
         <OwnerSection
@@ -149,26 +153,147 @@ export function GroupSettingsScreen() {
   );
 }
 
-/// The owner's controls: the group's name and privacy, handing the group to
-/// someone else (after which they can leave), and deleting it.
+/// The group's live session to join, starting a new one (admins and the
+/// owner, the same people the server lets create sessions), and its
+/// finished sessions' recordings, newest first.
+function GroupSessions({ group, canManage }) {
+  const navigate = useNavigate();
+  const [sessions, setSessions] = useState(null);
+  const [error, setError] = useState("");
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getSessions()
+      .then((all) => {
+        if (!cancelled) setSessions(all.filter((session) => session.groupId === group.id));
+      })
+      .catch((err) => { if (!cancelled) setError(err.message); });
+    return () => { cancelled = true; };
+  }, [group.id]);
+
+  const live = (sessions ?? []).filter((session) => session.status === "active");
+  const recordings = (sessions ?? [])
+    .filter((session) => session.status === "complete")
+    .sort((a, b) => new Date(b.scheduledAt) - new Date(a.scheduledAt));
+
+  const start = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const session = await createLiveSession({
+        groupId: group.id,
+        name: name.trim() || `${group.name} practice`,
+      });
+      navigate(`/record/${session.id}`);
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  };
+
+  const join = async (session) => {
+    setBusy(true);
+    setError("");
+    try {
+      if (!session.isJoined) await joinSession(session.id);
+      navigate(`/record/${session.id}`);
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <section className="gs-card">
+        <h2>Practice</h2>
+        {live.map((session) => (
+          <div key={session.id} className="gs-live">
+            <span className="gs-live-dot" aria-hidden="true" />
+            <span className="gs-live-name">{session.name}</span>
+            <span className="gs-live-meta">
+              {session.activeMemberCount} {session.activeMemberCount === 1 ? "device" : "devices"}
+            </span>
+            <button type="button" className="gs-button gs-button-primary" disabled={busy}
+              onClick={() => join(session)}>
+              {session.isJoined ? "Enter" : "Join"}
+            </button>
+          </div>
+        ))}
+        {live.length === 0 && (canManage ? (
+          <form className="gs-start" onSubmit={start}>
+            <input value={name} maxLength={100} aria-label="Session name"
+              placeholder={`${group.name} practice`}
+              onChange={(event) => setName(event.target.value)} />
+            <button type="submit" className="gs-button gs-button-primary" disabled={busy}>
+              {busy ? "Starting..." : "Start a session"}
+            </button>
+          </form>
+        ) : (
+          <p>Nothing live right now. An admin starts sessions for this group.</p>
+        ))}
+        {error && <p role="alert" className="gs-error">{error}</p>}
+      </section>
+
+      <section className="gs-card">
+        {/* The newest few here; View all opens the group's full list. */}
+        <div className="gs-section-row">
+          <h2>Recordings</h2>
+          {recordings.length > 0 && (
+            <Link className="gs-view-all" to={`/watch?group=${encodeURIComponent(group.id)}`}>
+              View all
+            </Link>
+          )}
+        </div>
+        {sessions === null && !error ? (
+          <p>Loading...</p>
+        ) : recordings.length === 0 ? (
+          <p>No recordings yet. Finished sessions show up here.</p>
+        ) : (
+          <ul className="gs-recordings">
+            {recordings.slice(0, RECORDINGS_ON_PAGE).map((session) => (
+              <li key={session.id}>
+                <Link to={`/watch/${session.id}`}>
+                  <span className="gs-thumb" aria-hidden="true"><span /></span>
+                  <span className="gs-rec-text">
+                    <strong>{session.name}</strong>
+                    <span>
+                      {new Date(session.scheduledAt).toLocaleDateString(undefined, {
+                        month: "short", day: "numeric",
+                      })}
+                      {session.memberCount != null &&
+                        ` · ${session.memberCount} ${session.memberCount === 1 ? "device" : "devices"}`}
+                    </span>
+                  </span>
+                  {session.totalRecordings != null && (
+                    <span className="gs-rec-count">
+                      {session.totalRecordings} {session.totalRecordings === 1 ? "video" : "videos"}
+                    </span>
+                  )}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </>
+  );
+}
+
+/// The owner's controls: the group's name and privacy, and deleting it.
+/// Handing the group to someone else is in the Members list.
 function OwnerSection({ group, onSaved, onGone }) {
-  const { user } = useAuth();
   const [name, setName] = useState(group.name);
   const [isPublic, setIsPublic] = useState(group.isPublic);
   const [password, setPassword] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
-  const [members, setMembers] = useState([]);
-  const [newOwner, setNewOwner] = useState("");
   const [busy, setBusy] = useState(false);
   const [dangerError, setDangerError] = useState("");
-
-  useEffect(() => {
-    getGroupMembers(group.id)
-      .then((loaded) => setMembers(loaded.filter((m) => m.id !== Number(user.id))))
-      .catch(() => {});
-  }, [group.id, user.id]);
 
   const changed = name.trim() !== group.name || isPublic !== group.isPublic || password;
 
@@ -185,22 +310,6 @@ function OwnerSection({ group, onSaved, onGone }) {
       setError(err.message);
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handOver = async () => {
-    const member = members.find((m) => m.id === Number(newOwner));
-    if (!member) return;
-    if (!window.confirm(`Make ${member.name} the owner of ${group.name}? You'll stay on as an admin.`)) return;
-    setBusy(true);
-    setDangerError("");
-    try {
-      onSaved(await transferGroup(group.id, member.id));
-      setNewOwner("");
-    } catch (err) {
-      setDangerError(err.message);
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -250,21 +359,8 @@ function OwnerSection({ group, onSaved, onGone }) {
       </section>
 
       <section className="gs-card gs-danger-card">
-        <h2>Owner</h2>
-        <p>Hand the group to someone else. You'll stay on as an admin and can leave afterwards.</p>
-        <div className="gs-inline">
-          <select value={newOwner} onChange={(event) => setNewOwner(event.target.value)}
-            aria-label="New owner" disabled={busy || members.length === 0}>
-            <option value="">{members.length ? "Choose a member" : "No one else in the group"}</option>
-            {members.map((member) => (
-              <option key={member.id} value={member.id}>{member.name}</option>
-            ))}
-          </select>
-          <button type="button" className="gs-button" disabled={busy || !newOwner} onClick={handOver}>
-            Hand over
-          </button>
-        </div>
-        <p className="gs-spaced">Deleting the group removes every session, recording and comment in it.</p>
+        <h2>Delete group</h2>
+        <p>Deleting the group removes every session, recording and comment in it.</p>
         <button type="button" className="gs-button gs-button-danger" disabled={busy} onClick={remove}>
           Delete group
         </button>
@@ -383,7 +479,7 @@ function TeamColorSection({ group, onSaved }) {
   );
 }
 
-function MembersSection({ group, isOwner }) {
+function MembersSection({ group, isOwner, onTransferred }) {
   const { user } = useAuth();
   const [members, setMembers] = useState([]);
   const [page, setPage] = useState(0);
@@ -403,14 +499,24 @@ function MembersSection({ group, isOwner }) {
 
   const isAdmin = members.find((member) => member.id === Number(user.id))?.role === "admin";
 
-  // A role change saves straight away (it's easy to undo); removing someone
-  // asks first.
+  // A role change saves straight away (it's easy to undo). Removing someone,
+  // or making them the owner (only they could hand it back), asks first.
   const updateMember = async (member, role) => {
     if (!role && !window.confirm(`Remove ${member.name} from this group?`)) return;
+    if (role === "owner" && !window.confirm(
+      `Make ${member.name} the owner of ${group.name}? You'll become an admin, and only they can hand it back.`
+    )) return;
     setSaving(true);
     setActionError("");
     try {
-      if (role) {
+      if (role === "owner") {
+        const updated = await transferGroup(group.id, member.id);
+        // The old owner stays on as an admin, and so does the new one.
+        setMembers((current) => current.map((item) =>
+          item.id === member.id || item.id === Number(user.id) ? { ...item, role: "admin" } : item
+        ));
+        onTransferred(updated);
+      } else if (role) {
         await changeGroupMemberRole(group.id, member.id, role);
         setMembers((current) => current.map((item) =>
           item.id === member.id ? { ...item, role } : item
@@ -456,6 +562,7 @@ function MembersSection({ group, isOwner }) {
                       <select value={member.role} disabled={saving}
                         aria-label={`Role for ${member.name}`}
                         onChange={(event) => updateMember(member, event.target.value)}>
+                        {isOwner && <option value="owner">Owner</option>}
                         <option value="admin">Admin</option>
                         <option value="member">Member</option>
                         <option value="viewer">Viewer</option>
@@ -555,6 +662,33 @@ const css = `
   }
   .gs-remove:hover { background: rgba(229, 72, 77, 0.15); }
   .gs-remove:disabled { opacity: 0.5; cursor: default; }
+  .gs-section-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+  .gs-card .gs-section-row h2 { margin: 0; }
+  .gs-view-all { color: var(--accent); font-size: 0.9rem; font-weight: 600; text-decoration: none; }
+  .gs-view-all:hover { text-decoration: underline; }
+  .gs-heading { margin: 10px 0 -4px; color: #999; font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+  .gs-live { display: flex; align-items: center; gap: 10px; padding: 6px 0 12px; }
+  .gs-live-dot { width: 9px; height: 9px; border-radius: 50%; background: #f0432e; }
+  .gs-live-name { flex: 1; min-width: 0; font-weight: 700; overflow-wrap: anywhere; }
+  .gs-live-meta { color: #999; font-size: 0.85rem; }
+  .gs-start { display: flex; flex-wrap: wrap; gap: 10px; }
+  .gs-start input {
+    flex: 1; min-width: 180px; box-sizing: border-box; padding: 8px 10px;
+    border: 1px solid #3a3a3a; border-radius: 7px; background: #262626; color: #f0f0f0; font: inherit;
+  }
+  .gs-recordings { margin: 0; padding: 0; list-style: none; }
+  .gs-recordings li + li { border-top: 1px solid rgba(255,255,255,0.05); }
+  .gs-recordings a {
+    display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; align-items: center; gap: 14px;
+    padding: 9px 4px; border-radius: 9px; color: #f0f0f0; text-decoration: none;
+  }
+  .gs-recordings a:hover { background: #1e1e1e; }
+  .gs-thumb { display: flex; align-items: center; justify-content: center; height: 38px; border-radius: 7px; background: #0a0b0d; }
+  .gs-thumb span { width: 15px; height: 15px; border-radius: 50%; background: var(--accent); }
+  .gs-rec-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .gs-rec-text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .gs-rec-text span { color: #8a8a8a; font-size: 0.8rem; }
+  .gs-rec-count { color: #8a8a8a; font-size: 0.85rem; white-space: nowrap; }
   .gs-pages { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 10px; font-size: 0.85rem; }
   @media (max-width: 600px) {
     .gs-banner { flex-direction: column; align-items: flex-start; }

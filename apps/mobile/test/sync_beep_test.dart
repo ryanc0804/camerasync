@@ -29,7 +29,7 @@ void main() {
     expect(header.getUint32(24, Endian.little), rate);
 
     final samples = Int16List.sublistView(wav, 44);
-    final tone = rate * kSyncBeepToneMs ~/ 1000;
+    const tone = rate * kSyncBeepToneMs ~/ 1000;
     expect(samples.length, tone * 2);
 
     // The middle of each half is almost entirely its own pitch, which is

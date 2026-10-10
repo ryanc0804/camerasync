@@ -15,6 +15,7 @@ import {
   createSession,
   deleteSession,
   getUserBySessionToken,
+  NOTIFICATION_KINDS,
   publicUser,
   sessionCookieOptions,
 } from "../auth/sessions.js";
@@ -459,8 +460,34 @@ authRouter.patch("/me", requireAuth, async (req, res, next) => {
     const body = req.body ?? {};
     const hasName = body.name !== undefined;
     const hasGroup = body.primaryGroupId !== undefined;
-    if (!hasName && !hasGroup) {
+    const hasPrefs = body.notificationPrefs !== undefined;
+    const hasOrder = body.groupOrder !== undefined;
+    if (!hasName && !hasGroup && !hasPrefs && !hasOrder) {
       return res.status(400).json({ error: "Nothing to update." });
+    }
+
+    // Only the known switches, and only true or false.
+    let prefs = null;
+    if (hasPrefs) {
+      const sent = body.notificationPrefs;
+      const keys = ["push", ...NOTIFICATION_KINDS];
+      if (!sent || typeof sent !== "object" || Array.isArray(sent) ||
+          Object.entries(sent).some(([key, value]) => !keys.includes(key) || typeof value !== "boolean")) {
+        return res.status(400).json({ error: "Invalid notification settings." });
+      }
+      prefs = sent;
+    }
+
+    // The order of the user's group list: group IDs, as dragged on the
+    // Groups screen. IDs of groups they're not in are harmless (ignored).
+    let order = null;
+    if (hasOrder) {
+      const sent = body.groupOrder;
+      if (!Array.isArray(sent) || sent.length > 500 ||
+          sent.some((id) => typeof id !== "string" || !/^[A-Za-z0-9]{1,64}$/.test(id))) {
+        return res.status(400).json({ error: "Invalid group order." });
+      }
+      order = [...new Set(sent)];
     }
 
     const name = hasName ? String(body.name ?? "").trim() : null;
@@ -488,13 +515,24 @@ authRouter.patch("/me", requireAuth, async (req, res, next) => {
     const { rows } = await pool.query(
       `UPDATE users
           SET display_name = COALESCE($2, display_name),
-              settings = CASE WHEN $3::boolean
-                THEN (COALESCE(settings::jsonb, '{}'::jsonb)
-                      || jsonb_build_object('primaryGroupId', $4::text))::json
-                ELSE settings END
+              settings = (
+                COALESCE(settings::jsonb, '{}'::jsonb)
+                || CASE WHEN $3::boolean
+                     THEN jsonb_build_object('primaryGroupId', $4::text)
+                     ELSE '{}'::jsonb END
+                || CASE WHEN $5::jsonb IS NULL THEN '{}'::jsonb
+                     ELSE jsonb_build_object('notificationPrefs',
+                       COALESCE(settings::jsonb -> 'notificationPrefs', '{}'::jsonb) || $5::jsonb)
+                   END
+                || CASE WHEN $6::jsonb IS NULL THEN '{}'::jsonb
+                     ELSE jsonb_build_object('groupOrder', $6::jsonb)
+                   END
+              )::json
         WHERE user_id = $1
         RETURNING user_id, email, display_name, roles, email_verified_at, settings`,
-      [req.user.id, name, hasGroup, groupId]
+      [req.user.id, name, hasGroup, groupId,
+        prefs === null ? null : JSON.stringify(prefs),
+        order === null ? null : JSON.stringify(order)]
     );
     res.json({ user: publicUser(rows[0]) });
   } catch (err) {

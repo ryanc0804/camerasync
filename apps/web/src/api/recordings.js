@@ -96,6 +96,13 @@ export async function getSessionVideos(id) {
   return data;
 }
 
+// The whole session as one zip (a folder per recording, an angle per
+// member), for keeping on a computer or USB stick. A plain link: the
+// browser downloads it with the login cookie.
+export function sessionDownloadUrl(id) {
+  return `${SERVER_URL}/api/recordings/sessions/${encodeURIComponent(id)}/download`;
+}
+
 export async function uploadSessionVideo(id, startedAt, video, filename, actualStartedAt) {
   const body = new FormData();
   // Multipart uploads need the plain media type, without recorder codec details.

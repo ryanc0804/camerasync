@@ -76,6 +76,17 @@ void main() {
             'role': 'admin',
           },
         };
+      } else if (path == '/api/recordings/sessions') {
+        body = {
+          'sessions': [
+            {'id': 'abc123', 'name': 'Stunt practice', 'status': 'complete',
+              'groupId': 'ucfcheer', 'scheduledAt': '2026-10-07T22:00:00.000Z',
+              'totalRecordings': 8, 'activeMemberCount': 0, 'isJoined': false},
+            {'id': 'def456', 'name': 'Jazz combo', 'status': 'complete',
+              'groupId': 'ucfdance', 'scheduledAt': '2026-10-06T22:00:00.000Z',
+              'activeMemberCount': 0, 'isJoined': false},
+          ],
+        };
       } else if (path == '/api/groups') {
         body = {
           'groups': [
@@ -169,7 +180,7 @@ void main() {
     expect(find.text('Make this my primary group'), findsOneWidget);
   });
 
-  testWidgets('the owner gets group details, hand over and delete',
+  testWidgets('the owner gets group details and delete, and hands over from Members',
       (tester) async {
     tester.view.physicalSize = const Size(800, 3600);
     tester.view.devicePixelRatio = 1;
@@ -177,9 +188,16 @@ void main() {
     await open(tester, cheerAsOwner);
 
     expect(find.text('Group details'), findsOneWidget);
-    expect(find.text('Hand over'), findsOneWidget);
-    expect(find.text('Delete group'), findsOneWidget);
+    // The section and its button; there's no separate hand-over box.
+    expect(find.text('Delete group'), findsNWidgets(2));
+    expect(find.text('Hand over'), findsNothing);
     expect(find.text('Leave group'), findsNothing);
+
+    // Owner is one of the roles the owner can pick for a member.
+    final before = find.text('Owner').evaluate().length;
+    await tester.tap(find.text('Member').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Owner').evaluate().length, greaterThan(before));
   });
 
   testWidgets('a member can leave after confirming', (tester) async {
@@ -203,8 +221,10 @@ void main() {
     expect(leaves, ['/api/groups/ucfdance/leave']);
   });
 
-  testWidgets('group cards have Recordings and a settings gear',
+  testWidgets('a group card opens its page by tapping it, with no gear',
       (tester) async {
+    tester.view.physicalSize = const Size(1080, 4000);
+    addTearDown(tester.view.resetPhysicalSize);
     late AuthService auth;
     await tester.runAsync(() async {
       auth = await signedIn();
@@ -213,7 +233,33 @@ void main() {
     });
     await settle(tester);
 
-    expect(find.widgetWithText(FilledButton, 'Recordings'), findsOneWidget);
-    expect(find.byTooltip('Settings for UCF Cheer'), findsOneWidget);
+    // The whole card is the way in: no gear, no separate Recordings button.
+    expect(find.byIcon(Icons.settings_outlined), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Recordings'), findsNothing);
+    expect(
+        find.ancestor(of: find.text('UCF Cheer'), matching: find.byType(InkWell)),
+        findsWidgets);
+  });
+
+  testWidgets('the group page lists only its recordings and lets admins start a session',
+      (tester) async {
+    tester.view.physicalSize = const Size(1080, 4000);
+    addTearDown(tester.view.resetPhysicalSize);
+    await open(tester, cheerAsOwner);
+    await settle(tester);
+
+    expect(find.text('Stunt practice'), findsOneWidget);
+    expect(find.text('Jazz combo'), findsNothing);
+    expect(find.text('Start a session'), findsOneWidget);
+  });
+
+  testWidgets('members are told an admin starts sessions', (tester) async {
+    tester.view.physicalSize = const Size(1080, 4000);
+    addTearDown(tester.view.resetPhysicalSize);
+    await open(tester, danceAsMember);
+    await settle(tester);
+
+    expect(find.text('Start a session'), findsNothing);
+    expect(find.textContaining('An admin starts sessions'), findsOneWidget);
   });
 }

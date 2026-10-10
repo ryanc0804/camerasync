@@ -62,6 +62,9 @@ export function SessionScheduler() {
     time: "",
     groupId: "",
   });
+  // A live session can have no group ("" here): anyone joins with its code.
+  const [liveGroupId, setLiveGroupId] = useState("");
+  const [joinCode, setJoinCode] = useState("");
 
   const adminGroups = useMemo(
     () => groups.filter((group) => group.role === "admin"),
@@ -94,6 +97,7 @@ export function SessionScheduler() {
             ...current,
             groupId: firstAdminGroup.id,
           }));
+          setLiveGroupId(firstAdminGroup.id);
         }
       })
       .catch((err) => setError(err.message))
@@ -162,12 +166,28 @@ export function SessionScheduler() {
     try {
       const session = await createLiveSession({
         name: form.name,
-        groupId: form.groupId,
+        ...(liveGroupId && { groupId: liveGroupId }),
       });
 
       setSessions((current) => [...current, session]);
       setForm((current) => ({ ...current, name: "" }));
       setOpenPanel(null);
+      navigate(`/record/${session.id}`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // joins any live session by its 6-character code, group or not
+  const submitJoinCode = async (event) => {
+    event.preventDefault();
+    setError("");
+    setSubmitting(true);
+    try {
+      const session = await joinSession(joinCode.trim().toLowerCase());
+      setJoinCode("");
       navigate(`/record/${session.id}`);
     } catch (err) {
       setError(err.message);
@@ -236,7 +256,9 @@ export function SessionScheduler() {
   };
 
   const groupName = (groupId) =>
-    groups.find((group) => group.id === groupId)?.name || groupId;
+    groupId == null
+      ? "No group"
+      : groups.find((group) => group.id === groupId)?.name || groupId;
 
   // opens joining fifteen minutes before the scheduled time
   const canJoin = (session) => {
@@ -276,7 +298,45 @@ export function SessionScheduler() {
         >
           Create Session
         </button>
+        <button
+          className={openPanel === "code" ? "is-selected" : ""}
+          type="button"
+          onClick={() => togglePanel("code")}
+          aria-expanded={openPanel === "code"}
+        >
+          Join with Code
+        </button>
       </div>
+
+      {openPanel === "code" && (
+        <form className="session-schedule-form session-create-form" onSubmit={submitJoinCode}>
+          <label>
+            Session code
+            <input
+              type="text"
+              value={joinCode}
+              placeholder="abc123"
+              maxLength={6}
+              autoCapitalize="none"
+              autoComplete="off"
+              onChange={(event) => setJoinCode(event.target.value)}
+              required
+            />
+          </label>
+          <div className="session-schedule-actions">
+            <button type="button" onClick={() => setOpenPanel(null)}>
+              Cancel
+            </button>
+            <button
+              className="session-submit-button"
+              type="submit"
+              disabled={submitting || joinCode.trim().length !== 6}
+            >
+              {submitting ? "Joining..." : "Join"}
+            </button>
+          </div>
+        </form>
+      )}
 
       {openPanel === "schedule" && (
         <form className="session-schedule-form" onSubmit={submitSession}>
@@ -394,27 +454,23 @@ export function SessionScheduler() {
           <label>
             Group
             <select
-              value={form.groupId}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  groupId: event.target.value,
-                }))
-              }
-              disabled={adminGroups.length === 0}
-              required
+              value={liveGroupId}
+              onChange={(event) => setLiveGroupId(event.target.value)}
             >
-              {adminGroups.length === 0 ? (
-                <option value="">No admin groups available</option>
-              ) : (
-                adminGroups.map((group) => (
-                  <option value={group.id} key={group.id}>
-                    {group.name}
-                  </option>
-                ))
-              )}
+              {adminGroups.map((group) => (
+                <option value={group.id} key={group.id}>
+                  {group.name}
+                </option>
+              ))}
+              <option value="">No group (share the code)</option>
             </select>
           </label>
+          {!liveGroupId && (
+            <p className="session-create-hint">
+              Anyone signed in can join with the session's code. Only the people
+              who join can see its recordings.
+            </p>
+          )}
 
           <div className="session-schedule-actions">
             <button type="button" onClick={() => setOpenPanel(null)}>
@@ -423,7 +479,7 @@ export function SessionScheduler() {
             <button
               className="session-submit-button"
               type="submit"
-              disabled={submitting || adminGroups.length === 0}
+              disabled={submitting}
             >
               {submitting ? "Creating..." : "Create Session"}
             </button>
@@ -592,6 +648,7 @@ export function SessionScheduler() {
 }
 
 const schedulerCss = `
+  .session-create-hint { margin: 0; color: #9a9a9a; font-size: 0.85rem; line-height: 1.45; }
   .session-scheduler {
     width: min(100%, 760px);
     margin-top: 32px;

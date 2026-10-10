@@ -293,3 +293,9 @@ ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS start_offset_ms IN
 -- moment, so this lines the angles up more exactly than start_offset_ms,
 -- which can't see a phone's camera warming up. NULL when it wasn't heard.
 ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS beep_at_ms INTEGER;
+
+-- A session can stand on its own, without a group: whoever starts it shares
+-- its code, and anyone signed in can join with it. Only its creator and the
+-- people who joined can see it (see sessionVisibleSql in
+-- middleware/groupRole.js).
+ALTER TABLE recording_sessions ALTER COLUMN group_id DROP NOT NULL;

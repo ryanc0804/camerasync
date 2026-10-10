@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:camerasync_mobile/api/api_client.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../api/groups_api.dart';
 import '../auth/auth_service.dart';
@@ -10,7 +11,6 @@ import '../theme.dart';
 import '../widgets/create_group_dialog.dart';
 import '../widgets/empty_state.dart';
 import 'group_settings_screen.dart';
-import 'recordings_screen.dart';
 
 /// Lists the user's groups and lets them open a group's sessions.
 class GroupsScreen extends StatefulWidget {
@@ -289,35 +289,81 @@ class _GroupsScreenState extends State<GroupsScreen> {
               onAction: _createGroup,
             )
           else
-            ..._groups.map((g) => _GroupCard(
-                  group: g,
-                  isPrimary: g.id == TeamAccent.of(context).primaryGroup?.id,
-                  onRecordings: () => _openGroup(g),
-                  onSettings: () => _openSettings(g),
-                )),
+            // Long-press a group and drag it to change the order; the order
+            // is saved on the account, like on the web.
+            ReorderableListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              buildDefaultDragHandles: false,
+              itemCount: _groups.length,
+              onReorderItem: _reorder,
+              // A buzz when it lifts, so you know it's picked up.
+              onReorderStart: (_) => HapticFeedback.mediumImpact(),
+              // The picked-up card grows, tilts a little and casts a shadow
+              // while it's carried.
+              proxyDecorator: (child, _, animation) => AnimatedBuilder(
+                animation: animation,
+                builder: (context, child) {
+                  final t = Curves.easeOut.transform(animation.value);
+                  return Transform.rotate(
+                    angle: -0.02 * t,
+                    child: Transform.scale(
+                      scale: 1 + 0.06 * t,
+                      child: Material(
+                        color: Colors.transparent,
+                        elevation: 16 * t,
+                        shadowColor: Colors.black,
+                        borderRadius: BorderRadius.circular(12),
+                        child: child,
+                      ),
+                    ),
+                  );
+                },
+                child: child,
+              ),
+              itemBuilder: (context, i) {
+                final g = _groups[i];
+                return ReorderableDelayedDragStartListener(
+                  key: ValueKey(g.id),
+                  index: i,
+                  child: _GroupCard(
+                    group: g,
+                    isPrimary: g.id == TeamAccent.of(context).primaryGroup?.id,
+                    onOpen: () => _openGroup(g),
+                  ),
+                );
+              },
+            ),
         ],
       ),
     );
   }
 
-  Future<void> _openSettings(Group g) async {
+  /// Moves a dragged group and saves the new order to the account.
+  Future<void> _reorder(int from, int to) async {
+    setState(() {
+      final group = _groups.removeAt(from);
+      _groups.insert(to, group);
+    });
+    try {
+      await widget.auth
+          .updateProfile(groupOrder: [for (final g in _groups) g.id]);
+    } on ApiException catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text("Couldn't save the new order. Try again.")));
+      }
+    }
+  }
+
+  /// The group's page: its live session or starting one, its recordings,
+  /// and its settings.
+  Future<void> _openGroup(Group g) async {
     await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => GroupSettingsScreen(auth: widget.auth, group: g)),
     );
     // The color or roster may have changed there.
     if (mounted) _loadGroups();
-  }
-
-  void _openGroup(Group g) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => RecordingsScreen(
-          auth: widget.auth,
-          groupId: g.id,
-          title: g.name,
-        ),
-      ),
-    );
   }
 }
 
@@ -325,17 +371,15 @@ class _GroupCard extends StatelessWidget {
   const _GroupCard({
     required this.group,
     required this.isPrimary,
-    required this.onRecordings,
-    required this.onSettings,
+    required this.onOpen,
   });
 
   final Group group;
   final bool isPrimary;
-  final VoidCallback onRecordings;
-  final VoidCallback onSettings;
+  final VoidCallback onOpen;
 
-  /// The card is filled with the team color, with the group's recordings and
-  /// a gear for its settings page, matching the web's group tiles.
+  /// The card is filled with the team color and opens the group's page,
+  /// matching the web's group tiles.
   @override
   Widget build(BuildContext context) {
     final fill = parseHexColor(group.primaryColor);
@@ -344,10 +388,16 @@ class _GroupCard extends StatelessWidget {
     return Card(
       color: fill ?? const Color(0xFF1C1C1C),
       margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onOpen,
+        child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 14, 10, 14),
         child: Row(
           children: [
+            // Shows the cards can be moved: long-press and drag.
+            Icon(Icons.drag_indicator, color: ink.withValues(alpha: 0.55)),
+            const SizedBox(width: 6),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -380,19 +430,9 @@ class _GroupCard extends StatelessWidget {
                 ],
               ),
             ),
-            FilledButton(
-              onPressed: onRecordings,
-              style: fill == null
-                  ? null
-                  : FilledButton.styleFrom(backgroundColor: ink, foregroundColor: fill),
-              child: const Text('Recordings'),
-            ),
-            IconButton(
-              onPressed: onSettings,
-              tooltip: 'Settings for ${group.name}',
-              icon: Icon(Icons.settings_outlined, color: ink),
-            ),
+            Icon(Icons.chevron_right, color: ink.withValues(alpha: 0.8)),
           ],
+        ),
         ),
       ),
     );

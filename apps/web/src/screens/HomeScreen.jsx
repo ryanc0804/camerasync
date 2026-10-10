@@ -88,7 +88,9 @@ export function HomeScreen() {
     .slice(0, 5);
   const live = liveSessions[Math.min(liveIndex, liveSessions.length - 1)];
   const groupName = (groupId) =>
-    groups.find((group) => group.id === groupId)?.name || groupId;
+    groupId == null
+      ? "No group"
+      : groups.find((group) => group.id === groupId)?.name || groupId;
 
   // joins a live session from the home page
   const joinLiveSession = async (id) => {

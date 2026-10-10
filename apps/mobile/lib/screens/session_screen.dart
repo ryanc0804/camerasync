@@ -10,7 +10,9 @@ import '../socket/sync_socket.dart';
 /// Recording view for a session. Requests camera/mic only while mounted and
 /// releases them on dispose (per the MVP permissions rule — no background
 /// access). Connects the authenticated socket, joins the session room, and
-/// shows who else is in it; CameraScreen follows the synchronized start/stop.
+/// goes straight to the camera, with the session's name and how many devices
+/// are connected across the top. CameraScreen follows the synchronized
+/// start/stop.
 class SessionScreen extends StatefulWidget {
   const SessionScreen({
     super.key,
@@ -106,6 +108,7 @@ class _SessionScreenState extends State<SessionScreen> {
   Widget build(BuildContext context) {
     if (!_initialized) {
       return const Scaffold(
+        backgroundColor: Colors.black,
         body: Center(child: CircularProgressIndicator()),
       );
     }
@@ -113,58 +116,118 @@ class _SessionScreenState extends State<SessionScreen> {
     final socket = _socket!;
     final joined = _error == null;
 
+    if (joined && _permissionsGranted) {
+      return CameraScreen(
+        socket: socket,
+        sessionId: widget.sessionId,
+        recordings: RecordingsApi(widget.auth.api),
+        canControl: _canControl,
+        topBar: _SessionTopBar(
+          name: widget.sessionName ?? 'Session ${widget.sessionId}',
+          code: widget.sessionId,
+          connected: _members.length,
+          clockSynced: socket.clockSynced,
+        ),
+      );
+    }
+
+    // Couldn't join, or camera/microphone access was refused.
     return Scaffold(
+      backgroundColor: Colors.black,
       appBar: AppBar(
+        backgroundColor: Colors.black,
         title: Text(widget.sessionName ?? 'Session ${widget.sessionId}'),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (!_permissionsGranted)
-              const Text(
-                'Camera and microphone permission required.',
-                style: TextStyle(color: Colors.red),
-              ),
-            if (_error != null) ...[
-              Text(_error!, style: const TextStyle(color: Colors.redAccent)),
-              const SizedBox(height: 8),
-            ],
-            Text(
-              socket.clockSynced
-                  ? 'Clock offset: ${socket.clockOffsetMs} ms'
-                  : 'Clock not synced — recording may drift.',
-            ),
-            const SizedBox(height: 16),
-            Text('Connected devices (${_members.length})'),
-            Expanded(
-              child: ListView(
-                children: _members
-                    .map((m) => ListTile(title: Text(m.displayName)))
-                    .toList(),
-              ),
-            ),
-            FilledButton(
-              onPressed: joined && _permissionsGranted
-                  ? () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => CameraScreen(
-                            socket: socket,
-                            sessionId: widget.sessionId,
-                            recordings: RecordingsApi(widget.auth.api),
-                            canControl: _canControl,
-                          ),
-                        ),
-                      );
-                    }
-                  : null,
-              child: const Text('Open Camera'),
-            ),
-          ],
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            _error ?? 'Camera and microphone permission are required to record.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.redAccent, height: 1.4),
+          ),
         ),
+      ),
+    );
+  }
+}
+
+/// The bar across the top of a session's camera: back, the session's name,
+/// and how many devices are connected (a hint when the clock isn't synced).
+class _SessionTopBar extends StatelessWidget {
+  const _SessionTopBar({
+    required this.name,
+    required this.code,
+    required this.connected,
+    required this.clockSynced,
+  });
+
+  final String name;
+
+  /// The session's code, so others can join with it.
+  final String code;
+  final int connected;
+  final bool clockSynced;
+
+  @override
+  Widget build(BuildContext context) {
+    const shadow = [Shadow(blurRadius: 6, color: Colors.black)];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 4, 12, 4),
+      child: Row(
+        children: [
+          IconButton(
+            onPressed: () => Navigator.of(context).maybePop(),
+            icon: const Icon(Icons.arrow_back, color: Colors.white, shadows: shadow),
+            tooltip: 'Leave session',
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    shadows: shadow,
+                  ),
+                ),
+                Text(
+                  'Code $code',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12, shadows: shadow),
+                ),
+                if (!clockSynced)
+                  const Text(
+                    'Clock not synced; recordings may drift.',
+                    style: TextStyle(color: Colors.orangeAccent, fontSize: 12, shadows: shadow),
+                  ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.black54,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.circle, size: 9, color: Color(0xFF4ADE80)),
+                const SizedBox(width: 6),
+                Text(
+                  '$connected connected',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

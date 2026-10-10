@@ -11,11 +11,12 @@ import { Router } from "express";
 import multer from "multer";
 import { pool } from "../db/pool.js";
 import { requireAuth } from "../middleware/requireAuth.js";
-import { atLeast, getSessionRole } from "../middleware/groupRole.js";
+import { atLeast, getSessionRole, sessionVisibleSql } from "../middleware/groupRole.js";
 import { storage } from "../storage/index.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
 import { startOffsetMs } from "../recordings/startOffset.js";
 import { findSyncBeep } from "../recordings/syncBeep.js";
+import { remuxForStreaming } from "../recordings/remux.js";
 
 export const fileRouter = Router();
 
@@ -164,8 +165,7 @@ fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
     const { rows } = await pool.query(
       `SELECT EXISTS (
          SELECT 1 FROM recording_sessions rs
-         JOIN group_members gm ON gm.group_id = rs.group_id
-         WHERE rs.id = v.session_id AND gm.user_id = $2
+         WHERE rs.id = v.session_id AND ${sessionVisibleSql("rs", "$2")}
        ) AS allowed FROM recording_session_videos v WHERE v.file_id = $1`,
       [fileId, req.user.id]
     );
@@ -287,6 +287,9 @@ fileRouter.post(
       // findSyncBeep never throws; null just means playback falls back to
       // the start time the device reported.
       const beepAtMs = await findSyncBeep(tempPath);
+      // Index at the front and seekable, so playback starts quickly. Keeps
+      // the original if it can't (no re-encode either way).
+      await remuxForStreaming(tempPath, path.extname(fileId));
 
       // Store first, then record the row. The other way round, a failed
       // store would leave a row pointing at nothing, and the client's retry

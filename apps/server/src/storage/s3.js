@@ -89,6 +89,14 @@ export function createS3Storage({ uploadDir }) {
       }
     },
 
+    // The stored object as a stream, for building a session download.
+    async open(fileId) {
+      const object = await client.send(
+        new GetObjectCommand({ Bucket: bucket, Key: keyFor(fileId) })
+      );
+      return object.Body;
+    },
+
     // Passes the player's Range header through to S3 and relays the 206 so
     // seeking works exactly as it did with sendFile.
     async serve(req, res, next, { fileId, contentType }) {

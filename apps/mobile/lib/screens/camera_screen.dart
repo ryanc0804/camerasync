@@ -21,6 +21,7 @@ class CameraScreen extends StatefulWidget {
     this.recordings,
     this.embedded = false,
     this.canControl = false,
+    this.topBar,
   });
 
   final SyncSocket? socket;
@@ -38,6 +39,10 @@ class CameraScreen extends StatefulWidget {
   /// every device (the session's creator, or a group admin or owner). Other
   /// members' cameras just follow the host.
   final bool canControl;
+
+  /// Shown across the top of the full-screen camera instead of an app bar,
+  /// like the session's name and how many devices are connected.
+  final Widget? topBar;
 
   bool get isSolo => socket == null;
 
@@ -308,6 +313,25 @@ class _CameraScreenState extends State<CameraScreen> {
       return _body();
     }
 
+    final topBar = widget.topBar;
+    if (topBar != null) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            _body(),
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: SafeArea(bottom: false, child: topBar),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.isSolo ? 'Solo recording' : 'Camera'),
@@ -339,10 +363,10 @@ class _CameraScreenState extends State<CameraScreen> {
       children: [
         _preview(),
 
-        // Recording indicator, kept clear of the status bar.
+        // Recording indicator, kept clear of the status bar and top bar.
         if (_recording)
           Positioned(
-            top: 60,
+            top: 60 + _topBarSpace,
             left: 0,
             right: 0,
             child: Center(
@@ -362,7 +386,7 @@ class _CameraScreenState extends State<CameraScreen> {
         // Upload status for the last recording, with a retry when it failed.
         if (_upload != _UploadState.idle)
           Positioned(
-            top: 96,
+            top: 96 + _topBarSpace,
             left: 16,
             right: 16,
             child: Center(child: _uploadBanner()),
@@ -388,6 +412,10 @@ class _CameraScreenState extends State<CameraScreen> {
       ],
     );
   }
+
+  /// Room left under [CameraScreen.topBar] so the camera's own labels
+  /// don't sit beneath it.
+  double get _topBarSpace => widget.topBar == null ? 0 : 56;
 
   /// Fills the screen without distorting, in either orientation.
   ///
@@ -518,11 +546,31 @@ class _CameraScreenState extends State<CameraScreen> {
         ],
       );
     }
-    return GestureDetector(
+    final shutter = GestureDetector(
       onTap: widget.isSolo
           ? (_recording ? _stopRecording : _startRecording)
           : _hostShutter,
       child: _shutterButton(),
+    );
+    if (widget.isSolo || _recording) return shutter;
+    // The host's shutter starts every camera and plays the sync beep; it
+    // lines up best from the middle of the room (sound takes ~3 ms a metre).
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        shutter,
+        const SizedBox(height: 10),
+        const Text(
+          'Starts every camera with a beep.\nBest from the middle of the room, volume up.',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 12,
+            height: 1.3,
+            shadows: [Shadow(blurRadius: 6, color: Colors.black)],
+          ),
+        ),
+      ],
     );
   }
 

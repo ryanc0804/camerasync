@@ -7,7 +7,7 @@
 //   UPLOAD_DIR                local files (local driver) and the temp dir
 //                             uploads are validated in (both drivers)
 //
-// Both drivers expose the same surface: incomingDir, put(), serve(),
+// Both drivers expose the same surface: incomingDir, put(), serve(), open(),
 // remove(), check() and describe(). See local.js and s3.js.
 
 import path from "node:path";
