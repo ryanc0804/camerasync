@@ -57,17 +57,45 @@ class RecordingSession {
 /// One device's video within a recording. [url] is null when that member
 /// saved a video but has not uploaded it yet.
 class AngleVideo {
-  const AngleVideo({required this.userId, required this.name, this.url});
+  const AngleVideo({
+    required this.userId,
+    required this.name,
+    this.url,
+    this.startOffsetMs,
+  });
 
   final int userId;
   final String name;
   final String? url;
 
+  /// How much later this camera really began than the take's shared start,
+  /// or null if the device didn't report it (treated as on time).
+  final int? startOffsetMs;
+
   factory AngleVideo.fromJson(Map<String, dynamic> json) => AngleVideo(
         userId: (json['userId'] as num).toInt(),
         name: (json['name'] ?? 'Unnamed member').toString(),
         url: json['url'] as String?,
+        startOffsetMs: (json['startOffsetMs'] as num?)?.toInt(),
       );
+}
+
+/// How far to skip into each angle (by index) so a take's angles line up,
+/// like angleTrims in the web app. Cameras start a moment apart, so the
+/// shared timeline begins when the last one started and every earlier angle
+/// skips ahead by how much earlier it began. Angles that weren't uploaded
+/// are left out.
+Map<int, Duration> angleTrims(List<AngleVideo> videos) {
+  final offsets = <int, int>{
+    for (var i = 0; i < videos.length; i++)
+      if (videos[i].url != null) i: videos[i].startOffsetMs ?? 0,
+  };
+  if (offsets.isEmpty) return {};
+  final latest = offsets.values.reduce((a, b) => a > b ? a : b);
+  return {
+    for (final entry in offsets.entries)
+      entry.key: Duration(milliseconds: latest - entry.value),
+  };
 }
 
 /// One synchronized recording within a session: every angle that shares the
@@ -262,9 +290,14 @@ class RecordingsApi {
   /// Records that this user finished a video for the recording that started
   /// at [startedAtMs] (server clock), so the session's video counts include
   /// it even if the upload itself fails. Safe to repeat.
-  Future<void> saveRecordingDetails(String id, int startedAtMs) =>
+  ///
+  /// [actualStartedAtMs] is when this phone's camera really began (server
+  /// clock); playback shifts the angle by how late that was.
+  Future<void> saveRecordingDetails(String id, int startedAtMs,
+          {int? actualStartedAtMs}) =>
       _api.post('/api/recordings/sessions/$id/videos', {
         'startedAt': startedAtMs,
+        if (actualStartedAtMs != null) 'actualStartedAt': actualStartedAtMs,
       });
 
   /// Uploads a finished recording so it appears in the session's playback.
@@ -277,10 +310,12 @@ class RecordingsApi {
     int startedAtMs,
     String filePath, {
     String? filename,
+    int? actualStartedAtMs,
   }) =>
       _api.postFile(
         '/api/files/upload'
-        '?sessionId=${Uri.encodeQueryComponent(id)}&startedAt=$startedAtMs',
+        '?sessionId=${Uri.encodeQueryComponent(id)}&startedAt=$startedAtMs'
+        '${actualStartedAtMs == null ? '' : '&actualStartedAt=$actualStartedAtMs'}',
         filePath: filePath,
         filename: filename,
       );

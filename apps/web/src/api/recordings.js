@@ -76,10 +76,13 @@ export async function cancelSession(id) {
   return data.session;
 }
 
-export async function saveRecordingDetails(id, startedAt) {
+// startedAt is the take's shared start; actualStartedAt (optional) is when
+// this device's camera really began, both on the server clock. Playback
+// shifts the angle by the difference to line it up with the others.
+export async function saveRecordingDetails(id, startedAt, actualStartedAt) {
   await request(`/api/recordings/sessions/${encodeURIComponent(id)}/videos`, {
     method: "POST",
-    body: JSON.stringify({ startedAt }),
+    body: JSON.stringify({ startedAt, actualStartedAt }),
   });
 }
 
@@ -93,13 +96,16 @@ export async function getSessionVideos(id) {
   return data;
 }
 
-export async function uploadSessionVideo(id, startedAt, video, filename) {
+export async function uploadSessionVideo(id, startedAt, video, filename, actualStartedAt) {
   const body = new FormData();
   // Multipart uploads need the plain media type, without recorder codec details.
   const upload = new Blob([video], { type: video.type.split(";")[0] });
   body.append("file", upload, filename);
+  const actual = Number.isFinite(actualStartedAt)
+    ? `&actualStartedAt=${Math.round(actualStartedAt)}`
+    : "";
   const response = await fetch(
-    `${SERVER_URL}/api/files/upload?sessionId=${encodeURIComponent(id)}&startedAt=${startedAt}`,
+    `${SERVER_URL}/api/files/upload?sessionId=${encodeURIComponent(id)}&startedAt=${startedAt}${actual}`,
     { method: "POST", credentials: "include", body }
   );
   if (!response.ok) {

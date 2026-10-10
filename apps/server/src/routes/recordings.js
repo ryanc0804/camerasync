@@ -23,6 +23,7 @@ import {
 import { deleteRecordingFiles } from "./file.js";
 import { EVENTS } from "../sockets/events.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
+import { startOffsetMs } from "../recordings/startOffset.js";
 
 export const recordingsRouter = Router();
 const SOCKET_STATUSES = new Set(['recording', 'stopped']);
@@ -188,8 +189,8 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
       return res.status(404).json({ error: "Session not found." });
     }
     const { rows } = await pool.query(
-      `SELECT v.started_at_ms, v.user_id, v.file_id, u.display_name,
-              sr.recording_number
+      `SELECT v.started_at_ms, v.user_id, v.file_id, v.start_offset_ms,
+              u.display_name, sr.recording_number
        FROM recording_session_videos v JOIN users u ON u.user_id = v.user_id
        LEFT JOIN session_recordings sr
          ON sr.session_id = v.session_id AND sr.started_at_ms = v.started_at_ms
@@ -217,6 +218,9 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
         userId: Number(row.user_id),
         name: row.display_name || "Unnamed member",
         url: row.file_id ? `/api/files/get/${row.file_id}` : null,
+        // How much later this camera really started than startedAt; players
+        // shift the angle by it. null when the device didn't report it.
+        startOffsetMs: row.start_offset_ms == null ? null : Number(row.start_offset_ms),
       });
     }
     res.json({ session: sessions[0], recordings });
@@ -247,9 +251,14 @@ recordingsRouter.post("/sessions/:id/videos", requireAuth, async (req, res, next
     }
     const number = await ensureRecordingNumber(req.params.id, startedAt);
     await pool.query(
-      `INSERT INTO recording_session_videos (session_id, user_id, started_at_ms)
-       VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-      [req.params.id, req.user.id, startedAt]
+      `INSERT INTO recording_session_videos
+         (session_id, user_id, started_at_ms, start_offset_ms)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (session_id, user_id, started_at_ms) DO UPDATE
+         SET start_offset_ms = COALESCE(recording_session_videos.start_offset_ms,
+                                        EXCLUDED.start_offset_ms)`,
+      [req.params.id, req.user.id, startedAt,
+        startOffsetMs(req.body?.actualStartedAt, startedAt)]
     );
     res.json({ ok: true, recording: { startedAt, number } });
   } catch (err) {

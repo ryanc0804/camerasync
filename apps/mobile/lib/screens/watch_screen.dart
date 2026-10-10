@@ -45,6 +45,33 @@ class _WatchScreenState extends State<WatchScreen> {
   /// Open players by angle index in the current recording. On a phone only
   /// the selected angle is open; on a big screen every uploaded one is.
   final Map<int, VideoPlayerController> _players = {};
+
+  /// How far into each angle the shared timeline starts, so every angle
+  /// shows the same moment. [_position], [_duration] and comment times are
+  /// all on that shared timeline.
+  Map<int, Duration> _trims = {};
+  Duration _trimOf(int i) => _trims[i] ?? Duration.zero;
+
+  /// Where angle [i]'s player is on the shared timeline.
+  Duration _timelineAt(int i, VideoPlayerController player) {
+    final at = player.value.position - _trimOf(i);
+    return at < Duration.zero ? Duration.zero : at;
+  }
+
+  /// The angle index of the clock player, if it's open.
+  int? get _clockIndex {
+    for (final entry in _players.entries) {
+      if (entry.value == _clockPlayer) return entry.key;
+    }
+    return null;
+  }
+
+  /// The shared-timeline position of the clock, or [_position] without one.
+  Duration get _clockAt {
+    final i = _clockIndex;
+    final clock = _clockPlayer;
+    return i == null || clock == null ? _position : _timelineAt(i, clock);
+  }
   int _selected = 0;
   bool _bigScreen = false;
   VideoPlayerController? _clockPlayer;
@@ -121,6 +148,7 @@ class _WatchScreenState extends State<WatchScreen> {
       _duration = Duration.zero;
       _notes = [];
       _selected = uploaded.isEmpty ? 0 : uploaded.first;
+      _trims = recording == null ? {} : angleTrims(recording.videos);
     });
     if (recording == null) return;
     await _syncPlayers();
@@ -137,7 +165,7 @@ class _WatchScreenState extends State<WatchScreen> {
     final generation = ++_syncGeneration;
     final wanted = _bigScreen ? _uploadedAngles.toSet() : {_selected};
 
-    _position = _clockPlayer?.value.position ?? _position;
+    _position = _clockAt;
     for (final i in _players.keys.toList()) {
       if (!wanted.contains(i)) {
         final player = _players.remove(i)!;
@@ -160,13 +188,16 @@ class _WatchScreenState extends State<WatchScreen> {
       final player = opened[k];
       if (player == null) continue;
       _players[missing[k]] = player;
-      await player.seekTo(_position);
+      await player.seekTo(_position + _trimOf(missing[k]));
       if (_playing) player.play();
     }
 
     _setClock(_players[_selected] ??
         (_players.isEmpty ? null : _players.values.first));
-    final durations = [for (final p in _players.values) p.value.duration];
+    final durations = [
+      for (final entry in _players.entries)
+        entry.value.value.duration - _trimOf(entry.key),
+    ];
     setState(() {
       _duration = durations.isEmpty
           ? Duration.zero
@@ -204,8 +235,6 @@ class _WatchScreenState extends State<WatchScreen> {
     _clockPlayer?.addListener(_onTick);
   }
 
-  VideoPlayerController? get _clock => _clockPlayer;
-
   void _onTick() {
     final clock = _clockPlayer;
     if (clock == null || !mounted) return;
@@ -216,8 +245,9 @@ class _WatchScreenState extends State<WatchScreen> {
       _pause();
       return;
     }
-    if (value.position.inSeconds != _position.inSeconds) {
-      setState(() => _position = value.position);
+    final at = _clockAt;
+    if (at.inSeconds != _position.inSeconds) {
+      setState(() => _position = at);
     }
   }
 
@@ -271,7 +301,8 @@ class _WatchScreenState extends State<WatchScreen> {
     final target =
         to < Duration.zero ? Duration.zero : (to > _duration ? _duration : to);
     await Future.wait([
-      for (final p in _players.values) p.seekTo(target),
+      for (final entry in _players.entries)
+        entry.value.seekTo(target + _trimOf(entry.key)),
     ]);
     if (mounted) setState(() => _position = target);
   }
@@ -584,7 +615,7 @@ class _WatchScreenState extends State<WatchScreen> {
     // Typing takes a while, so hold the picture still: a new comment is
     // stamped with the moment on screen when the sheet opened.
     if (_playing) _pause();
-    final at = _clock?.value.position ?? _position;
+    final at = _clockAt;
 
     showModalBottomSheet<void>(
       context: context,

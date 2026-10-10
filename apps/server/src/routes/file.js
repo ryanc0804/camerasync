@@ -14,6 +14,7 @@ import { requireAuth } from "../middleware/requireAuth.js";
 import { atLeast, getSessionRole } from "../middleware/groupRole.js";
 import { storage } from "../storage/index.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
+import { startOffsetMs } from "../recordings/startOffset.js";
 
 export const fileRouter = Router();
 
@@ -295,13 +296,17 @@ fileRouter.post(
       try {
         await ensureRecordingNumber(req.query.sessionId, Number(req.query.startedAt));
         ({ rows } = await pool.query(
-          `INSERT INTO recording_session_videos (session_id, user_id, started_at_ms, file_id)
-           VALUES ($1, $2, $3, $4)
+          `INSERT INTO recording_session_videos
+             (session_id, user_id, started_at_ms, file_id, start_offset_ms)
+           VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (session_id, user_id, started_at_ms)
-           DO UPDATE SET file_id = EXCLUDED.file_id
+           DO UPDATE SET file_id = EXCLUDED.file_id,
+             start_offset_ms = COALESCE(recording_session_videos.start_offset_ms,
+                                        EXCLUDED.start_offset_ms)
            WHERE recording_session_videos.file_id IS NULL
            RETURNING file_id`,
-          [req.query.sessionId, req.user.id, Number(req.query.startedAt), fileId]
+          [req.query.sessionId, req.user.id, Number(req.query.startedAt), fileId,
+            startOffsetMs(req.query.actualStartedAt, Number(req.query.startedAt))]
         ));
       } catch (err) {
         await storage.remove([fileId]).catch(() => {});
