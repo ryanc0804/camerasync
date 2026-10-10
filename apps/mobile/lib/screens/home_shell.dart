@@ -8,6 +8,7 @@ import 'home_tab.dart';
 import 'join_screen.dart';
 import 'groups_screen.dart';
 import 'settings_tab.dart';
+import '../notifications/phone_alerts.dart';
 
 // Older imports pull the palette from this file; keep that working.
 export '../theme.dart';
@@ -27,6 +28,21 @@ class _HomeShellState extends State<HomeShell> {
   // Order matches the design: groups, record, home, settings.
   int _index = 2;
 
+  /// Phone notifications for activity in the user's groups, while signed in.
+  late final PhoneAlerts _alerts = PhoneAlerts(widget.auth);
+
+  @override
+  void initState() {
+    super.initState();
+    _alerts.start().catchError((_) {});
+  }
+
+  @override
+  void dispose() {
+    _alerts.stop();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final tabs = [
@@ -40,7 +56,7 @@ class _HomeShellState extends State<HomeShell> {
         onSwitchTab: (i) => setState(() => _index = i),
       ),
       CalendarTab(auth: widget.auth),
-      SettingsTab(auth: widget.auth),
+      SettingsTab(auth: widget.auth, alerts: _alerts),
     ];
 
     return Scaffold(

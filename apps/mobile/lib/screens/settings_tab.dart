@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/api_client.dart';
 import '../api/groups_api.dart';
 import '../auth/auth_service.dart';
+import '../notifications/phone_alerts.dart';
 import '../team_accent.dart';
 import '../theme.dart';
 
@@ -12,9 +13,12 @@ const _minPasswordLength = 8;
 /// the account (name, email, password, log out), the primary group whose
 /// color the app takes, and About.
 class SettingsTab extends StatefulWidget {
-  const SettingsTab({super.key, required this.auth});
+  const SettingsTab({super.key, required this.auth, this.alerts});
 
   final AuthService auth;
+
+  /// Shows phone notifications; asked for permission when they're turned on.
+  final PhoneAlerts? alerts;
 
   @override
   State<SettingsTab> createState() => _SettingsTabState();
@@ -151,6 +155,7 @@ class _SettingsTabState extends State<SettingsTab> {
                   ),
             ],
           ),
+          _NotificationsCard(auth: widget.auth, alerts: widget.alerts),
           const _Card(
             title: 'About',
             children: [
@@ -167,6 +172,100 @@ class _SettingsTabState extends State<SettingsTab> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Phone notification switches, saved on the account: one for all of
+/// them, and one per kind of activity.
+class _NotificationsCard extends StatefulWidget {
+  const _NotificationsCard({required this.auth, this.alerts});
+
+  final AuthService auth;
+  final PhoneAlerts? alerts;
+
+  @override
+  State<_NotificationsCard> createState() => _NotificationsCardState();
+}
+
+class _NotificationsCardState extends State<_NotificationsCard> {
+  bool _saving = false;
+
+  static const _kinds = [
+    ('comments', 'Comments on recordings'),
+    ('joins', 'People joining your groups'),
+    ('sessions', 'Practices starting'),
+  ];
+
+  Future<void> _set(String key, bool on) async {
+    // Turning them on asks Android for permission first.
+    if (key == 'push' && on && widget.alerts != null) {
+      final allowed = await widget.alerts!.requestPermission();
+      if (!allowed) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text(
+                  'Notifications are off for 8kount in your phone settings.')));
+        }
+        return;
+      }
+    }
+    setState(() => _saving = true);
+    try {
+      await widget.auth.updateProfile(notificationPrefs: {key: on});
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final team = TeamAccent.of(context);
+    final prefs = widget.auth.user?.notificationPrefs ?? const {};
+    Widget toggle(String key, String label, {String? subtitle}) =>
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: Text(label, style: const TextStyle(color: Colors.white)),
+          subtitle: subtitle == null
+              ? null
+              : Text(subtitle, style: const TextStyle(color: kMuted, height: 1.3)),
+          value: prefs[key] != false,
+          activeThumbColor: team.ink,
+          activeTrackColor: team.fill,
+          onChanged: _saving ? null : (on) => _set(key, on),
+        );
+
+    // Push decides whether the phone gets an alert; the categories decide
+    // what shows in the app's notifications at all (and so what can be
+    // pushed). With push off, categories still show in the app.
+    return _Card(
+      title: 'Notifications',
+      children: [
+        toggle('push', 'Push notifications',
+            subtitle: 'Send alerts to this phone. When off, your '
+                'notifications still show in the app.'),
+        const Padding(
+          padding: EdgeInsets.only(top: 10, bottom: 2),
+          child: Text(
+            'CATEGORIES',
+            style: TextStyle(
+                color: kMuted,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1),
+          ),
+        ),
+        const Text(
+          'What shows in your notifications, and gets pushed when push is on.',
+          style: TextStyle(color: kMuted, height: 1.3),
+        ),
+        for (final (key, label) in _kinds) toggle(key, label),
+      ],
     );
   }
 }

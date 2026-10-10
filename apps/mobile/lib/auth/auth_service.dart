@@ -10,6 +10,7 @@ class AppUser {
     this.name,
     this.emailVerified = true,
     this.primaryGroupId,
+    this.notificationPrefs = const {},
   });
 
   final int id;
@@ -19,6 +20,11 @@ class AppUser {
   /// The group whose color the app takes, saved on the account; null means
   /// the first group the user joined.
   final String? primaryGroupId;
+
+  /// Which phone notifications the user wants, saved on the account:
+  /// 'push' (all of them), 'comments', 'joins' and 'sessions'. A missing
+  /// switch counts as on.
+  final Map<String, bool> notificationPrefs;
 
   /// False until the sign-up confirmation code is entered (SCRUM-43); the
   /// app shows only the confirm screen until then.
@@ -32,6 +38,11 @@ class AppUser {
         // confirmation never strands anyone on the confirm screen.
         emailVerified: json['emailVerified'] != false,
         primaryGroupId: json['primaryGroupId'] as String?,
+        notificationPrefs: {
+          for (final entry
+              in ((json['notificationPrefs'] as Map?) ?? const {}).entries)
+            if (entry.value is bool) entry.key.toString(): entry.value as bool,
+        },
       );
 
   String get displayName => (name != null && name!.isNotEmpty) ? name! : email;
@@ -144,10 +155,17 @@ class AuthService extends ChangeNotifier {
 
   /// Settings: change the display name and/or the primary group. The server
   /// checks the user belongs to the group.
-  Future<void> updateProfile({String? name, String? primaryGroupId}) async {
+  Future<void> updateProfile({
+    String? name,
+    String? primaryGroupId,
+    Map<String, bool>? notificationPrefs,
+    List<String>? groupOrder,
+  }) async {
     final data = await _api.patch('/api/auth/me', {
       if (name != null) 'name': name,
       if (primaryGroupId != null) 'primaryGroupId': primaryGroupId,
+      if (notificationPrefs != null) 'notificationPrefs': notificationPrefs,
+      if (groupOrder != null) 'groupOrder': groupOrder,
     });
     _user = AppUser.fromJson((data as Map)['user'] as Map<String, dynamic>);
     notifyListeners();

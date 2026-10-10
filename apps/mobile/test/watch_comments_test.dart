@@ -133,42 +133,46 @@ void main() {
     });
     await settle(tester);
     await settle(tester);
-    await tester.tap(find.byIcon(Icons.chat_bubble_outline));
+    await tester.tap(find.byIcon(Icons.add_comment_outlined));
     // Let the sheet finish sliding up before tapping inside it.
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
   }
 
+  Finder post() => find.widgetWithText(FilledButton, 'Post');
+
   testWidgets('posts a comment stamped at the paused moment', (tester) async {
     await openComments(tester);
-    expect(find.text('Watch the left side'), findsOneWidget);
     expect(find.text('Comment at 00:00'), findsOneWidget);
 
     await tester.enterText(find.byType(TextField), '  Great catch  ');
-    await tapAndWait(tester, find.byTooltip('Post comment'));
+    await tapAndWait(tester, post());
 
     expect(posted, [
       {'startedAt': startedAt, 'body': 'Great catch', 'videoTimeMs': 0},
     ]);
-    expect(find.text('Great catch'), findsOneWidget);
-    // The box clears after a successful post.
-    expect(
-      tester.widget<TextField>(find.byType(TextField)).controller!.text,
-      isEmpty,
-    );
+    // The sheet closes, and the new comment is live at the playhead.
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.byType(TextField), findsNothing);
+    expect(find.textContaining('Great catch', findRichText: true), findsOneWidget);
   });
 
-  testWidgets('only offers delete on comments the server allows',
+  testWidgets('a comment pops up at its moment, with delete only when allowed',
       (tester) async {
     await openComments(tester);
+    // Coach's comment is at 0:05, not at the playhead (0:00), so it isn't
+    // showing, and there is no list of comments.
+    expect(find.textContaining('Watch the left side', findRichText: true), findsNothing);
     expect(find.byTooltip('Delete comment'), findsNothing);
 
     await tester.enterText(find.byType(TextField), 'Mine');
-    await tapAndWait(tester, find.byTooltip('Post comment'));
+    await tapAndWait(tester, post());
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.textContaining('Mine', findRichText: true), findsOneWidget);
     expect(find.byTooltip('Delete comment'), findsOneWidget);
 
     await tapAndWait(tester, find.byTooltip('Delete comment'));
-    expect(find.text('Mine'), findsNothing);
+    expect(find.textContaining('Mine', findRichText: true), findsNothing);
     expect(notes.map((n) => n['id']), [1]);
   });
 
@@ -178,7 +182,7 @@ void main() {
     await openComments(tester);
 
     await tester.enterText(find.byType(TextField), 'Can I comment?');
-    await tapAndWait(tester, find.byTooltip('Post comment'));
+    await tapAndWait(tester, post());
 
     expect(find.text("Viewers can't leave notes."), findsOneWidget);
     expect(

@@ -1,6 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
 
 import '../api/api_client.dart';
@@ -288,13 +292,40 @@ class _WatchScreenState extends State<WatchScreen> {
       p.play();
     }
     setState(() => _playing = true);
+    _keepInLine?.cancel();
+    _keepInLine = Timer.periodic(
+        const Duration(milliseconds: 500), (_) => _realign());
   }
 
   void _pause() {
+    _keepInLine?.cancel();
     for (final p in _players.values) {
       p.pause();
     }
     setState(() => _playing = false);
+  }
+
+  /// While several angles play (a big screen), moves any that has drifted
+  /// more than 0.15 s from the clock angle back into line, the way the web
+  /// player does. One angle on a phone has nothing to drift from.
+  Timer? _keepInLine;
+
+  void _realign() {
+    final clockIndex = _clockIndex;
+    final clock = _clockPlayer;
+    if (!_playing || clockIndex == null || clock == null || _players.length < 2) {
+      return;
+    }
+    final at = _timelineAt(clockIndex, clock);
+    for (final entry in _players.entries) {
+      if (entry.key == clockIndex) continue;
+      final value = entry.value.value;
+      if (!value.isInitialized || value.isBuffering) continue;
+      final target = at + _trimOf(entry.key);
+      if (target >= value.duration) continue;
+      final drift = (value.position - target).inMilliseconds.abs();
+      if (drift > 150) entry.value.seekTo(target);
+    }
   }
 
   Future<void> _seek(Duration to) async {
@@ -318,6 +349,7 @@ class _WatchScreenState extends State<WatchScreen> {
 
   @override
   void dispose() {
+    _keepInLine?.cancel();
     _closeAllPlayers();
     super.dispose();
   }
@@ -356,6 +388,10 @@ class _WatchScreenState extends State<WatchScreen> {
                 ),
               ),
             Expanded(child: _body()),
+            if (recording != null) ...[
+              _liveComment(recording),
+              _timeline(),
+            ],
             if (recording != null && !_bigScreen && recording.videos.length > 1)
               _cameraButtons(recording),
             _transport(),
@@ -388,20 +424,141 @@ class _WatchScreenState extends State<WatchScreen> {
               ),
             ),
           ),
-          if (_recording != null) _commentsBadge(),
+          if (_recording != null)
+            IconButton(
+              onPressed: _downloading ? null : _download,
+              tooltip: 'Download session',
+              color: Colors.white,
+              icon: _downloading
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.download, size: 24),
+            ),
+          if (_recording != null)
+            IconButton(
+              onPressed: _showAddComment,
+              tooltip: 'Add a comment',
+              color: Colors.white,
+              icon: const Icon(Icons.add_comment_outlined, size: 24),
+            ),
         ],
       ),
     );
   }
 
-  Widget _commentsBadge() {
-    return TextButton.icon(
-      onPressed: _showNotes,
-      style: TextButton.styleFrom(foregroundColor: Colors.white),
-      icon: const Icon(Icons.chat_bubble_outline, size: 22),
-      label: Text(
-        '${_notes.length}',
-        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+  /// Comment dots are blue, like the web's.
+  static const _commentBlue = Color(0xFF3B82F6);
+
+  /// The comment playback is passing, shown for a few seconds from the
+  /// moment it was left; the commenter (or an admin) can delete it here.
+  Widget _liveComment(SessionRecording recording) {
+    SessionNote? live;
+    for (final n in _notes) {
+      final at = Duration(milliseconds: n.videoTimeMs);
+      if (_position >= at && _position < at + const Duration(seconds: 3)) {
+        live = n;
+      }
+    }
+    return SizedBox(
+      height: 40,
+      child: live == null
+          ? null
+          : Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 21),
+              child: Row(
+                children: [
+                  const Icon(Icons.circle, size: 10, color: _commentBlue),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text.rich(
+                      TextSpan(children: [
+                        TextSpan(
+                          text: '${live.authorName}: ',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        TextSpan(text: live.body),
+                      ]),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white, fontSize: 14),
+                    ),
+                  ),
+                  if (live.canDelete)
+                    IconButton(
+                      onPressed: () => _deleteNote(recording, live!),
+                      tooltip: 'Delete comment',
+                      color: const Color(0xFFFF6B6B),
+                      icon: const Icon(Icons.close, size: 20),
+                    ),
+                ],
+              ),
+            ),
+    );
+  }
+
+  /// A scrub bar with a blue dot wherever someone left a comment. Tap the
+  /// bar to jump there, or a dot to jump to its comment.
+  Widget _timeline() {
+    final team = TeamAccent.of(context);
+    final total = _duration.inMilliseconds;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(21, 0, 21, 4),
+      child: SizedBox(
+        height: 28,
+        child: LayoutBuilder(builder: (context, constraints) {
+          final width = constraints.maxWidth;
+          double xOf(int ms) =>
+              total <= 0 ? 0 : (ms / total).clamp(0.0, 1.0) * width;
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: total <= 0
+                ? null
+                : (d) => _seek(Duration(
+                    milliseconds:
+                        (d.localPosition.dx / width * total).round())),
+            child: Stack(
+              alignment: Alignment.centerLeft,
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF333333),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                Container(
+                  width: xOf(_position.inMilliseconds),
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: team.accent,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                for (final n in _notes)
+                  Positioned(
+                    left: xOf(n.videoTimeMs) - 7,
+                    child: GestureDetector(
+                      onTap: () =>
+                          _seek(Duration(milliseconds: n.videoTimeMs)),
+                      child: Container(
+                        width: 14,
+                        height: 14,
+                        decoration: BoxDecoration(
+                          color: _commentBlue,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: kBackground, width: 2),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          );
+        }),
       ),
     );
   }
@@ -609,11 +766,68 @@ class _WatchScreenState extends State<WatchScreen> {
     );
   }
 
-  void _showNotes() {
+  bool _downloading = false;
+
+  /// Downloads the whole session as one zip (a folder per recording, an
+  /// angle per member) and opens the share sheet, so it can go to Files,
+  /// Drive, a computer or a USB stick plugged into the phone.
+  Future<void> _download() async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _downloading = true);
+    messenger.showSnackBar(
+        const SnackBar(content: Text('Preparing the download…')));
+    File? file;
+    try {
+      final api = widget.auth.api;
+      final cookie = api.cookie;
+      final request = http.Request(
+        'GET',
+        Uri.parse('${api.baseUrl}/api/recordings/sessions/'
+            '${widget.session.id}/download'),
+      );
+      if (cookie != null) request.headers['Cookie'] = cookie;
+      final response = await http.Client().send(request);
+      if (response.statusCode != 200) {
+        throw ApiException(response.statusCode,
+            'The download is not available right now (${response.statusCode}).');
+      }
+      final name = _zipName(response.headers['content-disposition']) ??
+          '${widget.session.name}.zip';
+      final dir = await getTemporaryDirectory();
+      file = File('${dir.path}/$name');
+      final sink = file.openWrite();
+      await response.stream.pipe(sink);
+      if (!mounted) return;
+      messenger.hideCurrentSnackBar();
+      await SharePlus.instance.share(ShareParams(
+        files: [XFile(file.path, mimeType: 'application/zip')],
+        subject: widget.session.name,
+      ));
+    } on ApiException catch (e) {
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(const SnackBar(
+          content: Text("Couldn't download the session. Try again.")));
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
+  }
+
+  /// The file name the server suggests, e.g. "Stunt practice 2026-10-07.zip".
+  static String? _zipName(String? disposition) {
+    final match = RegExp(r'filename="([^"]+)"').firstMatch(disposition ?? '');
+    final name = match?.group(1)?.replaceAll(RegExp(r'[/\\]'), '');
+    return name == null || name.isEmpty ? null : name;
+  }
+
+  void _showAddComment() {
     final recording = _recording;
     if (recording == null) return;
-    // Typing takes a while, so hold the picture still: a new comment is
-    // stamped with the moment on screen when the sheet opened.
+    // Typing takes a while, so hold the picture still: the comment is
+    // stamped with the moment on screen when the sheet opened, and its dot
+    // lands there.
     if (_playing) _pause();
     final at = _clockAt;
 
@@ -624,15 +838,9 @@ class _WatchScreenState extends State<WatchScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (context) => _NotesSheet(
-        notes: _notes,
+      builder: (context) => _AddCommentSheet(
         at: at,
         onAdd: (body) => _addNote(recording, body, at),
-        onDelete: (note) => _deleteNote(recording, note),
-        onSeek: (ms) {
-          Navigator.of(context).pop();
-          _seek(Duration(milliseconds: ms));
-        },
       ),
     );
   }
@@ -733,29 +941,21 @@ class _AngleTile extends StatelessWidget {
 /// The comments drawer from the design, as a bottom sheet: each note shows
 /// the moment it refers to and jumps the players there when tapped. The box
 /// at the bottom adds a note at [at], the paused position.
-class _NotesSheet extends StatefulWidget {
-  const _NotesSheet({
-    required this.notes,
-    required this.at,
-    required this.onAdd,
-    required this.onDelete,
-    required this.onSeek,
-  });
+/// Adds one comment at [at]. There's no list: comments show as dots on the
+/// timeline and pop up as playback reaches them.
+class _AddCommentSheet extends StatefulWidget {
+  const _AddCommentSheet({required this.at, required this.onAdd});
 
-  final List<SessionNote> notes;
   final Duration at;
 
-  /// Saves a note and returns the recording's refreshed notes.
+  /// Saves the comment and returns the recording's refreshed comments.
   final Future<List<SessionNote>> Function(String body) onAdd;
-  final Future<List<SessionNote>> Function(SessionNote note) onDelete;
-  final ValueChanged<int> onSeek;
 
   @override
-  State<_NotesSheet> createState() => _NotesSheetState();
+  State<_AddCommentSheet> createState() => _AddCommentSheetState();
 }
 
-class _NotesSheetState extends State<_NotesSheet> {
-  late List<SessionNote> _notes = widget.notes;
+class _AddCommentSheetState extends State<_AddCommentSheet> {
   final _text = TextEditingController();
   bool _busy = false;
   String? _error;
@@ -766,43 +966,29 @@ class _NotesSheetState extends State<_NotesSheet> {
     super.dispose();
   }
 
-  /// Runs a save or delete, showing the server's message if it fails.
-  /// Returns whether it succeeded.
-  Future<bool> _run(Future<List<SessionNote>> Function() action) async {
+  Future<void> _post() async {
+    final body = _text.text.trim();
+    if (body.isEmpty || _busy) return;
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
-      final notes = await action();
-      if (mounted) setState(() => _notes = notes);
-      return true;
+      await widget.onAdd(body);
+      if (mounted) Navigator.of(context).pop();
     } catch (e) {
+      // The text stays so it can be sent again.
       if (mounted) {
-        setState(() => _error =
-            e is ApiException ? e.message : 'Something went wrong. Try again.');
+        setState(() {
+          _busy = false;
+          _error = e is ApiException ? e.message : 'Something went wrong. Try again.';
+        });
       }
-      return false;
-    } finally {
-      if (mounted) setState(() => _busy = false);
     }
-  }
-
-  Future<void> _add() async {
-    final body = _text.text.trim();
-    if (body.isEmpty || _busy) return;
-    // On failure the text stays so it can be sent again.
-    if (await _run(() => widget.onAdd(body))) _text.clear();
-  }
-
-  Future<void> _delete(SessionNote note) async {
-    if (_busy) return;
-    await _run(() => widget.onDelete(note));
   }
 
   @override
   Widget build(BuildContext context) {
-    final notes = _notes;
     // The sheet is a light tint of the team color; text is black or white,
     // whichever reads on it.
     final sheet = TeamAccent.of(context).fillLight;
@@ -811,150 +997,44 @@ class _NotesSheetState extends State<_NotesSheet> {
       child: Padding(
         // Keeps the comment box above the keyboard.
         padding: EdgeInsets.fromLTRB(
-          20,
-          16,
-          20,
-          20 + MediaQuery.viewInsetsOf(context).bottom,
-        ),
+            20, 16, 20, 20 + MediaQuery.viewInsetsOf(context).bottom),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Text(
-                  '${notes.length}',
-                  style: TextStyle(
-                    color: ink,
-                    fontSize: 32,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Icon(Icons.chat_bubble_outline, color: ink, size: 30),
-                const Spacer(),
-                Text(
-                  'Comments',
-                  style: TextStyle(
-                      color: ink.withValues(alpha: 0.6), fontSize: 14),
-                ),
-              ],
+            Text(
+              'Comment at ${formatClock(widget.at)}',
+              style: TextStyle(color: ink, fontSize: 18, fontWeight: FontWeight.w700),
             ),
-            const SizedBox(height: 8),
-            if (notes.isEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 24),
-                child: Text(
-                  'No comments on this recording yet. Add the first one below.',
-                  style: TextStyle(color: ink.withValues(alpha: 0.6)),
-                ),
-              )
-            else
-              Flexible(
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: notes.length,
-                  separatorBuilder: (_, __) =>
-                      Divider(color: ink.withValues(alpha: 0.12), height: 1),
-                  itemBuilder: (context, i) {
-                    final n = notes[i];
-                    return ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      onTap: () => widget.onSeek(n.videoTimeMs),
-                      leading: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: ink,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          formatClock(Duration(milliseconds: n.videoTimeMs)),
-                          style: TextStyle(
-                            color: sheet,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                      title: Text(
-                        n.body,
-                        style: TextStyle(color: ink),
-                      ),
-                      subtitle: Text(
-                        n.authorName,
-                        style: TextStyle(color: ink.withValues(alpha: 0.6)),
-                      ),
-                      trailing: n.canDelete
-                          ? IconButton(
-                              onPressed: _busy ? null : () => _delete(n),
-                              tooltip: 'Delete comment',
-                              icon: const Icon(Icons.delete_outline),
-                              color: ink.withValues(alpha: 0.87),
-                            )
-                          : null,
-                    );
-                  },
-                ),
-              ),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  _error!,
-                  style: const TextStyle(color: Color(0xFFB3261E)),
-                ),
-              ),
             const SizedBox(height: 12),
             Row(
               children: [
                 Expanded(
                   child: TextField(
                     controller: _text,
-                    enabled: !_busy,
+                    autofocus: true,
                     maxLength: 500,
                     textInputAction: TextInputAction.send,
-                    onChanged: (_) => setState(() {}),
-                    onSubmitted: (_) => _add(),
-                    style: const TextStyle(color: Colors.black),
-                    cursorColor: Colors.black,
-                    decoration: InputDecoration(
-                      hintText: 'Comment at ${formatClock(widget.at)}',
-                      hintStyle: const TextStyle(color: Colors.black45),
+                    onSubmitted: (_) => _post(),
+                    decoration: const InputDecoration(
+                      hintText: 'What should they look at?',
                       counterText: '',
-                      filled: true,
-                      fillColor: Colors.white,
-                      isDense: true,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide.none,
-                      ),
                     ),
                   ),
                 ),
                 const SizedBox(width: 8),
-                IconButton.filled(
-                  onPressed: _busy || _text.text.trim().isEmpty ? null : _add,
-                  tooltip: 'Post comment',
-                  style: IconButton.styleFrom(
-                    backgroundColor: ink,
-                    foregroundColor: sheet,
-                    disabledBackgroundColor: ink.withValues(alpha: 0.26),
-                  ),
-                  icon: _busy
-                      ? SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: sheet,
-                          ),
-                        )
-                      : const Icon(Icons.send),
+                FilledButton(
+                  onPressed: _busy ? null : _post,
+                  style: FilledButton.styleFrom(
+                      backgroundColor: ink, foregroundColor: sheet),
+                  child: Text(_busy ? 'Posting…' : 'Post'),
                 ),
               ],
             ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(_error!, style: TextStyle(color: ink)),
+            ],
           ],
         ),
       ),

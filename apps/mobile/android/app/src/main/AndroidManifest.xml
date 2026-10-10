@@ -5,6 +5,8 @@
          while the recording view is open). -->
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- Alerts for comments, people joining and practices starting. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <!-- usesCleartextTraffic: Android 9+ blocks plain HTTP by default, which
          would break the local dev server at http://10.0.2.2:4000. Set this to
