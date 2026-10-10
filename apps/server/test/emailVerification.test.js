@@ -50,6 +50,7 @@ async function signUp(address) {
 
 afterEach(() => {
   delete process.env.ALLOWED_EMAIL_DOMAINS;
+  delete process.env.ALLOWED_EMAILS;
 });
 
 afterAll(async () => {
@@ -80,6 +81,16 @@ describe("who can sign up", () => {
   it("accepts ucf.edu and knights.ucf.edu", async () => {
     expect((await signUp(email("plain"))).res.status).toBe(201);
     expect((await signUp(email("knight", "knights.ucf.edu"))).res.status).toBe(201);
+  });
+
+  it("lets the exact addresses in ALLOWED_EMAILS sign up from any domain", async () => {
+    const admin = email("admin", "gmail.com");
+    process.env.ALLOWED_EMAILS = ` ${admin.toUpperCase()} , someone@example.test`;
+    expect((await signUp(admin)).res.status).toBe(201);
+    // Only that address: the rest of its domain still needs a UCF email.
+    const other = await signUp(email("not-admin", "gmail.com"));
+    expect(other.res.status).toBe(400);
+    expect(other.res.body.error).toMatch(/UCF email/);
   });
 
   it("follows ALLOWED_EMAIL_DOMAINS when set", async () => {

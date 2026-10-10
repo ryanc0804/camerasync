@@ -39,6 +39,10 @@ class _FakeApi extends ApiClient {
     calls.add(path);
     switch (path) {
       case '/api/auth/register':
+        if ((body?['email'] ?? '').toString().endsWith('@gmail.com')) {
+          throw ApiException(
+              400, 'Sign up with your UCF email (@ucf.edu or @knights.ucf.edu).');
+        }
         return {'user': _user};
       case '/api/auth/verify-email':
         if (body?['code'] != '123456') {
@@ -110,7 +114,7 @@ void main() {
     expect(find.text('A new code is on its way.'), findsOneWidget);
   });
 
-  testWidgets('sign-up refuses non-UCF emails before calling the server', (tester) async {
+  testWidgets('sign-up shows why the server refused an email', (tester) async {
     final api = _FakeApi();
     await tester.pumpWidget(MaterialApp(home: LoginScreen(auth: AuthService(api))));
 
@@ -123,12 +127,12 @@ void main() {
     await tester.enterText(fields.at(2), 'longpassword1');
     await tester.enterText(fields.at(3), 'longpassword1');
     await tester.tap(find.text('Create account'));
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     expect(
       find.text('Sign up with your UCF email (@ucf.edu or @knights.ucf.edu).'),
       findsOneWidget,
     );
-    expect(api.calls, isEmpty);
+    expect(api.calls, ['/api/auth/register']);
   });
 }
