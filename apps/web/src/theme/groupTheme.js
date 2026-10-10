@@ -1,9 +1,8 @@
-// Group color theming (SCRUM-71): turns a group's primary/secondary colors
-// into the CSS variables the signed-in app is styled with.
+// Group color theming (SCRUM-71): turns a group's team color into the CSS
+// variables the signed-in app is styled with.
 //
 //   --brand / --brand-ink       sidebar fill and the text on it
 //   --brand-active              the sidebar's selected-item tile
-//   --brand-edge                two-tone stripe along the sidebar (secondary)
 //   --accent / --accent-ink     buttons, links and highlights on the black
 //                               page, and the text on an accent fill
 //   --accent-hover              hover state for accent fills
@@ -18,13 +17,12 @@ const MIN_ACCENT_CONTRAST = 4.5;
 
 /// 8kount branding, used when no group is selected.
 export const DEFAULT_THEME = {
-  "--brand": "#f2cb05",
+  "--brand": "#ead217",
   "--brand-ink": "#000000",
-  "--brand-active": "#ffe870",
-  "--brand-edge": "transparent",
-  "--accent": "#ffc72c",
+  "--brand-active": "#ffeb4c",
+  "--accent": "#ead217",
   "--accent-ink": "#0d0d0d",
-  "--accent-hover": "#ffd75e",
+  "--accent-hover": "#f0df5d",
 };
 
 const HEX = /^#([0-9a-f]{6})$/i;
@@ -90,13 +88,11 @@ export function themeFor(group) {
   const primary = group?.primaryColor;
   if (!rgb(primary)) return DEFAULT_THEME;
 
-  const secondary = rgb(group.secondaryColor) ? group.secondaryColor : "transparent";
   const accent = legibleOnDark(primary);
   return {
     "--brand": primary,
     "--brand-ink": inkFor(primary),
     "--brand-active": lighten(primary, 0.45),
-    "--brand-edge": secondary,
     "--accent": accent,
     // legibleOnDark guarantees 4.5:1 against black, so black text always
     // reads on an accent fill (and matches the rgba(0,0,0,…) text inside
@@ -104,6 +100,15 @@ export function themeFor(group) {
     "--accent-ink": "#000000",
     "--accent-hover": lighten(accent, 0.3),
   };
+}
+
+/// Colors for a group's tile on the Groups page: the team color edge to edge
+/// with black or white text on it. Null when the group has no usable color.
+export function groupTile(group) {
+  const fill = group?.primaryColor;
+  if (!rgb(fill)) return null;
+  const ink = inkFor(fill);
+  return { fill, ink, dark: ink === "#ffffff" };
 }
 
 /// Write a theme onto the document so every stylesheet's var(...) picks it up.

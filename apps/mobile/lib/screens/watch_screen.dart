@@ -7,17 +7,23 @@ import '../api/api_client.dart';
 import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
 import '../recordings/names.dart';
+import '../team_accent.dart';
 import '../theme.dart';
 import '../widgets/empty_state.dart';
 
-/// Multi-angle playback for one session (the "Watch" frame in the Figma):
-/// a yellow panel holding a two-column grid of every device's video for the
-/// current recording, one shared transport underneath that keeps them in
-/// step, and a comments badge that opens the recording's notes.
+/// A screen at least this big (a TV, a monitor, a tablet on its side) shows
+/// every angle at once like the desktop app. Phones, even turned sideways,
+/// show one camera at a time and decode only that one video.
+bool isBigScreen(Size size) => size.width >= 900 && size.height >= 500;
+
+/// Playback for one session (the "Watch" frame in the Figma). On a phone it
+/// plays one camera at a time, with a row of buttons to switch cameras; on a
+/// big screen it shows a grid of every angle like the desktop app. Either
+/// way one shared transport keeps the players on the same clock, and a
+/// comments badge opens the recording's notes.
 ///
 /// Previous / next move between the session's recordings (Recording 001,
-/// 002, ...). Every angle is a separate player; play, pause and seek are
-/// applied to all of them so they stay on the shared clock.
+/// 002, ...).
 class WatchScreen extends StatefulWidget {
   const WatchScreen({super.key, required this.auth, required this.session});
 
@@ -36,9 +42,14 @@ class _WatchScreenState extends State<WatchScreen> {
   bool _loading = true;
   String? _error;
 
-  /// One controller per uploaded angle of the current recording, in the
-  /// same order as the recording's videos with null for missing uploads.
-  List<VideoPlayerController?> _players = [];
+  /// Open players by angle index in the current recording. On a phone only
+  /// the selected angle is open; on a big screen every uploaded one is.
+  final Map<int, VideoPlayerController> _players = {};
+  int _selected = 0;
+  bool _bigScreen = false;
+  VideoPlayerController? _clockPlayer;
+  int _syncGeneration = 0;
+
   bool _ready = false;
   bool _playing = false;
   Duration _position = Duration.zero;
@@ -51,10 +62,27 @@ class _WatchScreenState extends State<WatchScreen> {
     return list[_index.clamp(0, list.length - 1)];
   }
 
+  List<int> get _uploadedAngles => [
+        for (var i = 0; i < (_recording?.videos.length ?? 0); i++)
+          if (_recording!.videos[i].url != null) i,
+      ];
+
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final big = isBigScreen(MediaQuery.sizeOf(context));
+    if (big != _bigScreen) {
+      _bigScreen = big;
+      // Plugging into a TV or rotating a tablet opens or closes the other
+      // angles' players.
+      if (_recording != null && !_loading) _syncPlayers();
+    }
   }
 
   Future<void> _load() async {
@@ -79,10 +107,12 @@ class _WatchScreenState extends State<WatchScreen> {
     }
   }
 
-  /// Tears down the current players and builds one per uploaded angle.
+  /// Closes the current players and opens the new recording on its first
+  /// uploaded angle.
   Future<void> _openRecording() async {
-    await _disposePlayers();
+    await _closeAllPlayers();
     final recording = _recording;
+    final uploaded = _uploadedAngles;
     setState(() {
       _loading = recording != null;
       _ready = false;
@@ -90,78 +120,114 @@ class _WatchScreenState extends State<WatchScreen> {
       _position = Duration.zero;
       _duration = Duration.zero;
       _notes = [];
+      _selected = uploaded.isEmpty ? 0 : uploaded.first;
     });
     if (recording == null) return;
+    await _syncPlayers();
+    if (!mounted) return;
+    setState(() => _loading = false);
+    _loadNotes(recording);
+  }
 
-    final cookie = widget.auth.api.cookie;
-    final players = <VideoPlayerController?>[];
-    for (final video in recording.videos) {
-      final url = video.url;
-      if (url == null) {
-        players.add(null);
-        continue;
+  /// Opens the players this screen size needs and closes the rest. A new
+  /// player joins at the current position, playing if the others are.
+  Future<void> _syncPlayers() async {
+    final recording = _recording;
+    if (recording == null) return;
+    final generation = ++_syncGeneration;
+    final wanted = _bigScreen ? _uploadedAngles.toSet() : {_selected};
+
+    _position = _clockPlayer?.value.position ?? _position;
+    for (final i in _players.keys.toList()) {
+      if (!wanted.contains(i)) {
+        final player = _players.remove(i)!;
+        if (player == _clockPlayer) _setClock(null);
+        await player.dispose();
       }
-      players.add(VideoPlayerController.networkUrl(
-        Uri.parse(_recordings.absoluteUrl(url)),
-        httpHeaders: {if (cookie != null) 'Cookie': cookie},
-      ));
     }
 
-    // Initialize in parallel; an angle that fails to load is dropped rather
-    // than blocking the rest.
-    await Future.wait([
-      for (var i = 0; i < players.length; i++)
-        if (players[i] != null)
-          players[i]!.initialize().catchError((_) {
-            players[i]!.dispose();
-            players[i] = null;
-          }),
-    ]);
-    if (!mounted) {
-      for (final p in players) {
-        p?.dispose();
+    final missing = wanted.where((i) => !_players.containsKey(i)).toList();
+    final opened =
+        await Future.wait(missing.map((i) => _openPlayer(recording, i)));
+    if (!mounted || generation != _syncGeneration || recording != _recording) {
+      for (final player in opened) {
+        await player?.dispose();
       }
       return;
     }
 
-    _players = players;
-    final durations = [
-      for (final p in players)
-        if (p != null) p.value.duration,
-    ];
-    _duration = durations.isEmpty
-        ? Duration.zero
-        : durations.reduce((a, b) => a > b ? a : b);
-    _clock?.removeListener(_onTick);
-    _clock?.addListener(_onTick);
-
-    setState(() {
-      _loading = false;
-      _ready = durations.isNotEmpty;
-    });
-
-    _loadNotes(recording);
-  }
-
-  /// The first live player drives the on-screen clock.
-  VideoPlayerController? get _clock {
-    for (final p in _players) {
-      if (p != null) return p;
+    for (var k = 0; k < missing.length; k++) {
+      final player = opened[k];
+      if (player == null) continue;
+      _players[missing[k]] = player;
+      await player.seekTo(_position);
+      if (_playing) player.play();
     }
-    return null;
+
+    _setClock(_players[_selected] ??
+        (_players.isEmpty ? null : _players.values.first));
+    final durations = [for (final p in _players.values) p.value.duration];
+    setState(() {
+      _duration = durations.isEmpty
+          ? Duration.zero
+          : durations.reduce((a, b) => a > b ? a : b);
+      _ready = _players.isNotEmpty;
+    });
   }
+
+  /// One angle's player, or null if it fails to load (the tile then shows
+  /// "Not uploaded" rather than blocking the other angles).
+  Future<VideoPlayerController?> _openPlayer(
+      SessionRecording recording, int i) async {
+    final url = recording.videos[i].url;
+    if (url == null) return null;
+    final cookie = widget.auth.api.cookie;
+    final player = VideoPlayerController.networkUrl(
+      Uri.parse(_recordings.absoluteUrl(url)),
+      httpHeaders: {if (cookie != null) 'Cookie': cookie},
+    );
+    try {
+      await player.initialize();
+      return player;
+    } catch (_) {
+      await player.dispose();
+      return null;
+    }
+  }
+
+  /// The player that drives the on-screen clock: the camera being watched,
+  /// or on a big screen the first open one.
+  void _setClock(VideoPlayerController? player) {
+    if (player == _clockPlayer) return;
+    _clockPlayer?.removeListener(_onTick);
+    _clockPlayer = player;
+    _clockPlayer?.addListener(_onTick);
+  }
+
+  VideoPlayerController? get _clock => _clockPlayer;
 
   void _onTick() {
-    final clock = _clock;
+    final clock = _clockPlayer;
     if (clock == null || !mounted) return;
     final value = clock.value;
-    final ended = value.position >= value.duration && value.duration > Duration.zero;
+    final ended =
+        value.position >= value.duration && value.duration > Duration.zero;
     if (ended && _playing) {
       _pause();
       return;
     }
     if (value.position.inSeconds != _position.inSeconds) {
       setState(() => _position = value.position);
+    }
+  }
+
+  Future<void> _selectAngle(int i) async {
+    if (i == _selected) return;
+    setState(() => _selected = i);
+    if (_bigScreen) {
+      _setClock(_players[i] ?? _clockPlayer);
+    } else {
+      await _syncPlayers();
     }
   }
 
@@ -177,36 +243,35 @@ class _WatchScreenState extends State<WatchScreen> {
     }
   }
 
-  Future<void> _disposePlayers() async {
-    _clock?.removeListener(_onTick);
-    final old = _players;
-    _players = [];
+  Future<void> _closeAllPlayers() async {
+    _syncGeneration++;
+    _setClock(null);
+    final old = _players.values.toList();
+    _players.clear();
     for (final p in old) {
-      await p?.dispose();
+      await p.dispose();
     }
   }
 
   void _play() {
-    for (final p in _players) {
-      p?.play();
+    for (final p in _players.values) {
+      p.play();
     }
     setState(() => _playing = true);
   }
 
   void _pause() {
-    for (final p in _players) {
-      p?.pause();
+    for (final p in _players.values) {
+      p.pause();
     }
     setState(() => _playing = false);
   }
 
   Future<void> _seek(Duration to) async {
-    final target = to < Duration.zero
-        ? Duration.zero
-        : (to > _duration ? _duration : to);
+    final target =
+        to < Duration.zero ? Duration.zero : (to > _duration ? _duration : to);
     await Future.wait([
-      for (final p in _players)
-        if (p != null) p.seekTo(target),
+      for (final p in _players.values) p.seekTo(target),
     ]);
     if (mounted) setState(() => _position = target);
   }
@@ -222,7 +287,7 @@ class _WatchScreenState extends State<WatchScreen> {
 
   @override
   void dispose() {
-    _disposePlayers();
+    _closeAllPlayers();
     super.dispose();
   }
 
@@ -260,6 +325,8 @@ class _WatchScreenState extends State<WatchScreen> {
                 ),
               ),
             Expanded(child: _body()),
+            if (recording != null && !_bigScreen && recording.videos.length > 1)
+              _cameraButtons(recording),
             _transport(),
           ],
         ),
@@ -282,8 +349,8 @@ class _WatchScreenState extends State<WatchScreen> {
               widget.session.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: kGold,
+              style: TextStyle(
+                color: TeamAccent.of(context).accent,
                 fontSize: 24,
                 fontWeight: FontWeight.w800,
                 letterSpacing: -0.24,
@@ -309,8 +376,9 @@ class _WatchScreenState extends State<WatchScreen> {
   }
 
   Widget _body() {
+    final team = TeamAccent.of(context);
     if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: kGold));
+      return Center(child: CircularProgressIndicator(color: team.accent));
     }
     if (_error != null) {
       return Padding(
@@ -335,50 +403,137 @@ class _WatchScreenState extends State<WatchScreen> {
       );
     }
 
+    final panel = BoxDecoration(
+      color: team.fill,
+      borderRadius: BorderRadius.circular(6),
+    );
+
+    if (!_bigScreen) {
+      // One camera, as large as the screen allows, with the panel shaped to
+      // the video instead of filling a tall phone screen with grey.
+      final player = _players[_selected];
+      final ratio = player != null && player.value.isInitialized
+          ? player.value.aspectRatio
+          : 16 / 9;
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(21, 0, 21, 12),
+        child: Center(
+          child: AspectRatio(
+            aspectRatio: ratio,
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: panel,
+              child: _AngleTile(
+                video: recording.videos[_selected],
+                player: player,
+                fit: BoxFit.contain,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(21, 0, 21, 12),
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: kGold,
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: GridView.builder(
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            mainAxisSpacing: 16,
-            crossAxisSpacing: 16,
-            childAspectRatio: 142 / 144,
-          ),
-          itemCount: recording.videos.length,
-          itemBuilder: (context, i) => _AngleTile(
-            video: recording.videos[i],
-            player: i < _players.length ? _players[i] : null,
-          ),
+        decoration: panel,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // As many columns as keep each angle a sensible size, like the
+            // desktop's grid.
+            final n = recording.videos.length;
+            final columns = n <= 1 ? 1 : (n <= 4 ? 2 : 3);
+            final rows = (n / columns).ceil();
+            const gap = 12.0;
+            final width =
+                (constraints.maxWidth - gap * (columns - 1)) / columns;
+            final height = (constraints.maxHeight - gap * (rows - 1)) / rows;
+            return GridView.builder(
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: columns,
+                mainAxisSpacing: gap,
+                crossAxisSpacing: gap,
+                childAspectRatio: width / height,
+              ),
+              itemCount: n,
+              itemBuilder: (context, i) => _AngleTile(
+                video: recording.videos[i],
+                player: _players[i],
+                fit: BoxFit.contain,
+              ),
+            );
+          },
         ),
       ),
     );
   }
 
+  /// One button per camera; the selected one is filled with the team color.
+  Widget _cameraButtons(SessionRecording recording) {
+    final team = TeamAccent.of(context);
+    return SizedBox(
+      height: 48,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 21),
+        itemCount: recording.videos.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, i) {
+          final video = recording.videos[i];
+          final selected = i == _selected;
+          final uploaded = video.url != null;
+          return Center(
+            child: Semantics(
+              selected: selected,
+              child: ChoiceChip(
+                label: Text(
+                    uploaded ? video.name : '${video.name} (not uploaded)'),
+                selected: selected,
+                onSelected: uploaded ? (_) => _selectAngle(i) : null,
+                showCheckmark: false,
+                avatar: Icon(
+                  Icons.videocam,
+                  size: 18,
+                  color: selected ? team.ink : Colors.white70,
+                ),
+                selectedColor: team.fill,
+                backgroundColor: const Color(0xFF262626),
+                labelStyle: TextStyle(
+                  color: selected ? team.ink : Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+                side: BorderSide.none,
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _transport() {
+    final team = TeamAccent.of(context);
     final count = _videos?.recordings.length ?? 0;
     final enabled = _ready;
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 0, 21, 16),
+      padding: const EdgeInsets.fromLTRB(8, 4, 21, 16),
       child: Row(
         children: [
           IconButton(
             onPressed: _index > 0 ? () => _step(-1) : null,
             tooltip: 'Previous recording',
             icon: const Icon(Icons.skip_previous),
-            color: kGold,
+            color: team.accent,
             disabledColor: kFaint,
             iconSize: 30,
           ),
           Material(
-            color: enabled ? kGold : kFaint,
+            color: enabled ? team.fill : kFaint,
             shape: const CircleBorder(),
             child: InkWell(
               onTap: enabled ? (_playing ? _pause : _play) : null,
@@ -388,7 +543,7 @@ class _WatchScreenState extends State<WatchScreen> {
                 height: 44,
                 child: Icon(
                   _playing ? Icons.pause : Icons.play_arrow,
-                  color: Colors.black,
+                  color: enabled ? team.ink : Colors.black,
                   size: 28,
                 ),
               ),
@@ -398,7 +553,7 @@ class _WatchScreenState extends State<WatchScreen> {
             onPressed: _index < count - 1 ? () => _step(1) : null,
             tooltip: 'Next recording',
             icon: const Icon(Icons.skip_next),
-            color: kGold,
+            color: team.accent,
             disabledColor: kFaint,
             iconSize: 30,
           ),
@@ -412,7 +567,7 @@ class _WatchScreenState extends State<WatchScreen> {
             child: Text(
               '${formatClock(_position)} / ${formatClock(_duration)}',
               style: TextStyle(
-                color: kGold.withValues(alpha: 0.8),
+                color: team.accent.withValues(alpha: 0.8),
                 fontSize: 22,
                 fontWeight: FontWeight.w900,
               ),
@@ -434,7 +589,7 @@ class _WatchScreenState extends State<WatchScreen> {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: kGoldActive,
+      backgroundColor: TeamAccent.of(context).fillLight,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -484,13 +639,15 @@ class _WatchScreenState extends State<WatchScreen> {
   }
 }
 
-/// One angle in the grid: the player, or a grey placeholder when that
-/// member has not uploaded, with the member's name along the bottom.
+/// One angle: the player, or a grey placeholder when that member has not
+/// uploaded, with the member's name along the bottom.
 class _AngleTile extends StatelessWidget {
-  const _AngleTile({required this.video, required this.player});
+  const _AngleTile(
+      {required this.video, required this.player, this.fit = BoxFit.cover});
 
   final AngleVideo video;
   final VideoPlayerController? player;
+  final BoxFit fit;
 
   static const _panel = Color(0xFF49454F);
 
@@ -506,7 +663,7 @@ class _AngleTile extends StatelessWidget {
           children: [
             if (p != null && p.value.isInitialized)
               FittedBox(
-                fit: BoxFit.cover,
+                fit: fit,
                 child: SizedBox(
                   width: p.value.size.width,
                   height: p.value.size.height,
@@ -615,6 +772,10 @@ class _NotesSheetState extends State<_NotesSheet> {
   @override
   Widget build(BuildContext context) {
     final notes = _notes;
+    // The sheet is a light tint of the team color; text is black or white,
+    // whichever reads on it.
+    final sheet = TeamAccent.of(context).fillLight;
+    final ink = inkOn(sheet);
     return SafeArea(
       child: Padding(
         // Keeps the comment box above the keyboard.
@@ -632,28 +793,29 @@ class _NotesSheetState extends State<_NotesSheet> {
               children: [
                 Text(
                   '${notes.length}',
-                  style: const TextStyle(
-                    color: Colors.black,
+                  style: TextStyle(
+                    color: ink,
                     fontSize: 32,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
                 const SizedBox(width: 8),
-                const Icon(Icons.chat_bubble_outline, color: Colors.black, size: 30),
+                Icon(Icons.chat_bubble_outline, color: ink, size: 30),
                 const Spacer(),
-                const Text(
+                Text(
                   'Comments',
-                  style: TextStyle(color: Colors.black54, fontSize: 14),
+                  style: TextStyle(
+                      color: ink.withValues(alpha: 0.6), fontSize: 14),
                 ),
               ],
             ),
             const SizedBox(height: 8),
             if (notes.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 24),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
                 child: Text(
                   'No comments on this recording yet. Add the first one below.',
-                  style: TextStyle(color: Colors.black54),
+                  style: TextStyle(color: ink.withValues(alpha: 0.6)),
                 ),
               )
             else
@@ -662,7 +824,7 @@ class _NotesSheetState extends State<_NotesSheet> {
                   shrinkWrap: true,
                   itemCount: notes.length,
                   separatorBuilder: (_, __) =>
-                      const Divider(color: Colors.black12, height: 1),
+                      Divider(color: ink.withValues(alpha: 0.12), height: 1),
                   itemBuilder: (context, i) {
                     final n = notes[i];
                     return ListTile(
@@ -674,31 +836,31 @@ class _NotesSheetState extends State<_NotesSheet> {
                           vertical: 4,
                         ),
                         decoration: BoxDecoration(
-                          color: Colors.black,
+                          color: ink,
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
                           formatClock(Duration(milliseconds: n.videoTimeMs)),
-                          style: const TextStyle(
-                            color: kGold,
+                          style: TextStyle(
+                            color: sheet,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
                       ),
                       title: Text(
                         n.body,
-                        style: const TextStyle(color: Colors.black),
+                        style: TextStyle(color: ink),
                       ),
                       subtitle: Text(
                         n.authorName,
-                        style: const TextStyle(color: Colors.black54),
+                        style: TextStyle(color: ink.withValues(alpha: 0.6)),
                       ),
                       trailing: n.canDelete
                           ? IconButton(
                               onPressed: _busy ? null : () => _delete(n),
                               tooltip: 'Delete comment',
                               icon: const Icon(Icons.delete_outline),
-                              color: Colors.black87,
+                              color: ink.withValues(alpha: 0.87),
                             )
                           : null,
                     );
@@ -745,17 +907,17 @@ class _NotesSheetState extends State<_NotesSheet> {
                   onPressed: _busy || _text.text.trim().isEmpty ? null : _add,
                   tooltip: 'Post comment',
                   style: IconButton.styleFrom(
-                    backgroundColor: Colors.black,
-                    foregroundColor: kGold,
-                    disabledBackgroundColor: Colors.black26,
+                    backgroundColor: ink,
+                    foregroundColor: sheet,
+                    disabledBackgroundColor: ink.withValues(alpha: 0.26),
                   ),
                   icon: _busy
-                      ? const SizedBox(
+                      ? SizedBox(
                           width: 18,
                           height: 18,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            color: kGold,
+                            color: sheet,
                           ),
                         )
                       : const Icon(Icons.send),

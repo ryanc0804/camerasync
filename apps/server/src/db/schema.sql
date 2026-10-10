@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS groups (
     is_public BOOLEAN NOT NULL DEFAULT TRUE,
     password_hash TEXT,
     owner_id BIGINT NOT NULL REFERENCES users(user_id),
-    primary_color CHAR(7) NOT NULL DEFAULT '#ffc72c',
+    primary_color CHAR(7) NOT NULL DEFAULT '#ead217',
     secondary_color CHAR(7) NOT NULL DEFAULT '#0d0d0d',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CHECK (is_public OR password_hash IS NOT NULL)
@@ -263,3 +263,20 @@ CREATE TABLE IF NOT EXISTS email_verifications (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires TIMESTAMPTZ NOT NULL
 );
+
+-- Wrong passwords when joining a private group, per person per group. Five
+-- misses within 15 minutes locks that person out of joining the group for
+-- 15 minutes (see POST /api/groups/:id/join); a correct password clears it.
+CREATE TABLE IF NOT EXISTS group_join_attempts (
+    group_id VARCHAR(64) NOT NULL REFERENCES groups(group_id) ON DELETE CASCADE,
+    user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    failures INT NOT NULL DEFAULT 0,
+    last_failed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    locked_until TIMESTAMPTZ,
+    PRIMARY KEY (group_id, user_id)
+);
+
+-- 8kount's yellow is now the design's #EAD217 (it was #ffc72c). Groups still
+-- on the old gold move to the new one so they match the palette.
+ALTER TABLE groups ALTER COLUMN primary_color SET DEFAULT '#ead217';
+UPDATE groups SET primary_color = '#ead217' WHERE primary_color = '#ffc72c';

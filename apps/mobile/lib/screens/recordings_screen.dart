@@ -4,6 +4,7 @@ import '../api/api_client.dart';
 import '../api/groups_api.dart';
 import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
+import '../team_accent.dart';
 import '../theme.dart';
 import '../widgets/empty_state.dart';
 import 'watch_screen.dart';
@@ -33,6 +34,10 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
 
   List<RecordingSession> _sessions = [];
   Map<String, String> _groupNames = {};
+
+  /// Groups where this user is an admin (or the owner): they can delete
+  /// those groups' sessions.
+  Set<String> _adminGroups = {};
   bool _loading = true;
   String? _error;
 
@@ -67,6 +72,10 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
         _groupNames = {
           for (final g in results[1] as List<Group>) g.id: g.name,
         };
+        _adminGroups = {
+          for (final g in results[1] as List<Group>)
+            if (g.role == 'admin') g.id,
+        };
         _loading = false;
       });
     } on ApiException catch (e) {
@@ -75,6 +84,42 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
         _error = e.message;
         _loading = false;
       });
+    }
+  }
+
+  Future<void> _delete(RecordingSession session) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        content: Text(
+            "Delete ${session.name} and all its videos? This can't be undone."),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: kLiveRed),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await _recordings.deleteSession(session.id);
+      if (mounted) {
+        setState(() => _sessions = [
+              for (final s in _sessions)
+                if (s.id != session.id) s,
+            ]);
+      }
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
     }
   }
 
@@ -95,8 +140,8 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
         foregroundColor: Colors.white,
         title: Text(
           widget.title ?? 'Recordings',
-          style: const TextStyle(
-            color: kGold,
+          style: TextStyle(
+            color: TeamAccent.of(context).accent,
             fontWeight: FontWeight.w800,
             letterSpacing: -0.3,
           ),
@@ -132,6 +177,9 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
                         session: s,
                         groupName: _groupNames[s.groupId],
                         onTap: () => _open(s),
+                        onDelete: _adminGroups.contains(s.groupId)
+                            ? () => _delete(s)
+                            : null,
                       ),
                 ],
               ),
@@ -148,11 +196,15 @@ class RecordingCard extends StatelessWidget {
     required this.session,
     required this.onTap,
     this.groupName,
+    this.onDelete,
   });
 
   final RecordingSession session;
   final String? groupName;
   final VoidCallback onTap;
+
+  /// Shown as a delete button for group admins and the owner.
+  final VoidCallback? onDelete;
 
   static const _panel = Color(0xFF49454F);
 
@@ -177,36 +229,52 @@ class RecordingCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(6),
           child: SizedBox(
             height: 120,
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  Text(
-                    session.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
+            child: Stack(
+              children: [
+                if (onDelete != null)
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: IconButton(
+                      onPressed: onDelete,
+                      tooltip: 'Delete ${session.name}',
+                      icon: const Icon(Icons.delete_outline, color: kLiveRed),
                     ),
                   ),
-                  if (parts.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      parts.join('  ·  '),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Color(0xFFCFCBD6),
-                        fontSize: 13,
-                      ),
+                Positioned.fill(
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Text(
+                          session.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        if (parts.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            parts.join('  ·  '),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Color(0xFFCFCBD6),
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
-                  ],
-                ],
-              ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),

@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { TEAM_COLORS, teamColor } from "./teamColors.js";
 import {
   DEFAULT_THEME,
   applyTheme,
   contrast,
   groupAccent,
+  groupTile,
   inkFor,
   legibleOnDark,
   themeFor,
@@ -22,15 +24,14 @@ describe("themeFor", () => {
   });
 
   it("uses a readable color exactly as chosen", () => {
-    const theme = themeFor({ primaryColor: "#ffc72c", secondaryColor: "#0d0d0d" });
-    expect(theme["--brand"]).toBe("#ffc72c");
-    expect(theme["--accent"]).toBe("#ffc72c");
-    expect(theme["--brand-edge"]).toBe("#0d0d0d");
+    const theme = themeFor({ primaryColor: "#ead217" });
+    expect(theme["--brand"]).toBe("#ead217");
+    expect(theme["--accent"]).toBe("#ead217");
   });
 
   it("keeps a dark team color on the sidebar but lightens the accent", () => {
     const navy = "#002d72";
-    const theme = themeFor({ primaryColor: navy, secondaryColor: "#ffffff" });
+    const theme = themeFor({ primaryColor: navy });
     expect(theme["--brand"]).toBe(navy);
     expect(theme["--brand-ink"]).toBe("#ffffff");
     expect(theme["--accent"]).not.toBe(navy);
@@ -38,24 +39,49 @@ describe("themeFor", () => {
   });
 
   it("puts black text on the sidebar for a light team color", () => {
-    expect(themeFor({ primaryColor: "#ffc72c" })["--brand-ink"]).toBe("#000000");
-  });
-
-  it("drops an invalid secondary color instead of using it", () => {
-    const theme = themeFor({ primaryColor: "#e53935", secondaryColor: "nope" });
-    expect(theme["--brand-edge"]).toBe("transparent");
+    expect(themeFor({ primaryColor: "#ead217" })["--brand-ink"]).toBe("#000000");
   });
 });
 
 describe("legibleOnDark", () => {
   it("leaves already-readable colors alone", () => {
-    expect(legibleOnDark("#ffc72c")).toBe("#ffc72c");
+    expect(legibleOnDark("#ead217")).toBe("#ead217");
   });
 
   it("makes every color readable on black, even pure black", () => {
     for (const color of ["#000000", "#002d72", "#5b1f1f", "#0d0d0d", "#333333"]) {
       expect(contrast(legibleOnDark(color), "#000000")).toBeGreaterThanOrEqual(4.5);
     }
+  });
+});
+
+describe("groupTile", () => {
+  it("fills the tile with the team color and picks readable text", () => {
+    expect(groupTile({ primaryColor: "#ead217" })).toEqual({
+      fill: "#ead217", ink: "#000000", dark: false,
+    });
+    expect(groupTile({ primaryColor: "#1e3a8a" })).toEqual({
+      fill: "#1e3a8a", ink: "#ffffff", dark: true,
+    });
+  });
+
+  it("leaves groups without a usable color on the default tile", () => {
+    expect(groupTile(null)).toBeNull();
+    expect(groupTile({ primaryColor: "gold" })).toBeNull();
+  });
+});
+
+describe("team palette", () => {
+  it("keeps black or white text readable on every color", () => {
+    for (const { hex } of TEAM_COLORS) {
+      expect(contrast(hex, inkFor(hex))).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("matches palette colors in any case and rejects others", () => {
+    expect(teamColor("#1E3A8A")).toBe("#1e3a8a");
+    expect(teamColor("#000000")).toBe("");
+    expect(teamColor(undefined)).toBe("");
   });
 });
 

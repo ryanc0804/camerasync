@@ -37,11 +37,47 @@ export async function createGroup(group) {
   return data.group;
 }
 
-//change a group's team colors (admins and the owner only)
-export async function updateGroupColors(id, { primaryColor, secondaryColor }) {
+// Rename the group or change its privacy and password (owner only). A
+// private group needs a password unless it already has one.
+export async function updateGroupDetails(id, { name, isPublic, password }) {
   const data = await request(`/api/groups/${encodeURIComponent(id)}`, {
     method: "PATCH",
-    body: JSON.stringify({ primaryColor, secondaryColor }),
+    body: JSON.stringify({ name, isPublic, ...(password ? { password } : {}) }),
+  });
+  return data.group;
+}
+
+// What an invite link shows before joining: name, color, and whether the
+// group needs a password.
+export async function getGroupInvite(id) {
+  const data = await request(`/api/groups/${encodeURIComponent(id)}/invite`);
+  return data.group;
+}
+
+// Leave a group. The owner has to hand it to someone else first.
+export async function leaveGroup(id) {
+  await request(`/api/groups/${encodeURIComponent(id)}/leave`, { method: "POST" });
+}
+
+// Make another member the owner (owner only); the old owner stays an admin.
+export async function transferGroup(id, userId) {
+  const data = await request(`/api/groups/${encodeURIComponent(id)}/transfer`, {
+    method: "POST",
+    body: JSON.stringify({ userId }),
+  });
+  return data.group;
+}
+
+// Delete the group with all its sessions and recordings (owner only).
+export async function deleteGroup(id) {
+  await request(`/api/groups/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+//change a group's team color (admins and the owner only)
+export async function updateGroupColor(id, primaryColor) {
+  const data = await request(`/api/groups/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ primaryColor }),
   });
   return data.group;
 }
@@ -76,22 +112,17 @@ export async function removeGroupMember(groupId, memberId) {
   });
 }
 
-// Choose the first joined group once. Only Settings replaces a saved choice.
-export function getDefaultGroup(userId, groups) {
-  const key = `defaultGroup:${userId}`;
+// The user's primary group, whose color the app takes: the one saved on the
+// account (Settings or a group's page), or else the first group they joined.
+export function getPrimaryGroupId(user, groups) {
+  const saved = user?.primaryGroupId;
+  if (saved && groups.some((group) => group.id === saved)) return saved;
   let firstGroup = null;
   for (const group of groups) {
     if (!firstGroup || new Date(group.joinedAt || group.createdAt) <
         new Date(firstGroup.joinedAt || firstGroup.createdAt)) {
       firstGroup = group;
     }
-  }
-  try {
-    const saved = localStorage.getItem(key);
-    if (saved) return saved;
-    if (firstGroup) localStorage.setItem(key, firstGroup.id);
-  } catch {
-    // Still show the first joined group if browser storage is unavailable.
   }
   return firstGroup?.id || "";
 }

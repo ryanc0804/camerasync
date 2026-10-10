@@ -61,45 +61,36 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await pool.query("DELETE FROM groups WHERE group_id = $1", [GROUP_ID]);
+  await pool.query("DELETE FROM groups WHERE group_id LIKE $1", [`${GROUP_ID}%`]);
   await pool.query("DELETE FROM users WHERE email LIKE $1", [
     `groups-test-${RUN}-%`,
   ]);
   await pool.end();
 });
 
-describe("PATCH /api/groups/:id (team colors)", () => {
-  it("lets the owner change both colors", async () => {
+describe("PATCH /api/groups/:id (team color)", () => {
+  it("lets the owner pick a team color", async () => {
     const res = await request(app)
       .patch(`/api/groups/${GROUP_ID}`)
       .set("Cookie", owner)
-      .send({ primaryColor: "#002d72", secondaryColor: "#ffffff" });
+      .send({ primaryColor: "#1E3A8A" });
     expect(res.status).toBe(200);
-    expect(res.body.group.primaryColor).toBe("#002d72");
-    expect(res.body.group.secondaryColor).toBe("#ffffff");
+    // Stored in the palette's lowercase form.
+    expect(res.body.group.primaryColor).toBe("#1e3a8a");
+    expect(res.body.group).not.toHaveProperty("secondaryColor");
   });
 
-  it("keeps the color that was not sent", async () => {
-    const res = await request(app)
-      .patch(`/api/groups/${GROUP_ID}`)
-      .set("Cookie", owner)
-      .send({ primaryColor: "#e53935" });
-    expect(res.status).toBe(200);
-    expect(res.body.group.primaryColor).toBe("#e53935");
-    expect(res.body.group.secondaryColor).toBe("#ffffff");
-  });
-
-  it("shows the new colors in the group list", async () => {
+  it("shows the new color in the group list", async () => {
     const res = await request(app).get("/api/groups").set("Cookie", member);
     const group = res.body.groups.find((g) => g.id === GROUP_ID);
-    expect(group.primaryColor).toBe("#e53935");
+    expect(group.primaryColor).toBe("#1e3a8a");
   });
 
   it("refuses plain members", async () => {
     const res = await request(app)
       .patch(`/api/groups/${GROUP_ID}`)
       .set("Cookie", member)
-      .send({ primaryColor: "#000000" });
+      .send({ primaryColor: "#dc2626" });
     expect(res.status).toBe(403);
   });
 
@@ -107,17 +98,19 @@ describe("PATCH /api/groups/:id (team colors)", () => {
     const res = await request(app)
       .patch(`/api/groups/${GROUP_ID}`)
       .set("Cookie", outsider)
-      .send({ primaryColor: "#000000" });
+      .send({ primaryColor: "#dc2626" });
     expect(res.status).toBe(403);
   });
 
-  it("rejects colors that are not six-digit hex", async () => {
-    for (const bad of ["red", "#fff", "#12345g", "rgb(0,0,0)"]) {
+  it("only accepts colors from the team palette", async () => {
+    // #000000 and #ffff00 are valid hex but not in the palette.
+    for (const bad of ["red", "#fff", "#12345g", "#000000", "#ffff00"]) {
       const res = await request(app)
         .patch(`/api/groups/${GROUP_ID}`)
         .set("Cookie", owner)
         .send({ primaryColor: bad });
       expect(res.status).toBe(400);
+      expect(res.body.error).toBe("Pick one of the team colors.");
     }
   });
 
@@ -127,5 +120,22 @@ describe("PATCH /api/groups/:id (team colors)", () => {
       .set("Cookie", owner)
       .send({});
     expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/groups (team color)", () => {
+  it("defaults to gold and rejects colors outside the palette", async () => {
+    const created = await request(app)
+      .post("/api/groups")
+      .set("Cookie", owner)
+      .send({ id: `${GROUP_ID}b`, name: "Default Color", isPublic: true });
+    expect(created.status).toBe(201);
+    expect(created.body.group.primaryColor).toBe("#ead217");
+
+    const rejected = await request(app)
+      .post("/api/groups")
+      .set("Cookie", owner)
+      .send({ id: `${GROUP_ID}c`, name: "Bad Color", isPublic: true, primaryColor: "#123456" });
+    expect(rejected.status).toBe(400);
   });
 });

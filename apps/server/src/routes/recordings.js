@@ -136,25 +136,24 @@ recordingsRouter.get("/sessions", requireAuth, async (req, res, next) => {
   }
 });
 
-// Only the group owner can delete a completed session and its videos.
+// Admins and the group owner can delete a completed session and its videos.
 recordingsRouter.delete("/sessions/:id", requireAuth, async (req, res, next) => {
   let client;
   try {
+    const role = await getSessionRole(req.params.id, req.user.id);
     client = await pool.connect();
     await client.query("BEGIN");
     const { rows } = await client.query(
-      `SELECT rs.status, g.owner_id FROM recording_sessions rs
-       JOIN groups g ON g.group_id = rs.group_id
-       WHERE rs.id = $1 FOR UPDATE OF rs`,
+      "SELECT status FROM recording_sessions WHERE id = $1 FOR UPDATE",
       [req.params.id]
     );
     if (rows.length === 0) {
       await client.query("ROLLBACK");
       return res.status(404).json({ error: "Session not found." });
     }
-    if (Number(rows[0].owner_id) !== Number(req.user.id)) {
+    if (!atLeast(role, "admin")) {
       await client.query("ROLLBACK");
-      return res.status(403).json({ error: "Only the group owner can delete sessions." });
+      return res.status(403).json({ error: "Only group admins can delete sessions." });
     }
     if (rows[0].status !== "complete") {
       await client.query("ROLLBACK");
@@ -705,7 +704,8 @@ recordingsRouter.delete(
   }
 );
 
-// ends a live session for every connected member
+// Ends a live session for every connected member. The session's host can,
+// and so can the group's admins and owner (say the host never showed up).
 recordingsRouter.patch(
   "/sessions/:id/end",
   requireAuth,
@@ -717,15 +717,16 @@ recordingsRouter.patch(
     }
 
     try {
+      const isAdmin = atLeast(await getSessionRole(id, req.user.id), "admin");
       const { rows } = await pool.query(
         `UPDATE recording_sessions
             SET status = 'complete'
           WHERE id = $1
-            AND created_by = $2
+            AND (created_by = $2 OR $3::boolean)
             AND status = 'active'
           RETURNING id, group_id, name, scheduled_at,
                     created_at, created_by, status`,
-        [id, req.user.id]
+        [id, req.user.id, isAdmin]
       );
 
       if (rows.length === 0) {
@@ -740,10 +741,11 @@ recordingsRouter.patch(
           return res.status(404).json({ error: "Session not found." });
         }
         if (
-          Number(sessionExists.rows[0].created_by) !== Number(req.user.id)
+          Number(sessionExists.rows[0].created_by) !== Number(req.user.id) &&
+          !isAdmin
         ) {
           return res.status(403).json({
-            error: "Only the session creator can end it.",
+            error: "Only the session's host or a group admin can end it.",
           });
         }
         return res.status(409).json({
@@ -773,7 +775,8 @@ recordingsRouter.patch(
   }
 );
 
-// cancels a session but keeps it in the database
+// Cancels a scheduled session but keeps it in the database. The session's
+// creator can, and so can the group's admins and owner.
 recordingsRouter.patch(
   "/sessions/:id/cancel",
   requireAuth,
@@ -785,15 +788,16 @@ recordingsRouter.patch(
     }
 
     try {
+      const isAdmin = atLeast(await getSessionRole(id, req.user.id), "admin");
       const { rows } = await pool.query(
         `UPDATE recording_sessions
             SET status = 'cancelled'
           WHERE id = $1
-            AND created_by = $2
+            AND (created_by = $2 OR $3::boolean)
             AND status = 'scheduled'
           RETURNING id, group_id, name, scheduled_at,
                     created_at, created_by, status`,
-        [id, req.user.id]
+        [id, req.user.id, isAdmin]
       );
 
       if (rows.length === 0) {
@@ -813,7 +817,7 @@ recordingsRouter.patch(
           });
         }
         return res.status(403).json({
-          error: "Only the session creator can cancel it.",
+          error: "Only the session's host or a group admin can cancel it.",
         });
       }
 

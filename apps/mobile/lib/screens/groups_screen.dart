@@ -1,11 +1,15 @@
+import 'dart:async';
+
 import 'package:camerasync_mobile/api/api_client.dart';
 import 'package:flutter/material.dart';
 
 import '../api/groups_api.dart';
 import '../auth/auth_service.dart';
+import '../team_accent.dart';
 import '../theme.dart';
 import '../widgets/create_group_dialog.dart';
 import '../widgets/empty_state.dart';
+import 'group_settings_screen.dart';
 import 'recordings_screen.dart';
 
 /// Lists the user's groups and lets them open a group's sessions.
@@ -28,6 +32,11 @@ class _GroupsScreenState extends State<GroupsScreen> {
   List<Group> _searchResults = [];
   bool _searching = false;
   String? _searchError;
+  Timer? _searchDebounce;
+
+  /// Search waits this long after the last keystroke, so typing a whole ID
+  /// sends one request instead of one per letter.
+  static const _searchDelay = Duration(milliseconds: 300);
 
   @override
   void initState() {
@@ -37,6 +46,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -63,6 +73,12 @@ class _GroupsScreenState extends State<GroupsScreen> {
     }
   }
 
+  void _onSearchChanged(String text) {
+    setState(() {}); // shows or hides the clear button
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(_searchDelay, () => _searchGroups(text));
+  }
+
   Future<void> _searchGroups(String query) async {
     final q = query.trim();
     if (q.isEmpty) {
@@ -81,13 +97,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
     try {
       final results = await _groupsApi.searchGroups(q);
-      if (!mounted) return;
+      // A slower reply for an older query must not replace newer results.
+      if (!mounted || q != _searchController.text.trim()) return;
       setState(() {
         _searchResults = results;
         _searching = false;
       });
     } on ApiException catch (e) {
-      if (!mounted) return;
+      if (!mounted || q != _searchController.text.trim()) return;
       setState(() {
         _searchError = e.message;
         _searching = false;
@@ -137,6 +154,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Joined ${joined.name}')));
       await _loadGroups();
+      // A first group becomes the primary group, which colors the app.
+      if (mounted) TeamAccent.of(this.context).refresh();
       // update search result locally
       setState(() {
         _searchResults = _searchResults.map((g) => g.id == group.id ? Group(id: g.id, name: g.name, isPublic: g.isPublic, isMember: true) : g).toList();
@@ -158,6 +177,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
       SnackBar(content: Text('Created ${created.name}')),
     );
     await _loadGroups();
+    if (mounted) TeamAccent.of(context).refresh();
   }
 
   @override
@@ -186,14 +206,17 @@ class _GroupsScreenState extends State<GroupsScreen> {
             child: TextButton(
               onPressed: _createGroup,
               style: TextButton.styleFrom(padding: EdgeInsets.zero),
-              child: const Text.rich(
+              child: Text.rich(
                 TextSpan(
                   text: "Don't have a group? ",
-                  style: TextStyle(color: Colors.white),
+                  style: const TextStyle(color: Colors.white),
                   children: [
                     TextSpan(
                       text: 'Create one',
-                      style: TextStyle(color: kGold, fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                        color: TeamAccent.of(context).accent,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ],
                 ),
@@ -202,32 +225,37 @@ class _GroupsScreenState extends State<GroupsScreen> {
           ),
           const SizedBox(height: 12),
 
-          // Search bar
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _searchController,
-                  decoration: const InputDecoration(
-                    hintText: 'Find a group by ID',
-                    filled: true,
-                    fillColor: Color(0xFF121212),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.zero),
-                  ),
-                  textCapitalization: TextCapitalization.none,
-                  onSubmitted: _searchGroups,
-                ),
-              ),
-              const SizedBox(width: 8),
-              FilledButton(
-                onPressed: () => _searchGroups(_searchController.text),
-                child: const Text('Search'),
-              ),
-            ],
+          // Search updates as you type.
+          TextField(
+            controller: _searchController,
+            decoration: InputDecoration(
+              hintText: 'Find a group by ID',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: _searchController.text.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'Clear search',
+                      icon: const Icon(Icons.close),
+                      onPressed: () {
+                        _searchController.clear();
+                        _onSearchChanged('');
+                      },
+                    ),
+              filled: true,
+              fillColor: const Color(0xFF121212),
+              border: const OutlineInputBorder(borderRadius: BorderRadius.zero),
+            ),
+            textCapitalization: TextCapitalization.none,
+            textInputAction: TextInputAction.search,
+            onChanged: _onSearchChanged,
+            onSubmitted: (text) {
+              _searchDebounce?.cancel();
+              _searchGroups(text);
+            },
           ),
           const SizedBox(height: 12),
 
-          if (_searching)
+          if (_searching && _searchResults.isEmpty)
             const Padding(
               padding: EdgeInsets.only(top: 12),
               child: Center(child: CircularProgressIndicator()),
@@ -261,14 +289,25 @@ class _GroupsScreenState extends State<GroupsScreen> {
               onAction: _createGroup,
             )
           else
-            ..._groups.map((g) => _GroupCard(group: g, onOpen: () => _openGroup(g))).toList(),
+            ..._groups.map((g) => _GroupCard(
+                  group: g,
+                  isPrimary: g.id == TeamAccent.of(context).primaryGroup?.id,
+                  onRecordings: () => _openGroup(g),
+                  onSettings: () => _openSettings(g),
+                )),
         ],
       ),
     );
   }
 
-  /// A group opens on its recordings, which is the one thing a member can
-  /// do with a group on the phone today.
+  Future<void> _openSettings(Group g) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => GroupSettingsScreen(auth: widget.auth, group: g)),
+    );
+    // The color or roster may have changed there.
+    if (mounted) _loadGroups();
+  }
+
   void _openGroup(Group g) {
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -283,24 +322,78 @@ class _GroupsScreenState extends State<GroupsScreen> {
 }
 
 class _GroupCard extends StatelessWidget {
-  const _GroupCard({required this.group, required this.onOpen});
+  const _GroupCard({
+    required this.group,
+    required this.isPrimary,
+    required this.onRecordings,
+    required this.onSettings,
+  });
 
   final Group group;
-  final VoidCallback onOpen;
+  final bool isPrimary;
+  final VoidCallback onRecordings;
+  final VoidCallback onSettings;
 
+  /// The card is filled with the team color, with the group's recordings and
+  /// a gear for its settings page, matching the web's group tiles.
   @override
   Widget build(BuildContext context) {
+    final fill = parseHexColor(group.primaryColor);
+    final ink = fill == null ? Colors.white : inkOn(fill);
+
     return Card(
-      color: const Color(0xFF1C1C1C),
+      color: fill ?? const Color(0xFF1C1C1C),
       margin: const EdgeInsets.only(bottom: 12),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        title: Text(
-          group.name,
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 8,
+                    children: [
+                      Text(
+                        group.name,
+                        style: TextStyle(color: ink, fontSize: 16, fontWeight: FontWeight.w600),
+                      ),
+                      if (isPrimary)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: ink.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text('Primary',
+                              style: TextStyle(color: ink, fontSize: 11, fontWeight: FontWeight.w700)),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Group ID: ${group.id}',
+                    style: TextStyle(color: fill == null ? kMuted : ink.withValues(alpha: 0.75)),
+                  ),
+                ],
+              ),
+            ),
+            FilledButton(
+              onPressed: onRecordings,
+              style: fill == null
+                  ? null
+                  : FilledButton.styleFrom(backgroundColor: ink, foregroundColor: fill),
+              child: const Text('Recordings'),
+            ),
+            IconButton(
+              onPressed: onSettings,
+              tooltip: 'Settings for ${group.name}',
+              icon: Icon(Icons.settings_outlined, color: ink),
+            ),
+          ],
         ),
-        subtitle: Text('Group ID: ${group.id}', style: const TextStyle(color: kMuted)),
-        trailing: FilledButton(onPressed: onOpen, child: const Text('Open')),
       ),
     );
   }

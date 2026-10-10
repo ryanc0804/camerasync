@@ -1,20 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { useAuth } from "../auth/AuthContext.jsx";
 import {
   createGroup,
-  changeGroupMemberRole,
-  removeGroupMember,
   getGroups,
-  getDefaultGroup,
-  getGroupMembers,
   joinGroup,
   searchGroups,
-  updateGroupColors,
 } from "../api/groups.js";
 import { EmptyState } from "../components/EmptyState.jsx";
+import { GearIcon } from "../components/Sidebar.jsx";
+import { TeamColorPicker } from "../components/TeamColorPicker.jsx";
 import { useGroupTheme } from "../theme/GroupThemeContext.jsx";
+import { groupTile } from "../theme/groupTheme.js";
+import { DEFAULT_TEAM_COLOR } from "../theme/teamColors.js";
 
 // Shells for the sections that don't have backing APIs yet. Each states what
 // it will hold so the nav is honest about what's built vs. planned.
@@ -22,232 +20,75 @@ import { useGroupTheme } from "../theme/GroupThemeContext.jsx";
 const styles = {
   title: { margin: "0 0 0.5rem", fontSize: "1.8rem" },
   muted: { color: "#999", lineHeight: 1.6, maxWidth: "48ch" },
-  note: {
-    marginTop: "1.5rem",
-    padding: "0.8rem 1rem",
-    background: "#1e1e1e",
-    border: "1px solid #2a2a2a",
-    borderLeft: "3px solid var(--accent)",
-    borderRadius: 6,
-    color: "#bbb",
-    fontSize: "0.9rem",
-    maxWidth: "48ch",
-  },
 };
 
-// Admin-only editor for a group's two team colors (SCRUM-71). Saving reports
-// the updated group up so the list and the app theme can refresh.
-function GroupColorEditor({ group, onSaved, onCancel }) {
-  const [primaryColor, setPrimaryColor] = useState(group.primaryColor);
-  const [secondaryColor, setSecondaryColor] = useState(group.secondaryColor);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-
-  const save = async (event) => {
-    event.preventDefault();
-    setSaving(true);
-    setError("");
-    try {
-      onSaved(await updateGroupColors(group.id, { primaryColor, secondaryColor }));
-    } catch (err) {
-      setError(err.message);
-      setSaving(false);
-    }
-  };
+// One group on the Groups list: filled with its team color, with its
+// recordings and a gear that opens the group's settings page.
+function GroupTile({ group, isPrimary }) {
+  const navigate = useNavigate();
+  const tile = groupTile(group);
 
   return (
-    <form className="group-roster-content group-color-editor" onSubmit={save}>
-      {error && <p role="alert" className="group-error">{error}</p>}
-      <div className="group-colors">
-        <label className="group-field">
-          Primary color
-          <input type="color" value={primaryColor}
-            onChange={(event) => setPrimaryColor(event.target.value)} />
-        </label>
-        <label className="group-field">
-          Secondary color
-          <input type="color" value={secondaryColor}
-            onChange={(event) => setSecondaryColor(event.target.value)} />
-        </label>
-      </div>
-      <p className="group-color-hint">
-        Everyone whose default group is {group.name} sees the app in these colors.
-      </p>
-      <div className="group-actions">
-        <button type="button" className="group-button" onClick={onCancel} disabled={saving}>
-          Cancel
-        </button>
-        <button type="submit" className="group-button group-button-primary" disabled={saving}>
-          {saving ? "Saving..." : "Save colors"}
-        </button>
-      </div>
-    </form>
+    <div
+      className={`group-row${tile ? ` group-tile ${tile.dark ? "group-tile-dark" : "group-tile-light"}` : ""}`}
+      style={tile ? { background: tile.fill, color: tile.ink, borderColor: tile.fill } : undefined}
+    >
+      <span className="group-tile-name">
+        {group.name}
+        {isPrimary && <span className="group-tile-badge">Primary</span>}
+      </span>
+      <button type="button" className="group-button"
+        onClick={() => navigate(`/watch?group=${encodeURIComponent(group.id)}`)}>
+        Recordings
+      </button>
+      <button type="button" className="group-button group-gear"
+        aria-label={`Settings for ${group.name}`} title="Group settings"
+        onClick={() => navigate(`/groups/${encodeURIComponent(group.id)}`)}>
+        <GearIcon size={20} />
+      </button>
+    </div>
   );
 }
 
-function GroupRoster({ group, onUpdated }) {
-  const { user } = useAuth();
-  const navigate = useNavigate();
-  const [saving, setSaving] = useState(false);
-  const [actionError, setActionError] = useState("");
-  const [open, setOpen] = useState(false);
-  const [editingColors, setEditingColors] = useState(false);
-  const [members, setMembers] = useState([]);
-  const [page, setPage] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+// A small centered window over a dimmed page for creating or joining a
+// group. Closes on Esc, the X, or a click outside it.
+function GroupModal({ title, onClose, children }) {
+  const dialogRef = useRef(null);
+
+  // Start typing straight away: focus the first field when it opens.
+  useEffect(() => {
+    dialogRef.current?.querySelector("input:not([type=checkbox]), select, textarea")?.focus();
+  }, []);
 
   useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    setLoading(true);
-    setError("");
-    getGroupMembers(group.id)
-      .then((loadedMembers) => {
-        if (!cancelled) setMembers(loadedMembers);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err.message);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [open, group.id]);
-
-  const isOwner = Number(user.id) === group.owner;
-  const isAdmin = members.find((member) => member.id === Number(user.id))?.role === "admin";
-  // The group list carries the user's own role, so this works before the
-  // roster has been opened.
-  const canEditColors = isOwner || group.role === "admin";
-
-  const roleLabel = { admin: "an admin", member: "a member", viewer: "a viewer" };
-
-  const updateMember = async (member, role) => {
-    const message = role
-      ? `Make ${member.name} ${roleLabel[role]}?`
-      : `Remove ${member.name} from this group?`;
-    if (!window.confirm(message)) return;
-    setSaving(true);
-    setActionError("");
-    try {
-      if (role) {
-        await changeGroupMemberRole(group.id, member.id, role);
-        setMembers((current) => current.map((item) =>
-          item.id === member.id ? { ...item, role } : item
-        ));
-      } else {
-        await removeGroupMember(group.id, member.id);
-        const remaining = members.filter((item) => item.id !== member.id);
-        setMembers(remaining);
-        setPage(Math.min(page, Math.max(0, Math.ceil(remaining.length / 30) - 1)));
-      }
-    } catch (err) {
-      setActionError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
+    const onKey = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   return (
-    <div className="group-row group-roster-box">
-      <div className="group-roster-header">
-        <span className="group-colors-icon" style={{
-          background: `linear-gradient(135deg, ${group.primaryColor} 0 50%, ${group.secondaryColor} 50% 100%)`,
-        }} />
-        <span className="group-roster-name">{group.name}</span>
-        <button type="button" className="group-button"
-          onClick={() => navigate(`/watch?group=${encodeURIComponent(group.id)}`)}>
-          Recordings
-        </button>
-        {canEditColors && (
-          <button type="button" className="group-button"
-            aria-expanded={editingColors}
-            onClick={() => setEditingColors(!editingColors)}>
-            Colors
+    <div className="group-modal-backdrop"
+      onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <div className="group-modal" role="dialog" aria-modal="true" aria-label={title} ref={dialogRef}>
+        <div className="group-modal-header">
+          <h2>{title}</h2>
+          <button type="button" className="group-modal-close" aria-label="Close" onClick={onClose}>
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2.4"
+                strokeLinecap="round" fill="none" />
+            </svg>
           </button>
-        )}
-        <button type="button" className="group-button"
-          aria-expanded={open} aria-controls={`roster-${group.id}`}
-          onClick={() => { setOpen(!open); setPage(0); }}>
-          Roster
-        </button>
-      </div>
-      {editingColors && (
-        <GroupColorEditor
-          group={group}
-          onCancel={() => setEditingColors(false)}
-          onSaved={(updated) => {
-            setEditingColors(false);
-            onUpdated(updated);
-          }}
-        />
-      )}
-      {open && (
-        <div id={`roster-${group.id}`} className="group-roster-content">
-          {loading ? <p>Loading roster...</p> : error ? (
-            <p role="alert" className="group-error">{error}</p>
-          ) : (
-            <>
-              {actionError && <p role="alert" className="group-error">{actionError}</p>}
-              <ul>
-                {members.slice(page * 30, (page + 1) * 30).map((member) => {
-                  const canManage = member.id !== group.owner &&
-                    (isOwner || (isAdmin && ["member", "viewer"].includes(member.role)));
-                  // One step up / one step down the viewer < member < admin ladder.
-                  const promoteTo = member.role === "viewer" ? "member" :
-                    member.role === "member" ? "admin" : null;
-                  const demoteTo = member.role === "admin" ? "member" :
-                    member.role === "member" ? "viewer" : null;
-                  return (
-                    <li key={member.id} className="group-roster-member">
-                      <span>
-                        {member.name}{member.id === group.owner ? <> <em>(owner)</em></> :
-                          member.role === "admin" ? <> <em>(admin)</em></> :
-                          member.role === "viewer" ? <> <em>(viewer)</em></> : null}
-                      </span>
-                      {canManage && (
-                        <span className="group-roster-actions">
-                          {promoteTo && (
-                            <button type="button" className="group-button" disabled={saving}
-                              onClick={() => updateMember(member, promoteTo)}
-                              aria-label={`Make ${member.name} ${roleLabel[promoteTo]}`}>↑</button>
-                          )}
-                          {demoteTo && (
-                            <button type="button" className="group-button" disabled={saving}
-                              onClick={() => updateMember(member, demoteTo)}
-                              aria-label={`Make ${member.name} ${roleLabel[demoteTo]}`}>↓</button>
-                          )}
-                          <button type="button" className="group-button" disabled={saving}
-                            aria-label={`Remove ${member.name} from group`}
-                            onClick={() => updateMember(member, null)}>×</button>
-                        </span>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-              {members.length > 30 && (
-                <div className="group-roster-pages">
-                  <button type="button" className="group-button" aria-label="Previous roster page"
-                    disabled={page === 0} onClick={() => setPage(page - 1)}>‹</button>
-                  <span>{page + 1} / {Math.ceil(members.length / 30)}</span>
-                  <button type="button" className="group-button" aria-label="Next roster page"
-                    disabled={(page + 1) * 30 >= members.length}
-                    onClick={() => setPage(page + 1)}>›</button>
-                </div>
-              )}
-            </>
-          )}
         </div>
-      )}
+        {children}
+      </div>
     </div>
   );
 }
 
 export function GroupsScreen() {
-  const { user } = useAuth();
-  const { refresh: refreshTheme } = useGroupTheme();
+  const { activeGroup, refresh: refreshTheme } = useGroupTheme();
   const [openPanel, setOpenPanel] = useState(null);
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -266,13 +107,8 @@ export function GroupsScreen() {
     id: "",
     isPublic: true,
     password: "",
-    primaryColor: "#ffc72c",
-    secondaryColor: "#0d0d0d",
+    primaryColor: DEFAULT_TEAM_COLOR,
   });
-
-  useEffect(() => {
-    if (groups.length > 0) getDefaultGroup(user.id, groups);
-  }, [groups, user.id]);
 
   useEffect(() => {
     getGroups()
@@ -321,10 +157,11 @@ export function GroupsScreen() {
     setForm((current) => ({ ...current, [field]: value }));
   };
 
-  const togglePanel = (panel) => {
-    setOpenPanel((current) => (current === panel ? null : panel));
+  const closePanel = () => {
+    setOpenPanel(null);
     setCreateError("");
     setJoinError("");
+    setJoinQuery("");
   };
 
   const submitGroup = async (event) => {
@@ -342,8 +179,7 @@ export function GroupsScreen() {
         id: "",
         isPublic: true,
         password: "",
-        primaryColor: "#ffc72c",
-        secondaryColor: "#0d0d0d",
+        primaryColor: DEFAULT_TEAM_COLOR,
       });
       setOpenPanel(null);
     } catch (err) {
@@ -373,6 +209,7 @@ export function GroupsScreen() {
       );
       setPasswordGroupId(null);
       setJoinPassword("");
+      closePanel();
     } catch (err) {
       setJoinError(err.message);
     } finally {
@@ -383,12 +220,22 @@ export function GroupsScreen() {
   return (
     <div>
       <style>{groupsCss}</style>
-      <h1 style={styles.title}>Groups</h1>
-      <p style={styles.muted}>
-        Teams and organizations — Team Knightro, UCF Cheer, UCF Dance Team.
-        Admins create groups and manage members; members join with a group
-        password.
-      </p>
+      <div className="groups-header">
+        <div>
+          <h1 style={styles.title}>Groups</h1>
+          <p style={styles.muted}>Manage your groups and organizations.</p>
+        </div>
+        <div className="group-tools">
+          <button className="group-tool-button group-tool-primary" type="button"
+            onClick={() => setOpenPanel("create")}>
+            Create Group
+          </button>
+          <button className="group-tool-button" type="button"
+            onClick={() => setOpenPanel("join")}>
+            Join Group
+          </button>
+        </div>
+      </div>
 
       <div className="groups-grid">
         <section className="group-panel">
@@ -397,293 +244,269 @@ export function GroupsScreen() {
             <p className="group-empty">Loading groups...</p>
           ) : groups.length === 0 ? (
             <EmptyState title="No groups yet">
-              Create your team's group with the button on the right, or search
-              for it by its ID and join.
+              Create your team's group, or use Join Group to find it by its ID.
             </EmptyState>
           ) : (
             <div className="group-list">
               {groups.map((group) => (
-                <GroupRoster
+                <GroupTile
                   key={group.id}
                   group={group}
-                  onUpdated={(updated) => {
-                    setGroups((current) => current.map((item) =>
-                      item.id === updated.id ? { ...item, ...updated } : item
-                    ));
-                    refreshTheme().catch(() => {});
-                  }}
+                  isPrimary={activeGroup?.id === group.id}
                 />
               ))}
             </div>
           )}
         </section>
 
-        <div className="group-tools">
-          <section className="group-panel group-tool-panel">
-            <button
-              className="group-button group-tool-button"
-              type="button"
-              onClick={() => togglePanel("create")}
-              aria-expanded={openPanel === "create"}
-            >
-              Create Group
-            </button>
+      </div>
 
-            {openPanel === "create" && (
-              <form className="group-tool-content" onSubmit={submitGroup}>
-                {createError && (
-                  <p className="group-error">{createError}</p>
-                )}
-
-                <label className="group-field">
-                  Name
-                  <input
-                    type="text"
-                    value={form.name}
-                    onChange={(event) =>
-                      updateForm("name", event.target.value)
-                    }
-                    placeholder="Group name"
-                    required
-                  />
-                </label>
-
-                <label className="group-field">
-                  ID
-                  <input
-                    type="text"
-                    pattern="[A-Za-z0-9]+"
-                    value={form.id}
-                    placeholder="Letters and numbers only"
-                    onChange={(event) =>
-                      updateForm(
-                        "id",
-                        event.target.value.replace(/[^a-zA-Z0-9]/g, "")
-                      )
-                    }
-                    required
-                  />
-                </label>
-
-                <div className="group-privacy-row">
-                  <label className="group-visibility">
-                    <input
-                      type="checkbox"
-                      checked={form.isPublic}
-                      onChange={(event) =>
-                        updateForm("isPublic", event.target.checked)
-                      }
-                    />
-                    <span className="group-switch" />
-                    <span>{form.isPublic ? "Public" : "Private"}</span>
-                  </label>
-
-                  <label className="group-field group-password">
-                    Password
-                    <input
-                      type="password"
-                      value={form.password}
-                      onChange={(event) =>
-                        updateForm("password", event.target.value)
-                      }
-                      placeholder="Password"
-                      readOnly={form.isPublic}
-                      required={!form.isPublic}
-                    />
-                  </label>
-                </div>
-
-                <div className="group-colors">
-                  <label className="group-field">
-                    Primary color
-                    <input
-                      type="color"
-                      value={form.primaryColor}
-                      onChange={(event) =>
-                        updateForm("primaryColor", event.target.value)
-                      }
-                    />
-                  </label>
-                  <label className="group-field">
-                    Secondary color
-                    <input
-                      type="color"
-                      value={form.secondaryColor}
-                      onChange={(event) =>
-                        updateForm("secondaryColor", event.target.value)
-                      }
-                    />
-                  </label>
-                </div>
-
-                <div className="group-actions">
-                  <button
-                    className="group-button"
-                    type="button"
-                    onClick={() => setOpenPanel(null)}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    className="group-button group-button-primary"
-                    type="submit"
-                    disabled={createSubmitting}
-                  >
-                    {createSubmitting ? "Creating..." : "Create Group"}
-                  </button>
-                </div>
-              </form>
+      {openPanel === "create" && (
+        <GroupModal title="Create a group" onClose={closePanel}>
+          <form className="group-tool-content" onSubmit={submitGroup}>
+            {createError && (
+              <p className="group-error">{createError}</p>
             )}
-          </section>
 
-          <section className="group-panel group-tool-panel">
-            <button
-              className="group-button group-tool-button"
-              type="button"
-              onClick={() => togglePanel("join")}
-              aria-expanded={openPanel === "join"}
-            >
-              Join Group
-            </button>
+            <label className="group-field">
+              Name
+              <input
+                type="text"
+                value={form.name}
+                onChange={(event) =>
+                  updateForm("name", event.target.value)
+                }
+                placeholder="Group name"
+                required
+              />
+            </label>
 
-            {openPanel === "join" && (
-              <div className="group-tool-content">
-                <label className="group-field">
-                  Group ID
-                  <input
-                    type="text"
-                    value={joinQuery}
-                    placeholder="Search by group ID"
-                    onChange={(event) => {
-                      setJoinQuery(
-                        event.target.value.replace(/[^a-zA-Z0-9]/g, "")
-                      );
-                      setPasswordGroupId(null);
-                      setJoinPassword("");
-                    }}
-                  />
-                </label>
+            <label className="group-field">
+              ID
+              <input
+                type="text"
+                pattern="[A-Za-z0-9]+"
+                value={form.id}
+                placeholder="Letters and numbers only"
+                onChange={(event) =>
+                  updateForm(
+                    "id",
+                    event.target.value.replace(/[^a-zA-Z0-9]/g, "")
+                  )
+                }
+                required
+              />
+            </label>
 
-                {joinError && <p className="group-error">{joinError}</p>}
-                {searching ? (
-                  <p className="group-search-message">Searching...</p>
-                ) : hasSearched && searchResults.length === 0 ? (
-                  <p className="group-search-message">
-                    Could Not Find Group
-                  </p>
-                ) : (
-                  <div className="group-search-results">
-                    {searchResults.map((group) => (
-                      <div className="group-search-result" key={group.id}>
-                        <div className="group-search-row">
-                          <div className="group-search-name">
-                            <strong>{group.name}</strong>
-                            <span>{group.id}</span>
-                          </div>
+            <div className="group-privacy-row">
+              <label className="group-visibility">
+                <input
+                  type="checkbox"
+                  checked={form.isPublic}
+                  onChange={(event) =>
+                    updateForm("isPublic", event.target.checked)
+                  }
+                />
+                <span className="group-switch" />
+                <span>{form.isPublic ? "Public" : "Private"}</span>
+              </label>
 
-                          {group.isMember ? (
-                            <span className="group-membership">
-                              You are already a group member
-                            </span>
-                          ) : (
-                            <button
-                              className="group-button group-join-button"
-                              type="button"
-                              disabled={joiningGroupId === group.id}
-                              onClick={() => {
-                                if (group.isPublic) {
-                                  submitJoin(group);
-                                } else {
-                                  setJoinError("");
-                                  setPasswordGroupId(group.id);
-                                  setJoinPassword("");
-                                }
-                              }}
-                            >
-                              {joiningGroupId === group.id
-                                ? "Joining..."
-                                : "Join"}
-                            </button>
-                          )}
-                        </div>
+              <label className="group-field group-password">
+                Password
+                <input
+                  type="password"
+                  value={form.password}
+                  onChange={(event) =>
+                    updateForm("password", event.target.value)
+                  }
+                  placeholder="Password"
+                  readOnly={form.isPublic}
+                  required={!form.isPublic}
+                />
+              </label>
+            </div>
 
-                        {!group.isPublic &&
-                          !group.isMember &&
-                          passwordGroupId === group.id && (
-                            <form
-                              className="group-join-password"
-                              onSubmit={(event) => {
-                                event.preventDefault();
-                                submitJoin(group, joinPassword);
-                              }}
-                            >
-                              <input
-                                type="password"
-                                value={joinPassword}
-                                placeholder="Password"
-                                onChange={(event) =>
-                                  setJoinPassword(event.target.value)
-                                }
-                                autoFocus
-                                required
-                              />
-                              <button
-                                className="group-button group-button-primary"
-                                type="submit"
-                                disabled={joiningGroupId === group.id}
-                              >
-                                {joiningGroupId === group.id
-                                  ? "Joining..."
-                                  : "Join"}
-                              </button>
-                            </form>
-                          )}
+            <div className="group-field">
+              Team color
+              <TeamColorPicker
+                value={form.primaryColor}
+                onChange={(hex) => updateForm("primaryColor", hex)}
+              />
+            </div>
+
+            <div className="group-actions">
+              <button
+                className="group-button"
+                type="button"
+                onClick={() => setOpenPanel(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="group-button group-button-primary"
+                type="submit"
+                disabled={createSubmitting}
+              >
+                {createSubmitting ? "Creating..." : "Create Group"}
+              </button>
+            </div>
+          </form>
+        </GroupModal>
+      )}
+      {openPanel === "join" && (
+        <GroupModal title="Join a group" onClose={closePanel}>
+          <div className="group-tool-content">
+            <label className="group-field">
+              Group ID
+              <input
+                type="text"
+                value={joinQuery}
+                placeholder="Search by group ID"
+                onChange={(event) => {
+                  setJoinQuery(
+                    event.target.value.replace(/[^a-zA-Z0-9]/g, "")
+                  );
+                  setPasswordGroupId(null);
+                  setJoinPassword("");
+                }}
+              />
+            </label>
+
+            {joinError && <p className="group-error">{joinError}</p>}
+            {searching ? (
+              <p className="group-search-message">Searching...</p>
+            ) : hasSearched && searchResults.length === 0 ? (
+              <p className="group-search-message">
+                Could Not Find Group
+              </p>
+            ) : (
+              <div className="group-search-results">
+                {searchResults.map((group) => (
+                  <div className="group-search-result" key={group.id}>
+                    <div className="group-search-row">
+                      <div className="group-search-name">
+                        <strong>{group.name}</strong>
+                        <span>{group.id}</span>
                       </div>
-                    ))}
+
+                      {group.isMember ? (
+                        <span className="group-membership">
+                          You are already a group member
+                        </span>
+                      ) : (
+                        <button
+                          className="group-button group-join-button"
+                          type="button"
+                          disabled={joiningGroupId === group.id}
+                          onClick={() => {
+                            if (group.isPublic) {
+                              submitJoin(group);
+                            } else {
+                              setJoinError("");
+                              setPasswordGroupId(group.id);
+                              setJoinPassword("");
+                            }
+                          }}
+                        >
+                          {joiningGroupId === group.id
+                            ? "Joining..."
+                            : "Join"}
+                        </button>
+                      )}
+                    </div>
+
+                    {!group.isPublic &&
+                      !group.isMember &&
+                      passwordGroupId === group.id && (
+                        <form
+                          className="group-join-password"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            submitJoin(group, joinPassword);
+                          }}
+                        >
+                          <input
+                            type="password"
+                            value={joinPassword}
+                            placeholder="Password"
+                            onChange={(event) =>
+                              setJoinPassword(event.target.value)
+                            }
+                            autoFocus
+                            required
+                          />
+                          <button
+                            className="group-button group-button-primary"
+                            type="submit"
+                            disabled={joiningGroupId === group.id}
+                          >
+                            {joiningGroupId === group.id
+                              ? "Joining..."
+                              : "Join"}
+                          </button>
+                        </form>
+                      )}
                   </div>
-                )}
+                ))}
               </div>
             )}
-          </section>
-        </div>
-      </div>
+          </div>
+        </GroupModal>
+      )}
     </div>
   );
 }
 
 const groupsCss = `
-  .groups-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
-    gap: 24px;
-    align-items: start;
-    max-width: 960px;
-    margin-top: 28px;
+  .groups-header {
+    display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between;
+    gap: 16px; max-width: 760px;
   }
+  .groups-header p { margin: 0; }
+  .groups-grid { max-width: 760px; margin-top: 24px; }
   .group-panel {
     padding: 22px;
-    background: #1e1e1e;
-    border: 1px solid #2a2a2a;
-    border-radius: 10px;
+    background: #151515;
+    border-radius: 14px;
   }
   .group-panel h2 {
     margin: 0 0 18px;
     font-size: 1.15rem;
   }
-  .group-tools {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-  .group-tool-panel {
-    padding: 14px;
-  }
+  .group-tools { display: flex; gap: 10px; }
   .group-tool-button {
-    width: 100%;
-    border-color: var(--accent);
+    padding: 10px 18px;
+    border: none;
+    border-radius: 12px;
+    background: #1c1c1c;
+    color: #f0f0f0;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
   }
+  .group-tool-button:hover { background: #262626; }
+  .group-tool-primary { background: var(--accent); color: var(--accent-ink); }
+  .group-tool-primary:hover { background: var(--accent-hover); }
+  .group-modal-backdrop {
+    position: fixed; inset: 0; z-index: 50;
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px; background: rgba(0, 0, 0, 0.65);
+  }
+  .group-modal {
+    box-sizing: border-box; width: min(440px, 100%); max-height: calc(100vh - 32px);
+    overflow: auto; padding: 18px 22px 22px; border-radius: 16px;
+    background: #1a1a1a; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  }
+  .group-modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .group-modal-header h2 { margin: 0; font-size: 1.2rem; }
+  .group-modal-close {
+    display: flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; padding: 0; border: none; border-radius: 8px;
+    background: transparent; color: #aaa; cursor: pointer;
+  }
+  .group-modal-close:hover { background: #262626; color: #fff; }
   .group-tool-content {
-    margin-top: 18px;
+    margin-top: 10px;
   }
   .group-empty {
     margin: 0;
@@ -702,30 +525,26 @@ const groupsCss = `
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 11px 13px;
-    border: 1px solid #303030;
-    border-radius: 8px;
-    background: #242424;
+    padding: 11px 14px;
+    border: none;
+    border-radius: 12px;
+    background: #1c1c1c;
     font-weight: 600;
   }
-  .group-roster-box { display: block; }
-  .group-roster-header { display: flex; align-items: center; gap: 12px; }
-  .group-roster-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-  .group-roster-content { margin-top: 12px; border-top: 1px solid #3a3a3a; }
-  .group-roster-content ul { list-style: none; padding: 0; margin: 8px 0; }
-  .group-roster-content li { padding: 8px 0; font-weight: 400; overflow-wrap: anywhere; }
-  .group-roster-member { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
-  .group-roster-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-  .group-roster-actions button { padding: 4px 8px; font-size: 0.75rem; }
-  .group-roster-pages { display: flex; align-items: center; justify-content: flex-end; gap: 10px; font-size: 0.8rem; }
-  .group-roster-pages button { padding: 3px 10px; }
-  .group-colors-icon {
-    width: 34px;
-    height: 34px;
-    flex: 0 0 34px;
-    border: 1px solid #555;
-    border-radius: 50%;
+  .group-tile-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .group-tile-badge {
+    margin-left: 8px; padding: 2px 8px; border-radius: 999px;
+    background: rgba(127,127,127,0.25); font-size: 0.7rem; font-weight: 700;
+    vertical-align: middle;
   }
+  .group-gear { display: flex; align-items: center; justify-content: center; padding: 7px 9px; }
+  /* A colored tile keeps its buttons readable on any team color by tinting
+     them toward the tile's own text color. */
+  .group-tile .group-button { color: inherit; }
+  .group-tile-light .group-button { background: rgba(0,0,0,0.12); border-color: rgba(0,0,0,0.3); }
+  .group-tile-light .group-button:hover { background: rgba(0,0,0,0.22); }
+  .group-tile-dark .group-button { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.35); }
+  .group-tile-dark .group-button:hover { background: rgba(255,255,255,0.24); }
   .group-error {
     margin: 0 0 14px;
     padding: 9px 11px;
@@ -876,27 +695,6 @@ const groupsCss = `
   .group-join-password input:focus {
     border-color: var(--accent);
   }
-  .group-colors {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 14px;
-  }
-  .group-color-editor { padding-top: 14px; }
-  .group-color-hint {
-    margin: 0 0 12px;
-    color: #999;
-    font-size: 0.8rem;
-    font-weight: 400;
-  }
-  .group-field input[type="color"] {
-    width: 100%;
-    height: 38px;
-    padding: 3px;
-    border: 1px solid #3a3a3a;
-    border-radius: 7px;
-    background: #262626;
-    cursor: pointer;
-  }
   .group-actions {
     display: flex;
     justify-content: flex-end;
@@ -928,11 +726,6 @@ const groupsCss = `
     cursor: default;
     opacity: 0.55;
   }
-  @media (max-width: 850px) {
-    .groups-grid {
-      grid-template-columns: 1fr;
-    }
-  }
   @media (max-width: 480px) {
     .group-privacy-row {
       grid-template-columns: 1fr;
@@ -943,70 +736,3 @@ const groupsCss = `
     }
   }
 `;
-
-export function SettingsScreen() {
-  const { user } = useAuth();
-  const { selectGroup } = useGroupTheme();
-  const [groups, setGroups] = useState([]);
-  const [defaultGroup, setDefaultGroup] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    getGroups()
-      .then((loadedGroups) => {
-        setGroups(loadedGroups);
-        setDefaultGroup(getDefaultGroup(user.id, loadedGroups));
-      })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
-  }, [user.id]);
-
-  const changeDefaultGroup = (event) => {
-    try {
-      localStorage.setItem(`defaultGroup:${user.id}`, event.target.value);
-      setDefaultGroup(event.target.value);
-      selectGroup(event.target.value);
-      setError("");
-    } catch {
-      setError("Could not save your default group in this browser.");
-    }
-  };
-
-  return (
-    <div>
-      <h1 style={styles.title}>Settings</h1>
-      <dl style={{ ...styles.muted, display: "grid", gridTemplateColumns: "auto 1fr", gap: "0.5rem 1.5rem" }}>
-        <dt style={{ fontWeight: 600, color: "#e0e0e0" }}>Name</dt>
-        <dd style={{ margin: 0 }}>{user?.name || "—"}</dd>
-        <dt style={{ fontWeight: 600, color: "#e0e0e0" }}>Email</dt>
-        <dd style={{ margin: 0 }}>{user?.email}</dd>
-      </dl>
-      <div style={styles.note}>
-        <label htmlFor="default-group" style={{ display: "block", marginBottom: 10 }}>
-          Default group
-        </label>
-        <p style={{ margin: "0 0 10px", fontSize: "0.8rem", color: "#999" }}>
-          The app uses this group's team colors.
-        </p>
-        {loading ? <p>Loading groups...</p> : groups.length === 0 ? (
-          <p>No groups joined.</p>
-        ) : groups.length === 1 && groups[0].id === defaultGroup ? (
-          <strong>{groups[0].name}</strong>
-        ) : (
-          <select id="default-group" value={defaultGroup} onChange={changeDefaultGroup}
-            style={{ width: "100%", padding: "0.5rem", borderRadius: 6,
-              background: "#262626", color: "#f0f0f0", border: "1px solid #555", font: "inherit" }}>
-            {!groups.some((group) => group.id === defaultGroup) && (
-              <option value={defaultGroup} disabled>Choose a default group</option>
-            )}
-            {groups.map((group) => (
-              <option key={group.id} value={group.id}>{group.name}</option>
-            ))}
-          </select>
-        )}
-        {error && <p role="alert" style={{ color: "#ff8a80" }}>{error}</p>}
-      </div>
-    </div>
-  );
-}

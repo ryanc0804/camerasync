@@ -9,11 +9,16 @@ class AppUser {
     required this.email,
     this.name,
     this.emailVerified = true,
+    this.primaryGroupId,
   });
 
   final int id;
   final String email;
   final String? name;
+
+  /// The group whose color the app takes, saved on the account; null means
+  /// the first group the user joined.
+  final String? primaryGroupId;
 
   /// False until the sign-up confirmation code is entered (SCRUM-43); the
   /// app shows only the confirm screen until then.
@@ -26,6 +31,7 @@ class AppUser {
         // Only an explicit false locks the app, so a server that predates
         // confirmation never strands anyone on the confirm screen.
         emailVerified: json['emailVerified'] != false,
+        primaryGroupId: json['primaryGroupId'] as String?,
       );
 
   String get displayName => (name != null && name!.isNotEmpty) ? name! : email;
@@ -133,6 +139,29 @@ class AuthService extends ChangeNotifier {
     await _api.post('/api/auth/reset-password', {
       'token': token,
       'password': password,
+    });
+  }
+
+  /// Settings: change the display name and/or the primary group. The server
+  /// checks the user belongs to the group.
+  Future<void> updateProfile({String? name, String? primaryGroupId}) async {
+    final data = await _api.patch('/api/auth/me', {
+      if (name != null) 'name': name,
+      if (primaryGroupId != null) 'primaryGroupId': primaryGroupId,
+    });
+    _user = AppUser.fromJson((data as Map)['user'] as Map<String, dynamic>);
+    notifyListeners();
+  }
+
+  /// Change the password while signed in; the server signs out every other
+  /// device and keeps this one.
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    await _api.post('/api/auth/change-password', {
+      'currentPassword': currentPassword,
+      'newPassword': newPassword,
     });
   }
 
