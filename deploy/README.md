@@ -65,6 +65,25 @@ ssh -i ~/.ssh/8kount-prod.pem ubuntu@<public-ip>
 cd camerasync && bash deploy/deploy.sh
 ```
 
+## Backups
+
+The database runs on the instance, not RDS (the next team can move to RDS
+by pointing `DATABASE_URL` at it), so backups come in two layers:
+
+- **Nightly dump:** `deploy.sh` installs a cron job that runs
+  `deploy/backup.sh` at 03:15 UTC. It keeps the newest 7 compressed dumps in
+  `deploy/backups/` on the instance. The restore command is at the top of
+  the script.
+- **Daily disk snapshots, off the instance:** run once from an admin machine:
+
+  ```bash
+  bash deploy/provision-snapshots.sh
+  ```
+
+  AWS snapshots the whole disk at 04:00 UTC and keeps 7. That covers the
+  database, the dumps and any recordings stored on disk, for about
+  $1/month.
+
 ## Cost control
 
 The account is on the AWS Free plan with credits. Stop the instance when the
