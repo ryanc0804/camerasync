@@ -56,7 +56,9 @@ export function ActiveSessionScreen() {
   const [confirmingEnd, setConfirmingEnd] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [error, setError] = useState("");
-  const [bufferMs, setBufferMs] = useState(50);
+  // How far ahead the shared start is set. It has to cover the start
+  // message reaching every phone over the internet, or they start late.
+  const [bufferMs, setBufferMs] = useState(1500);
   const [recordingStatus, setRecordingStatus] = useState("idle");
   const [recordingMessage, setRecordingMessage] = useState(
     "Waiting for the host to record."
@@ -143,8 +145,15 @@ export function ActiveSessionScreen() {
       setRecordingMessage(`Saved ${videoFileName}`);
       if (video.size > 0) {
         setRecordingMessage(`Saved ${videoFileName}. Uploading for playback...`);
-        saveRecordingDetails(sessionId, info.plannedStartAtEpochMs)
-          .then(() => uploadSessionVideo(sessionId, info.plannedStartAtEpochMs, video, videoFileName))
+        // When the recorder really started, so playback can line this angle
+        // up with the phones, which start a moment after the shared time.
+        const actualStartedAt = info.actualStartAtEpochMs
+          ? Math.round(info.actualStartAtEpochMs)
+          : undefined;
+        saveRecordingDetails(sessionId, info.plannedStartAtEpochMs, actualStartedAt)
+          .then(() => uploadSessionVideo(
+            sessionId, info.plannedStartAtEpochMs, video, videoFileName, actualStartedAt
+          ))
           .then(() => setRecordingMessage(`Saved and uploaded ${videoFileName}`))
           .catch((err) => setRecordingMessage(
             `Saved ${videoFileName} on this device, but upload failed: ${err.message}`

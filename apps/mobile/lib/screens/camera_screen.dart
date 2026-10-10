@@ -52,6 +52,10 @@ class _CameraScreenState extends State<CameraScreen> {
   /// session shares this value, and the server groups uploads by it.
   int? _plannedStartAtEpochMs;
 
+  /// Server-clock time the camera really began, which is a moment after the
+  /// planned start. Playback shifts this angle by the difference.
+  int? _actualStartAtEpochMs;
+
   /// "Recording N" for the current session recording, when the server said.
   int? _recordingNumber;
 
@@ -60,6 +64,7 @@ class _CameraScreenState extends State<CameraScreen> {
   String? _lastVideoPath;
   String? _lastVideoName;
   int? _lastStartedAtEpochMs;
+  int? _lastActualStartedAtEpochMs;
 
   _UploadState _upload = _UploadState.idle;
   String _uploadMessage = '';
@@ -158,7 +163,14 @@ class _CameraScreenState extends State<CameraScreen> {
     }
 
     try {
+      _actualStartAtEpochMs = null;
       await _cameraController!.startVideoRecording();
+      // Taken as soon as the camera says it is recording; the phone's own
+      // start-up delay is what this measures.
+      if (socket != null) {
+        _actualStartAtEpochMs =
+            socket.localToServer(DateTime.now().millisecondsSinceEpoch);
+      }
 
       setState(() {
         _recording = true;
@@ -178,7 +190,9 @@ class _CameraScreenState extends State<CameraScreen> {
     }
 
     final startedAt = _plannedStartAtEpochMs;
+    final actualStartedAt = _actualStartAtEpochMs;
     _plannedStartAtEpochMs = null;
+    _actualStartAtEpochMs = null;
     _recordingNumber = null;
 
     try {
@@ -192,6 +206,7 @@ class _CameraScreenState extends State<CameraScreen> {
         _lastVideoPath = file.path;
         _lastVideoName = file.name;
         _lastStartedAtEpochMs = startedAt;
+        _lastActualStartedAtEpochMs = actualStartedAt;
         await _uploadLastVideo();
       }
     } catch (e) {
@@ -219,12 +234,15 @@ class _CameraScreenState extends State<CameraScreen> {
     });
 
     try {
-      await api.saveRecordingDetails(sessionId, startedAt);
+      final actualStartedAt = _lastActualStartedAtEpochMs;
+      await api.saveRecordingDetails(sessionId, startedAt,
+          actualStartedAtMs: actualStartedAt);
       await api.uploadSessionVideo(
         sessionId,
         startedAt,
         path,
         filename: _lastVideoName,
+        actualStartedAtMs: actualStartedAt,
       );
       if (!mounted) return;
       setState(() {

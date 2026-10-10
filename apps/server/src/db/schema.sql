@@ -280,3 +280,10 @@ CREATE TABLE IF NOT EXISTS group_join_attempts (
 -- on the old gold move to the new one so they match the palette.
 ALTER TABLE groups ALTER COLUMN primary_color SET DEFAULT '#ead217';
 UPDATE groups SET primary_color = '#ead217' WHERE primary_color = '#ffc72c';
+
+-- How much later (positive) or earlier this device's camera actually began
+-- than the shared start time in started_at_ms, in server-clock ms. Phones
+-- take a moment to start recording and can get the start command late, so
+-- playback shifts each angle by this to line the angles up. NULL for
+-- uploads from before this was tracked (treated as 0).
+ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS start_offset_ms INTEGER;

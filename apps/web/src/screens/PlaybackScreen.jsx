@@ -9,6 +9,7 @@ import {
   getSessionVideos,
   uploadSessionVideo,
 } from "../api/recordings.js";
+import { angleTrims } from "../recording/angleTrims.js";
 import { recordingDisplayName } from "../recording/localRecording.js";
 
 export function PlaybackScreen() {
@@ -109,6 +110,10 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
   const currentTime = useRef(0);
   const playRequest = useRef(0);
   const videos = recordings[recordingIndex].videos;
+  // Each angle skips ahead so all of them show the same moment; times shown
+  // and saved (seek bar, comments) are on that shared timeline.
+  const trims = angleTrims(videos);
+  const trimOf = (player) => Number(player?.dataset.trim || 0);
   const panels = panelLayouts[recordingIndex] || (videos.length ? videos.map((video) => video.userId) : [null]);
   const panelVideos = panels.map(
     (id) => videos.find((video) => video.userId === id) || null
@@ -144,7 +149,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     const request = ++playRequest.current;
     setError("");
     if (players.every((video) => video.ended)) {
-      players.forEach((video) => { video.currentTime = 0; });
+      players.forEach((video) => { video.currentTime = trimOf(video); });
     }
     try {
       await Promise.all(players.filter((video) => !video.ended).map((video) => video.play()));
@@ -162,13 +167,17 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     currentTime.current = nextTime;
     videoTime.current = nextTime;
     setTime(nextTime);
-    players.forEach((video) => { video.currentTime = Math.min(nextTime, video.duration); });
+    players.forEach((video) => {
+      video.currentTime = Math.min(nextTime + trimOf(video), video.duration);
+    });
 
     // A shorter video may have ended already; resume it when seeking back.
     if (playing) {
       const request = ++playRequest.current;
       try {
-        await Promise.all(players.filter((video) => nextTime < video.duration).map((video) => video.play()));
+        await Promise.all(players
+          .filter((video) => nextTime + trimOf(video) < video.duration)
+          .map((video) => video.play()));
       } catch {
         if (request !== playRequest.current) return;
         pause();
@@ -197,8 +206,8 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
   const skip = (seconds) => {
     const players = videoRefs.current.filter((video) => video && Number.isFinite(video.duration));
     if (players.length === 0) return;
-    const longest = Math.max(...players.map((video) => video.duration));
-    const from = Math.max(...players.map((video) => video.currentTime));
+    const longest = Math.max(...players.map((video) => video.duration - trimOf(video)));
+    const from = Math.max(...players.map((video) => video.currentTime - trimOf(video)));
     seekTo(Math.max(0, Math.min(longest, from + seconds)));
   };
 
@@ -222,7 +231,9 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
 
   const updatePanels = (nextPanels) => {
     const players = videoRefs.current.filter(Boolean);
-    if (players.length) currentTime.current = Math.max(...players.map((video) => video.currentTime));
+    if (players.length) {
+      currentTime.current = Math.max(...players.map((video) => video.currentTime - trimOf(video)));
+    }
     pause();
     videoRefs.current = [];
     setDuration(0);
@@ -366,6 +377,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                   if (element) element.volume = audio.volume;
                 }}
                 src={video.url}
+                data-trim={trims.get(video.userId) ?? 0}
                 crossOrigin="use-credentials"
                 preload="auto"
                 playsInline
@@ -373,12 +385,14 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                 aria-label={video.name}
                 onLoadedMetadata={(event) => {
                   const player = event.currentTarget;
-                  player.currentTime = Math.min(currentTime.current, player.duration || 0);
-                  setDuration((current) => Math.max(current, player.duration || 0));
+                  player.currentTime = Math.min(currentTime.current + trimOf(player), player.duration || 0);
+                  setDuration((current) => Math.max(current, (player.duration || 0) - trimOf(player)));
                 }}
                 onTimeUpdate={(event) => {
-                  videoTime.current = event.currentTarget.currentTime;
-                  setTime(event.currentTarget.currentTime);
+                  const player = event.currentTarget;
+                  const at = Math.max(0, player.currentTime - trimOf(player));
+                  videoTime.current = at;
+                  setTime(at);
                 }}
                 onEnded={() => {
                   if (videoRefs.current.filter(Boolean).every((player) => player.ended)) {
