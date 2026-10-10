@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 
+// The room as it sounds. Browsers default to call processing that cancels
+// sound from this computer's own speakers, which would erase the sync beep
+// it plays when it starts a take (so this angle couldn't be lined up by it),
+// and that also dulls music and pumps the volume.
+const RECORDING_AUDIO = {
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+};
+
 export function LocalMediaPreview({ disabled, onReady, onDecline }) {
   const videoRef = useRef(null);
   const [stream, setStream] = useState(null);
@@ -37,8 +47,8 @@ export function LocalMediaPreview({ disabled, onReady, onDecline }) {
           ? { deviceId: { exact: nextCameraId } }
           : true,
         audio: nextMicrophoneId
-          ? { deviceId: { exact: nextMicrophoneId } }
-          : true,
+          ? { deviceId: { exact: nextMicrophoneId }, ...RECORDING_AUDIO }
+          : RECORDING_AUDIO,
       });
 
       let availableDevices = [];
