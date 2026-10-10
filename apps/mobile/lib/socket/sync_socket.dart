@@ -37,10 +37,15 @@ class RecordingStartCommand {
     required this.serverStartAtEpochMs,
     required this.localStartAtEpochMs,
     this.recordingNumber,
+    this.localBeepAtEpochMs,
   });
 
   final int serverStartAtEpochMs;
   final int localStartAtEpochMs;
+
+  /// When the device that started the take plays the sync beep, on this
+  /// device's clock. Null from servers that predate the beep.
+  final int? localBeepAtEpochMs;
 
   /// 1-based position of this recording within the session ("Recording 3"),
   /// as persisted by the server. Null for start commands that predate it.
@@ -163,6 +168,7 @@ class SyncSocket {
         _recordingStart.add(_startCommand(
           serverStart,
           recordingNumber: (data['recordingNumber'] as num?)?.toInt(),
+          serverBeepAtEpochMs: (data['beepAtEpochMs'] as num?)?.toInt(),
         ));
       }
     });
@@ -246,11 +252,15 @@ class SyncSocket {
   RecordingStartCommand _startCommand(
     int serverStartAtEpochMs, {
     int? recordingNumber,
+    int? serverBeepAtEpochMs,
   }) =>
       RecordingStartCommand(
         serverStartAtEpochMs: serverStartAtEpochMs,
         localStartAtEpochMs: serverToLocal(serverStartAtEpochMs),
         recordingNumber: recordingNumber,
+        localBeepAtEpochMs: serverBeepAtEpochMs == null
+            ? null
+            : serverToLocal(serverBeepAtEpochMs),
       );
 
   /// Joins the session's socket room. The server requires an ack callback and

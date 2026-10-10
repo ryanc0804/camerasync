@@ -287,3 +287,9 @@ UPDATE groups SET primary_color = '#ead217' WHERE primary_color = '#ffc72c';
 -- playback shifts each angle by this to line the angles up. NULL for
 -- uploads from before this was tracked (treated as 0).
 ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS start_offset_ms INTEGER;
+
+-- Where the sync beep (see src/recordings/syncBeep.js) was found in this
+-- video, in ms from its start. Every camera heard the beep at the same
+-- moment, so this lines the angles up more exactly than start_offset_ms,
+-- which can't see a phone's camera warming up. NULL when it wasn't heard.
+ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS beep_at_ms INTEGER;

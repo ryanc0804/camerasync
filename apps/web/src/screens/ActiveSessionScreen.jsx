@@ -18,6 +18,7 @@ import {
   recordingBaseName,
   recordingDisplayName,
 } from "../recording/localRecording.js";
+import { playSyncBeep } from "../recording/syncBeep.js";
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
 let timesyncPromise = null;
@@ -73,6 +74,9 @@ export function ActiveSessionScreen() {
   const recordingTimerRef = useRef(null);
   const recordingChunksRef = useRef([]);
   const recordingInfoRef = useRef(null);
+  // This device pressed Start, so it plays the sync beep for the take.
+  const beepRequestedRef = useRef(false);
+  const audioContextRef = useRef(null);
 
   // checks that this user can enter the live session
   useEffect(() => {
@@ -182,6 +186,15 @@ export function ActiveSessionScreen() {
       };
 
       const delay = Math.max(0, command.startAtEpochMs - receivedAtEpochMs);
+
+      if (beepRequestedRef.current && command.beepAtEpochMs) {
+        beepRequestedRef.current = false;
+        const audioContext = audioContextRef.current;
+        if (audioContext) {
+          const wait = Math.max(0, command.beepAtEpochMs - receivedAtEpochMs) / 1000;
+          playSyncBeep(audioContext, audioContext.currentTime + wait);
+        }
+      }
       setRecordingStatus("waiting");
       setRecordingMessage(`Recording starts in ${Math.round(delay)} ms`);
 
@@ -353,6 +366,15 @@ export function ActiveSessionScreen() {
       return;
     }
 
+    // Created on the click so the browser lets it play sound.
+    try {
+      audioContextRef.current ??= new AudioContext();
+      audioContextRef.current.resume();
+      beepRequestedRef.current = true;
+    } catch {
+      // No Web Audio: the take still lines up by the reported start times.
+    }
+
     setRecordingStatus("requesting");
     setRecordingMessage("Sending the synchronized start...");
     socket.emit(
@@ -360,6 +382,7 @@ export function ActiveSessionScreen() {
       { sessionId, bufferMs: Number(bufferMs) },
       (reply) => {
         if (!reply?.ok) {
+          beepRequestedRef.current = false;
           setRecordingStatus("idle");
           setRecordingMessage(reply?.error || "Unable to start recording.");
         }

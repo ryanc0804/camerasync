@@ -98,7 +98,7 @@ describe("saving a video's real start", () => {
     expect((await save({ startedAt, actualStartedAt: startedAt + 870 })).status).toBe(200);
 
     const take = (await videosOf()).find((r) => r.startedAt === startedAt);
-    expect(take.videos[0].startOffsetMs).toBe(870);
+    expect(take.videos[0]).toMatchObject({ startOffsetMs: 870, syncedBy: "device" });
   });
 
   it("keeps the first offset when the save is retried", async () => {
@@ -108,6 +108,20 @@ describe("saving a video's real start", () => {
 
     const take = (await videosOf()).find((r) => r.startedAt === startedAt);
     expect(take.videos[0].startOffsetMs).toBe(400);
+  });
+
+  it("prefers where the sync beep landed over the reported time", async () => {
+    const startedAt = Date.now() - 5_000;
+    await save({ startedAt, actualStartedAt: startedAt + 100 });
+    // The upload route stores this from the audio; set it directly here.
+    await pool.query(
+      `UPDATE recording_session_videos SET beep_at_ms = 700
+        WHERE session_id = $1 AND started_at_ms = $2`,
+      [sessionId, startedAt]
+    );
+
+    const take = (await videosOf()).find((r) => r.startedAt === startedAt);
+    expect(take.videos[0]).toMatchObject({ startOffsetMs: 800, syncedBy: "beep" });
   });
 
   it("is null for clients that don't report it", async () => {

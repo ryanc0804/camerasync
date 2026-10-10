@@ -5,6 +5,7 @@ import 'dart:async';
 import '../api/api_client.dart';
 import '../api/recordings_api.dart';
 import '../socket/sync_socket.dart';
+import '../sync_beep.dart';
 
 /// Camera view. Works in two modes:
 ///
@@ -146,6 +147,17 @@ class _CameraScreenState extends State<CameraScreen> {
 
     _pendingStart?.cancel();
 
+    final beepAt = command.localBeepAtEpochMs;
+    if (_beepOnNextStart && beepAt != null && _beep != null) {
+      _beepOnNextStart = false;
+      _pendingBeep?.cancel();
+      final wait = beepAt - DateTime.now().millisecondsSinceEpoch;
+      _pendingBeep = Timer(
+        Duration(milliseconds: wait < 0 ? 0 : wait),
+        () => _beep?.play(),
+      );
+    }
+
     _pendingStart = Timer(
       Duration(milliseconds: delay < 0 ? 0 : delay),
       _startRecording,
@@ -279,6 +291,8 @@ class _CameraScreenState extends State<CameraScreen> {
   @override
   void dispose() {
     _pendingStart?.cancel();
+    _pendingBeep?.cancel();
+    _beep?.dispose();
 
     for (final sub in _subs) {
       sub.cancel();
@@ -453,6 +467,11 @@ class _CameraScreenState extends State<CameraScreen> {
   /// A start or stop request is on its way to the server.
   bool _requesting = false;
 
+  /// This phone pressed Start, so it plays the sync beep for the take.
+  bool _beepOnNextStart = false;
+  SyncBeep? _beep;
+  Timer? _pendingBeep;
+
   /// The host's shutter starts or stops the take on every device; the server
   /// then sends the shared start (or stop) back here like everywhere else.
   Future<void> _hostShutter() async {
@@ -461,12 +480,19 @@ class _CameraScreenState extends State<CameraScreen> {
     if (socket == null || sessionId == null || _requesting) return;
     final stopping = _recording || (_pendingStart?.isActive ?? false);
     setState(() => _requesting = true);
+    if (!stopping) {
+      // Loaded now so it plays on time when the start comes back.
+      _beepOnNextStart = true;
+      _beep ??= SyncBeep();
+      await _beep!.prepare().catchError((_) {});
+    }
     final error = stopping
         ? await socket.requestStop(sessionId)
         : await socket.requestStart(sessionId);
     if (!mounted) return;
     setState(() => _requesting = false);
     if (error != null) {
+      _beepOnNextStart = false;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(error)));
     }
