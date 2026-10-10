@@ -7,6 +7,7 @@ import {
   deleteSessionNote,
   getSessionNotes,
   getSessionVideos,
+  sessionDownloadUrl,
   uploadSessionVideo,
 } from "../api/recordings.js";
 import { angleTrims } from "../recording/angleTrims.js";
@@ -20,7 +21,6 @@ export function PlaybackScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [recordingIndex, setRecordingIndex] = useState(0);
-  const [notesOpen, setNotesOpen] = useState(true);
   const [notes, setNotes] = useState([]);
   const [notesError, setNotesError] = useState("");
   const videoTime = useRef(0);
@@ -62,7 +62,14 @@ export function PlaybackScreen() {
         <p role="alert">{error}</p>
       ) : (
         <>
-          <h1>{session.name}</h1>
+          <div className="playback-title">
+            <h1>{session.name}</h1>
+            {recordings.some((recording) => recording.videos.some((video) => video.url)) && (
+              <a className="playback-download" href={sessionDownloadUrl(sessionId)} download>
+                Download
+              </a>
+            )}
+          </div>
           <div className="playback-layout">
             {recordings.length === 0 ? (
               <p>No videos have been uploaded for this session yet.</p>
@@ -70,18 +77,10 @@ export function PlaybackScreen() {
               <>
                 <SessionPlayer key={sessionId} recordings={recordings}
                   sessionId={sessionId} userId={Number(user.id)} onUploaded={setRecordings}
-                  videoTime={videoTime} seek={seek} notes={notes}
+                  videoTime={videoTime} seek={seek} notes={notes} setNotes={setNotes}
+                  notesError={notesError} setNotesError={setNotesError}
                   recordingIndex={recordingIndex}
                   setRecordingIndex={setRecordingIndex} />
-                {notesOpen ? (
-                  <NotesPanel sessionId={sessionId} videoTime={videoTime}
-                    startedAt={startedAt} notes={notes} setNotes={setNotes}
-                    error={notesError} setError={setNotesError}
-                    seek={seek} onHide={() => setNotesOpen(false)} />
-                ) : (
-                  <button type="button" className="notes-show" aria-label="Show comments"
-                    title="Show comments" onClick={() => setNotesOpen(true)}>+</button>
-                )}
               </>
             )}
           </div>
@@ -91,8 +90,11 @@ export function PlaybackScreen() {
   );
 }
 
+// Comments are blue dots on the seek bar where they were left; each one
+// pops up over the video for a few seconds as playback passes it. There is
+// no separate list: posting one stamps it at the moment on screen.
 function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, seek,
-  notes, recordingIndex, setRecordingIndex }) {
+  notes, setNotes, notesError, setNotesError, recordingIndex, setRecordingIndex }) {
   const [uploading, setUploading] = useState(false);
   const [page, setPage] = useState(0);
   const [panelLayouts, setPanelLayouts] = useState({});
@@ -104,7 +106,10 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [liveComments, setLiveComments] = useState(false);
+  const [commentText, setCommentText] = useState("");
+  // Waiting for every angle to have enough loaded to play together.
+  const [buffering, setBuffering] = useState(false);
+  const [posting, setPosting] = useState(false);
   const [error, setError] = useState("");
   const videoRefs = useRef([]);
   const currentTime = useRef(0);
@@ -119,7 +124,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     (id) => videos.find((video) => video.userId === id) || null
   );
   const pages = Math.ceil(panels.length / 6);
-  const liveNote = !liveComments ? null : notes.filter((note) => {
+  const liveNote = notes.filter((note) => {
     const at = note.videoTimeMs / 1000;
     return at <= time && time < at + 3;
   }).at(-1);
@@ -137,6 +142,36 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     });
   };
 
+  const startedAt = recordings[recordingIndex].startedAt;
+
+  // Stamped with the moment on screen, so its dot lands where it was left.
+  const postComment = async (event) => {
+    event.preventDefault();
+    const body = commentText.trim();
+    if (!body) return;
+    setPosting(true);
+    setNotesError("");
+    try {
+      await createSessionNote(sessionId, startedAt, body, Math.round(videoTime.current * 1000));
+      setNotes(await getSessionNotes(sessionId, startedAt));
+      setCommentText("");
+    } catch (err) {
+      setNotesError(err.message);
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  const removeComment = async (noteId) => {
+    setNotesError("");
+    try {
+      await deleteSessionNote(sessionId, noteId);
+      setNotes((current) => current.filter((note) => note.id !== noteId));
+    } catch (err) {
+      setNotesError(err.message);
+    }
+  };
+
   const pause = () => {
     playRequest.current += 1;
     videoRefs.current.forEach((video) => video?.pause());
@@ -151,6 +186,17 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     if (players.every((video) => video.ended)) {
       players.forEach((video) => { video.currentTime = trimOf(video); });
     }
+    // Start every angle at once, only when all of them can: otherwise the
+    // one still loading starts late and stays behind.
+    setBuffering(true);
+    const ready = await untilReady(players.filter((video) => !video.ended));
+    if (request !== playRequest.current) return;
+    setBuffering(false);
+    if (!ready) {
+      pause();
+      setError("An angle is still loading. Try again in a moment.");
+      return;
+    }
     try {
       await Promise.all(players.filter((video) => !video.ended).map((video) => video.play()));
       if (request === playRequest.current) setPlaying(true);
@@ -160,6 +206,28 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
       setError("A video could not play. Try again once it has loaded.");
     }
   };
+
+  // Keeps the angles together while playing: browsers drift a little, and
+  // an angle that seeks or buffers falls behind. Every half second, any
+  // angle more than 0.1 s off the first one is moved back into line.
+  useEffect(() => {
+    if (!playing) return undefined;
+    const timer = setInterval(() => {
+      const players = videoRefs.current.filter(
+        (video) => video && Number.isFinite(video.duration) && !video.ended
+      );
+      if (players.length < 2) return;
+      const [leader, ...others] = players;
+      const at = leader.currentTime - trimOf(leader);
+      for (const video of others) {
+        const target = at + trimOf(video);
+        if (target < video.duration && Math.abs(video.currentTime - target) > 0.1) {
+          video.currentTime = target;
+        }
+      }
+    }, 500);
+    return () => clearInterval(timer);
+  }, [playing]);
 
   const seekTo = async (nextTime) => {
     const players = videoRefs.current.filter((video) => video && Number.isFinite(video.duration));
@@ -288,11 +356,6 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
 
   return (
     <section className="playback-box">
-      <label className="playback-live-toggle">
-        <input type="checkbox" checked={liveComments}
-          onChange={(event) => setLiveComments(event.target.checked)} />
-        Live comments
-      </label>
       <div className="playback-top">
         <select aria-label="Recording" disabled={uploading} value={recordingIndex} onChange={changeRecording}>
           {recordings.map((recording, index) => (
@@ -304,12 +367,13 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
         <button type="button" onClick={addPanel} disabled={uploading}
           aria-label="Add one panel">+1</button>
       </div>
+      {buffering && <p className="playback-buffering" role="status">Loading angles…</p>}
       {panelVideos.length === 0 ? (
         <p className="playback-empty">No videos have been uploaded for this recording yet.</p>
       ) : Array.from({ length: pages }, (_, pageIndex) => {
         const pageVideos = panelVideos.slice(pageIndex * 6, pageIndex * 6 + 6);
         return (
-        <div className={`playback-grid playback-grid-${pageVideos.length}${
+        <div aria-busy={buffering} className={`playback-grid playback-grid-${pageVideos.length}${
             focusedPanel !== null && Math.floor(focusedPanel / 6) === pageIndex ? " playback-grid-focused" : ""}`}
           hidden={pageIndex !== page} key={`${recordingIndex}-${pageIndex}-${panels.join(",")}`}>
           {pageVideos.map((video, index) => {
@@ -399,6 +463,13 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                     setPlaying(false);
                   }
                 }}
+                onWaiting={() => {
+                  // One angle ran out of data: hold them all until it
+                  // catches up, rather than letting it fall behind.
+                  if (!playing) return;
+                  videoRefs.current.forEach((player) => player?.pause());
+                  play();
+                }}
                 onError={() => {
                   pause();
                   setError("A video could not load. Try refreshing the page.");
@@ -460,17 +531,33 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
             onClick={() => changePage(page + 1)}>›</button>
         </div>
       )}
-      {liveComments && (
-        <p className="playback-live-note">
-          {liveNote && <><strong>{liveNote.author}:</strong> "{liveNote.body}"</>}
-        </p>
-      )}
+      <p className="playback-live-note" aria-live="polite">
+        {liveNote && (
+          <>
+            <strong>{liveNote.author}:</strong> "{liveNote.body}"
+            {liveNote.canDelete && (
+              <button type="button" className="playback-note-delete"
+                aria-label={`Delete comment by ${liveNote.author}`}
+                onClick={() => removeComment(liveNote.id)}>×</button>
+            )}
+          </>
+        )}
+      </p>
       <div className="playback-seek">
         <span>{formatTime(time * 1000)}</span>
-        <input type="range" min="0" max={duration || 0} step="0.1"
-          aria-label="Seek" disabled={uploading || !duration}
-          value={Math.min(time, duration || 0)}
-          onChange={(event) => seekTo(Number(event.target.value))} />
+        <div className="playback-track">
+          <input type="range" min="0" max={duration || 0} step="0.1"
+            aria-label="Seek" disabled={uploading || !duration}
+            value={Math.min(time, duration || 0)}
+            onChange={(event) => seekTo(Number(event.target.value))} />
+          {duration > 0 && notes.map((note) => (
+            <button type="button" key={note.id} className="playback-dot"
+              style={{ left: `${Math.min(100, (note.videoTimeMs / 1000 / duration) * 100)}%` }}
+              title={`${formatTime(note.videoTimeMs)}  ${note.author}: ${note.body}`}
+              aria-label={`Comment by ${note.author} at ${formatTime(note.videoTimeMs)}`}
+              onClick={() => seekTo(note.videoTimeMs / 1000)} />
+          ))}
+        </div>
         <span>{formatTime(duration * 1000)}</span>
       </div>
       <div className="playback-controls">
@@ -497,8 +584,42 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
           </svg>
         </button>
       </div>
+      <form className="playback-comment" onSubmit={postComment}>
+        <input value={commentText} maxLength={500}
+          placeholder={`Comment at ${formatTime(time * 1000)}`}
+          aria-label="New comment"
+          onChange={(event) => setCommentText(event.target.value)} />
+        <button type="submit" disabled={posting || !commentText.trim()}>
+          {posting ? "Posting..." : "Post"}
+        </button>
+      </form>
+      {notesError && <p className="playback-comment-error" role="alert">{notesError}</p>}
     </section>
   );
+}
+
+/// Resolves true once every video can play from where it is without
+/// stopping right away, or false if one still can't after `timeoutMs`.
+function untilReady(videos, timeoutMs = 15000) {
+  const HAVE_FUTURE_DATA = 3;
+  const waiting = videos.filter((video) => video.readyState < HAVE_FUTURE_DATA);
+  if (waiting.length === 0) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let left = waiting.length;
+    const onReady = (event) => {
+      event.currentTarget.removeEventListener("canplay", onReady);
+      left -= 1;
+      if (left === 0) {
+        clearTimeout(timer);
+        resolve(true);
+      }
+    };
+    const timer = setTimeout(() => {
+      waiting.forEach((video) => video.removeEventListener("canplay", onReady));
+      resolve(false);
+    }, timeoutMs);
+    waiting.forEach((video) => video.addEventListener("canplay", onReady));
+  });
 }
 
 // turns 83000 into "1:23"
@@ -507,81 +628,16 @@ function formatTime(ms) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function NotesPanel({ sessionId, videoTime, startedAt, notes, setNotes,
-  error, setError, seek, onHide }) {
-  const [text, setText] = useState("");
-
-  const addNote = async () => {
-    const body = text.trim();
-    if (!body) return;
-    setError("");
-    try {
-      // videoTime holds wherever the player is right now, so the note is
-      // stamped with the moment it is about.
-      await createSessionNote(sessionId, startedAt, body, Math.round(videoTime.current * 1000));
-      setNotes(await getSessionNotes(sessionId, startedAt));
-      setText("");
-    } catch (err) {
-      setError(err.message);
-    }
-  };
-
-  const removeNote = async (noteId) => {
-    setError("");
-    try {
-      await deleteSessionNote(sessionId, noteId);
-      setNotes((current) => current.filter((note) => note.id !== noteId));
-    } catch (err) {
-      setError(err.message);
-    }
-  };
-
-  return (
-    <section className="notes-box">
-      <div className="notes-top">
-        <h2>Comments</h2>
-        <button type="button" className="notes-hide" aria-label="Hide comments"
-          title="Hide comments" onClick={onHide}>−</button>
-      </div>
-      <div className="notes-list">
-        {notes.length === 0 ? (
-          <p className="notes-empty">No comments yet.</p>
-        ) : notes.map((note) => (
-          <div className="notes-item" key={note.id}>
-            <button type="button" className="notes-jump"
-              title="Jump to this moment"
-              onClick={() => seek.current?.(note.videoTimeMs / 1000)}>
-              <span className="notes-item-top">
-                <strong>{note.author}</strong>
-                <time>{formatTime(note.videoTimeMs)}</time>
-              </span>
-              <span className="notes-body">{note.body}</span>
-            </button>
-            {note.canDelete && (
-              <button type="button" className="notes-delete"
-                aria-label={`Delete comment by ${note.author}`}
-                onClick={() => removeNote(note.id)}>×</button>
-            )}
-          </div>
-        ))}
-      </div>
-      {error && <p className="notes-error" role="alert">{error}</p>}
-      <div className="notes-add">
-        <input value={text} placeholder="Add a comment" maxLength={500}
-          aria-label="New comment"
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => { if (event.key === "Enter") addNote(); }} />
-        <button type="button" aria-label="Post comment"
-          disabled={!text.trim()} onClick={addNote}>+</button>
-      </div>
-    </section>
-  );
-}
-
 const css = `
   .playback-page { max-width: 1600px; }
   .playback-page > a { color: var(--accent); }
   .playback-page h1 { font-size: 1.4rem; margin: 1rem 0; overflow-wrap: anywhere; }
+  .playback-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .playback-page .playback-download {
+    flex: 0 0 auto; padding: 0.45rem 0.9rem; border-radius: 8px;
+    background: var(--accent); color: var(--accent-ink); font-weight: 700; text-decoration: none;
+  }
+  .playback-page .playback-download:hover { background: var(--accent-hover); }
   .playback-box { position: relative; background: #1c1c1c; border: 1px solid #303030; border-radius: 12px; padding: 1rem; }
   .playback-top, .playback-controls, .playback-pages { display: flex; justify-content: center; align-items: center; gap: 12px; }
   .playback-top { margin-bottom: 1rem; }
@@ -621,14 +677,31 @@ const css = `
   .playback-grid-5 figure:nth-child(2) { grid-column: 7 / span 4; }
   .playback-grid-5 figure:nth-child(3) { grid-column: 1 / span 4; }
   .playback-controls, .playback-pages { margin-top: 1rem; }
-  .playback-live-toggle { position: absolute; top: 1rem; left: 1rem; z-index: 1; display: flex; align-items: center; gap: 6px; color: #aaa; font-size: 0.75rem; cursor: pointer; }
-  .playback-live-toggle input { margin: 0; accent-color: var(--accent); cursor: pointer; }
   .playback-live-note { min-height: 1.3rem; margin: 0.75rem 0 0; text-align: center; color: #f0f0f0; font-size: 0.85rem; overflow-wrap: anywhere; }
   .playback-live-note strong { color: var(--accent); }
   .playback-live-note + .playback-seek { margin-top: 0.5rem; }
   .playback-seek { display: flex; align-items: center; gap: 10px; margin-top: 1rem; }
   .playback-seek span { color: #999; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+  .playback-buffering { margin: 0 0 0.5rem; text-align: center; color: #aaa; font-size: 0.85rem; }
+  .playback-track { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
   .playback-seek input { flex: 1; min-width: 0; margin: 0; accent-color: var(--accent); cursor: pointer; }
+  /* A blue dot on the bar for each comment; click it to jump there. */
+  .playback-box .playback-dot {
+    position: absolute; top: 50%; width: 11px; height: 11px; padding: 0;
+    border: 2px solid #0b0b0b; border-radius: 50%; background: #3b82f6;
+    transform: translate(-50%, -50%); cursor: pointer;
+  }
+  .playback-box .playback-dot:hover { background: #60a5fa; transform: translate(-50%, -50%) scale(1.3); }
+  .playback-box .playback-note-delete {
+    margin-left: 8px; padding: 0 6px; border: none; background: transparent;
+    color: #ff6b6b; font-size: 1rem; line-height: 1;
+  }
+  .playback-comment { display: flex; gap: 8px; max-width: 560px; margin: 1rem auto 0; }
+  .playback-comment input {
+    flex: 1; min-width: 0; padding: 0.45rem 0.6rem; border: 1px solid #555; border-radius: 6px;
+    background: #292929; color: #f0f0f0; font: inherit; font-size: 0.9rem;
+  }
+  .playback-comment-error { margin: 0.5rem 0 0; text-align: center; color: #ff8a80; font-size: 0.85rem; }
   .playback-seek input:disabled { opacity: 0.4; cursor: default; }
   .playback-seek + .playback-controls { margin-top: 0.5rem; }
   .playback-controls .playback-toggle, .playback-controls .playback-skip { display: flex; align-items: center; justify-content: center; width: 52px; height: 52px; padding: 0; border-radius: 50%; }
@@ -637,30 +710,7 @@ const css = `
   .playback-layout { position: relative; display: flex; align-items: flex-start; gap: 1rem; }
   .playback-layout > .playback-box { flex: 1; min-width: 0; }
   .playback-layout > p { flex: 1; }
-  .notes-box { display: flex; flex-direction: column; flex: 0 0 340px; align-self: stretch; background: #1c1c1c; border: 1px solid #303030; border-radius: 12px; padding: 1rem; box-sizing: border-box; }
-  .notes-top { display: flex; align-items: center; gap: 8px; margin-bottom: 0.75rem; }
-  .notes-top h2 { flex: 1; margin: 0; font-size: 1.1rem; }
-  .notes-box .notes-hide, .notes-show { width: 28px; height: 28px; padding: 0; display: flex; align-items: center; justify-content: center; border: 1px solid #555; border-radius: 6px; background: #292929; color: #f0f0f0; font: inherit; font-size: 1rem; line-height: 1; cursor: pointer; }
-  .notes-show { position: absolute; top: 0; right: 0; }
-  .notes-box .notes-hide:hover, .notes-show:hover { background: #3a3a3a; }
-  .notes-list { flex: 1; min-height: 120px; overflow-y: auto; }
-  .notes-empty { margin: 0; color: #999; font-size: 0.85rem; }
-  .notes-item { position: relative; border-bottom: 1px solid #2a2a2a; }
-  .notes-box .notes-jump { display: block; width: 100%; padding: 8px; border: none; border-radius: 6px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
-  .notes-box .notes-jump:hover { background: #262626; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45); }
-  .notes-item-top { display: flex; align-items: center; gap: 8px; padding-right: 22px; }
-  .notes-item-top strong { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 0.8rem; }
-  .notes-item-top time { color: var(--accent); font-size: 0.75rem; }
-  .notes-box .notes-delete { position: absolute; top: 8px; right: 6px; width: 22px; height: 22px; padding: 0; display: flex; align-items: center; justify-content: center; border: none; border-radius: 4px; background: transparent; color: #ff6b6b; font-size: 1rem; line-height: 1; cursor: pointer; }
-  .notes-box .notes-delete:hover { background: #472222; }
-  .notes-body { display: block; margin-top: 4px; color: #ddd; font-size: 0.85rem; line-height: 1.4; overflow-wrap: anywhere; }
-  .notes-error { margin: 8px 0 0; color: #ff8a80; font-size: 0.8rem; }
-  .notes-add { display: flex; gap: 8px; margin-top: 0.75rem; }
-  .notes-add input { flex: 1; min-width: 0; padding: 0.4rem; border: 1px solid #555; border-radius: 6px; background: #292929; color: #f0f0f0; font: inherit; font-size: 0.85rem; }
-  .notes-add button { flex: 0 0 auto; width: 34px; padding: 0; border: 1px solid #555; border-radius: 6px; background: #292929; color: #f0f0f0; font-size: 1.1rem; cursor: pointer; }
-  .notes-add button:disabled { opacity: 0.4; cursor: default; }
   @media (max-width: 900px) {
     .playback-layout { flex-direction: column; justify-content: flex-start; }
-    .notes-box { flex: 1 1 auto; width: 100%; }
   }
 `;

@@ -11,8 +11,11 @@ function sessionLabel(session) {
   const date = new Date(session.scheduledAt);
   const parts = [date.getFullYear(), date.getMonth() + 1, date.getDate(),
     date.getHours(), date.getMinutes(), date.getSeconds()];
-  return `Session-${parts.map((part) => String(part).padStart(2, "0")).join("-")}-${session.groupId}`;
+  return `Session-${parts.map((part) => String(part).padStart(2, "0")).join("-")}-${session.groupId ?? session.name}`;
 }
+
+// The picker's value for sessions started without a group.
+const NO_GROUP = "__none";
 
 export function WatchScreen() {
   const { user } = useAuth();
@@ -48,7 +51,13 @@ export function WatchScreen() {
   }, [user.id]);
 
   const group = groups.find((group) => group.id === groupId);
-  const groupSessions = sessions.filter((session) => session.groupId === groupId);
+  const noGroupSessions = sessions.filter((session) => session.groupId == null);
+  const groupSessions = groupId === NO_GROUP
+    ? noGroupSessions
+    : sessions.filter((session) => session.groupId === groupId);
+  // Sessions without a group: their creator can delete them.
+  const canDelete = (session) =>
+    session.groupId == null ? session.createdBy === Number(user.id) : group?.role === "admin";
 
   const removeSession = async (session) => {
     if (!window.confirm(`Delete ${sessionLabel(session)} and all its videos? This cannot be undone.`)) return;
@@ -73,7 +82,7 @@ export function WatchScreen() {
         <p>Loading recordings...</p>
       ) : error ? (
         <p role="alert" className="watch-error">{error}</p>
-      ) : groups.length === 0 ? (
+      ) : groups.length === 0 && noGroupSessions.length === 0 ? (
         <EmptyState title="No groups yet" action="Find your group" to="/groups">
           Recordings belong to a group's sessions. Join your team's group to
           see them.
@@ -82,14 +91,15 @@ export function WatchScreen() {
         <section className="watch-group">
           <div className="watch-group-header">
             <label htmlFor="watch-group">Group:</label>
-            {groups.length > 1 || !group ? (
+            {groups.length > 1 || !group || noGroupSessions.length > 0 ? (
               <select id="watch-group" value={groupId} onChange={(event) => {
                 setGroupId(event.target.value);
               }}>
-                {!group && <option value={groupId} disabled>Choose a group</option>}
+                {!group && groupId !== NO_GROUP && <option value={groupId} disabled>Choose a group</option>}
                 {groups.map((group) => (
                   <option key={group.id} value={group.id}>{group.name}</option>
                 ))}
+                {noGroupSessions.length > 0 && <option value={NO_GROUP}>No group</option>}
               </select>
             ) : <strong>{group?.name}</strong>}
           </div>
@@ -97,7 +107,7 @@ export function WatchScreen() {
             {deleteError && <p role="alert" className="watch-error">{deleteError}</p>}
             {groupSessions.length === 0 ? (
               <EmptyState
-                title={`No recordings in ${group?.name || "this group"} yet`}
+                title={`No recordings in ${groupId === NO_GROUP ? "sessions without a group" : group?.name || "this group"} yet`}
                 action="Record a practice"
                 to="/record"
               >
@@ -116,7 +126,7 @@ export function WatchScreen() {
                   </span>
                 </button>
                 {/* Admins and the owner (who keeps an admin role) can delete. */}
-                {group.role === "admin" && (
+                {canDelete(session) && (
                   <button type="button" className="watch-delete"
                     aria-label={`Delete ${sessionLabel(session)}`}
                     title="Delete session and videos"

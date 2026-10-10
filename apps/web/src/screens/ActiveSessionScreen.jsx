@@ -558,6 +558,14 @@ export function ActiveSessionScreen() {
                 </div>
               )}
 
+              {canControl && recordingStatus === "idle" && (
+                <p className="session-sync-tip">
+                  Starting plays a short beep that every camera uses to line up.
+                  For the closest sync, start from a device near the middle of the
+                  room and keep its volume up.
+                </p>
+              )}
+
               <p>
                 {recordingStatus === "recording" && (
                   <span className="session-recording-dot" />
@@ -670,6 +678,7 @@ const activeSessionCss = `
   .active-session-confirm span {
     color: #ddd;
   }
+  .session-sync-tip { margin: 8px 0 0; color: #9a9a9a; font-size: 0.82rem; line-height: 1.45; }
   .session-recording-bar {
     display: flex;
     align-items: center;
