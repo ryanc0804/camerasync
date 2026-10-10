@@ -72,6 +72,7 @@ const FEED_SQL = `
     JOIN users u ON u.user_id = e.actor_id
     JOIN groups g ON g.group_id = e.group_id
    WHERE e.at > NOW() - make_interval(days => ${WINDOW_DAYS})
+     AND e.type = ANY($3::text[])
    ORDER BY e.at DESC, e.id
    LIMIT $2
 `;
@@ -105,6 +106,17 @@ function publicNotification(row, seenAt) {
   return notification;
 }
 
+// The kinds the user's category switches in Settings let through. They
+// decide what shows in the feed; the separate push switch only decides
+// whether the phone also gets an alert.
+const TYPE_OF_KIND = { comments: "comment", joins: "join", sessions: "session" };
+
+function shownTypes(prefs) {
+  return Object.entries(TYPE_OF_KIND)
+    .filter(([kind]) => prefs?.[kind] !== false)
+    .map(([, type]) => type);
+}
+
 async function seenAtFor(userId) {
   const { rows } = await pool.query(
     "SELECT settings::jsonb ->> 'notificationsSeenAt' AS seen_at FROM users WHERE user_id = $1",
@@ -122,9 +134,12 @@ notificationsRouter.get("/", requireAuth, async (req, res, next) => {
       ? Math.min(Math.max(requested, 1), MAX_LIMIT)
       : DEFAULT_LIMIT;
 
+    const types = shownTypes(req.user.notificationPrefs);
     const [seenAt, { rows }] = await Promise.all([
       seenAtFor(req.user.id),
-      pool.query(FEED_SQL, [req.user.id, limit]),
+      types.length
+        ? pool.query(FEED_SQL, [req.user.id, limit, types])
+        : { rows: [] },
     ]);
     const notifications = rows.map((row) => publicNotification(row, seenAt));
     res.json({

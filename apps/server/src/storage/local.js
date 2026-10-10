@@ -40,6 +40,13 @@ export function createLocalStorage({ uploadDir }) {
       });
     },
 
+    // The stored file as a stream, for building a session download.
+    async open(fileId) {
+      const filePath = path.join(uploadDir, fileId);
+      await fsp.access(filePath, fs.constants.R_OK);
+      return fs.createReadStream(filePath);
+    },
+
     async remove(fileIds) {
       for (const fileId of fileIds) {
         await fsp.rm(path.join(uploadDir, fileId), { force: true });

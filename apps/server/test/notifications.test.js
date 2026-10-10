@@ -172,3 +172,22 @@ describe("POST /api/notifications/seen", () => {
     expect(res.body.unreadCount).toBe(0);
   });
 });
+
+describe("category switches", () => {
+  it("leave everything in the feed when only push is off", async () => {
+    await request(app).patch("/api/auth/me").set("Cookie", coach.cookie)
+      .send({ notificationPrefs: { push: false } });
+    const res = await feed(coach);
+    expect(res.body.notifications.map((n) => n.type)).toEqual(["join"]);
+  });
+
+  it("hide a category from the feed when it's turned off", async () => {
+    await request(app).patch("/api/auth/me").set("Cookie", coach.cookie)
+      .send({ notificationPrefs: { joins: false } });
+    const res = await feed(coach);
+    expect(res.body.notifications).toEqual([]);
+
+    // The dancer's own switches are untouched.
+    expect((await feed(dancer)).body.notifications.map((n) => n.type)).toEqual(["session"]);
+  });
+});

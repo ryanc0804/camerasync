@@ -63,6 +63,18 @@ export async function deleteSession(token) {
 }
 
 /// Shape sent to clients. Never includes the password hash.
+/// Which phone alerts the user wants: all on until they turn some off.
+/// "push" is the master switch; the rest are the kinds in the notifications
+/// feed (see routes/notifications.js).
+export const NOTIFICATION_KINDS = ["comments", "joins", "sessions"];
+
+export function notificationPrefs(settings) {
+  const saved = settings?.notificationPrefs ?? {};
+  const prefs = { push: saved.push !== false };
+  for (const kind of NOTIFICATION_KINDS) prefs[kind] = saved[kind] !== false;
+  return prefs;
+}
+
 export function publicUser(row) {
   return {
     id: row.user_id,
@@ -73,6 +85,7 @@ export function publicUser(row) {
     emailVerified: row.email_verified_at != null,
     // The group whose color the apps take; null means "first joined group".
     primaryGroupId: row.settings?.primaryGroupId ?? null,
+    notificationPrefs: notificationPrefs(row.settings),
   };
 }
 

@@ -5,13 +5,17 @@
 // (see ../index.js).
 
 import crypto from "node:crypto";
+import path from "node:path";
+import archiver from "archiver";
 import { Router } from "express";
 import { pool } from "../db/pool.js";
+import { storage } from "../storage/index.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import {
   ROLE_RANK,
   atLeast,
   getSessionRole,
+  sessionVisibleSql,
 } from "../middleware/groupRole.js";
 import {
   createRecordingSession,
@@ -117,8 +121,7 @@ recordingsRouter.get("/sessions", requireAuth, async (req, res, next) => {
                    AND rsm.user_id = $1
               ) AS is_joined
         FROM recording_sessions rs
-         JOIN group_members gm ON gm.group_id = rs.group_id
-        WHERE gm.user_id = $1
+        WHERE ${sessionVisibleSql("rs", "$1")}
         ORDER BY
           rs.status <> 'active',
           rs.scheduled_at < NOW(),
@@ -182,8 +185,7 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
   try {
     const { rows: sessions } = await pool.query(
       `SELECT rs.id, rs.name FROM recording_sessions rs
-       JOIN group_members gm ON gm.group_id = rs.group_id
-       WHERE rs.id = $1 AND gm.user_id = $2`,
+       WHERE rs.id = $1 AND ${sessionVisibleSql("rs", "$2")}`,
       [req.params.id, req.user.id]
     );
     if (sessions.length === 0) {
@@ -272,6 +274,93 @@ recordingsRouter.post("/sessions/:id/videos", requireAuth, async (req, res, next
   }
 });
 
+// Everything a session recorded, as one zip to keep on a computer, phone or
+// USB stick: a folder per recording ("Recording 001") with each member's
+// angle named after them. Stored, not compressed: video is already
+// compressed, so the zip starts streaming at once and costs no CPU.
+recordingsRouter.get("/sessions/:id/download", requireAuth, async (req, res, next) => {
+  let archive;
+  try {
+    const { rows: sessions } = await pool.query(
+      `SELECT rs.id, rs.name, rs.scheduled_at FROM recording_sessions rs
+       WHERE rs.id = $1 AND ${sessionVisibleSql("rs", "$2")}`,
+      [req.params.id, req.user.id]
+    );
+    if (sessions.length === 0) {
+      return res.status(404).json({ error: "Session not found." });
+    }
+    const { rows: videos } = await pool.query(
+      `SELECT v.file_id, v.started_at_ms, u.display_name, sr.recording_number
+         FROM recording_session_videos v
+         JOIN users u ON u.user_id = v.user_id
+         LEFT JOIN session_recordings sr
+           ON sr.session_id = v.session_id AND sr.started_at_ms = v.started_at_ms
+        WHERE v.session_id = $1 AND v.file_id IS NOT NULL
+        ORDER BY v.started_at_ms, u.display_name`,
+      [req.params.id]
+    );
+    if (videos.length === 0) {
+      return res.status(404).json({ error: "No videos have been uploaded for this session." });
+    }
+
+    const session = sessions[0];
+    const day = new Date(session.scheduled_at).toISOString().slice(0, 10);
+    const zipName = `${safeName(session.name) || "Session"} ${day}.zip`;
+    res.set({
+      "Content-Type": "application/zip",
+      "Content-Disposition":
+        `attachment; filename="${zipName.replace(/"/g, "")}"; filename*=UTF-8''${encodeURIComponent(zipName)}`,
+    });
+
+    archive = archiver("zip", { store: true });
+    archive.on("warning", () => {});
+    archive.on("error", (err) => {
+      console.error("Session download failed:", err);
+      res.destroy(err);
+    });
+    // Stop reading files if the person cancels the download.
+    res.on("close", () => {
+      if (!res.writableFinished) archive.abort();
+    });
+    archive.pipe(res);
+
+    // One file at a time, so a long session doesn't open every video at once.
+    const takes = new Map();
+    const used = new Set();
+    for (const video of videos) {
+      const startedAt = Number(video.started_at_ms);
+      if (!takes.has(startedAt)) takes.set(startedAt, video.recording_number ?? takes.size + 1);
+      const folder = `Recording ${String(takes.get(startedAt)).padStart(3, "0")}`;
+      let name = `${folder}/${safeName(video.display_name) || "Member"}${path.extname(video.file_id)}`;
+      for (let n = 2; used.has(name); n += 1) {
+        name = `${folder}/${safeName(video.display_name) || "Member"} (${n})${path.extname(video.file_id)}`;
+      }
+      used.add(name);
+
+      const stream = await storage.open(video.file_id);
+      const added = new Promise((resolve) => archive.once("entry", resolve));
+      archive.append(stream, { name, date: new Date(startedAt) });
+      await added;
+    }
+    await archive.finalize();
+  } catch (err) {
+    if (archive) {
+      archive.abort();
+      if (res.headersSent) return res.destroy(err);
+    }
+    next(err);
+  }
+});
+
+// Letters, numbers, spaces and a little punctuation, for names inside a zip.
+function safeName(value) {
+  return String(value ?? "")
+    .replace(/[^\p{L}\p{N} ._()-]+/gu, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+}
+
 // --- Session notes -------------------------------------------------------
 //
 // Rank comes from the shared group-role ladder (viewer < member < admin <
@@ -282,7 +371,9 @@ recordingsRouter.post("/sessions/:id/videos", requireAuth, async (req, res, next
 // The group owner is stored on groups.owner_id, so a note's author only
 // counts as "owner" when their id matches it.
 function noteAuthorRole(row) {
-  return Number(row.owner_id) === Number(row.user_id)
+  // Without a group, whoever started the session owns it.
+  const owner = row.group_id == null ? row.created_by : row.owner_id;
+  return Number(owner) === Number(row.user_id)
     ? "owner"
     : row.role || "member";
 }
@@ -315,11 +406,11 @@ recordingsRouter.get("/sessions/:id/notes", requireAuth, async (req, res, next) 
       return res.status(404).json({ error: "Session not found." });
     }
     const { rows } = await pool.query(
-      `SELECT n.note_id, n.body, n.video_time_ms, n.user_id,
+      `SELECT n.note_id, n.body, n.video_time_ms, n.user_id, rs.group_id, rs.created_by,
               u.display_name, g.owner_id, gm.role
        FROM session_notes n
        JOIN recording_sessions rs ON rs.id = n.session_id
-       JOIN groups g ON g.group_id = rs.group_id
+       LEFT JOIN groups g ON g.group_id = rs.group_id
        JOIN users u ON u.user_id = n.user_id
        LEFT JOIN group_members gm
          ON gm.group_id = rs.group_id AND gm.user_id = n.user_id
@@ -378,10 +469,10 @@ recordingsRouter.delete("/sessions/:id/notes/:noteId", requireAuth, async (req, 
       return res.status(404).json({ error: "Session not found." });
     }
     const { rows } = await pool.query(
-      `SELECT n.user_id, g.owner_id, gm.role
+      `SELECT n.user_id, g.owner_id, gm.role, rs.group_id, rs.created_by
        FROM session_notes n
        JOIN recording_sessions rs ON rs.id = n.session_id
-       JOIN groups g ON g.group_id = rs.group_id
+       LEFT JOIN groups g ON g.group_id = rs.group_id
        LEFT JOIN group_members gm
          ON gm.group_id = rs.group_id AND gm.user_id = n.user_id
        WHERE n.note_id = $1 AND n.session_id = $2`,
@@ -470,28 +561,29 @@ recordingsRouter.post("/sessions/live", requireAuth, async (req, res, next) => {
   const groupId = String(req.body?.groupId ?? "").trim();
   const name = String(req.body?.name ?? "").trim();
 
-  if (!groupId) {
-    return res.status(400).json({ error: "Group is required." });
-  }
   if (!name) {
     return res.status(400).json({ error: "Session name is required." });
   }
 
   let client;
   try {
-    const membership = await pool.query(
-      `SELECT 1
-         FROM group_members
-        WHERE group_id = $1
-          AND user_id = $2
-          AND role = 'admin'`,
-      [groupId, req.user.id]
-    );
+    // With a group, only its admins and owner start sessions. Without one,
+    // anyone signed in can, and shares the code.
+    if (groupId) {
+      const membership = await pool.query(
+        `SELECT 1
+           FROM group_members
+          WHERE group_id = $1
+            AND user_id = $2
+            AND role = 'admin'`,
+        [groupId, req.user.id]
+      );
 
-    if (membership.rowCount === 0) {
-      return res.status(403).json({
-        error: "Only owners and admins can create a session.",
-      });
+      if (membership.rowCount === 0) {
+        return res.status(403).json({
+          error: "Only owners and admins can create a session.",
+        });
+      }
     }
 
     client = await pool.connect();
@@ -509,7 +601,7 @@ recordingsRouter.post("/sessions/live", requireAuth, async (req, res, next) => {
          ON CONFLICT (id) DO NOTHING
          RETURNING id, group_id, name, scheduled_at,
                    created_at, created_by, status`,
-        [id, groupId, name, req.user.id]
+        [id, groupId || null, name, req.user.id]
       );
 
       if (rows.length > 0) {
@@ -574,10 +666,11 @@ recordingsRouter.post(
                    WHERE rsm.session_id = rs.id
                 ) AS has_members
            FROM recording_sessions rs
-           JOIN groups g ON g.group_id = rs.group_id
-           JOIN group_members gm ON gm.group_id = rs.group_id
+           LEFT JOIN groups g ON g.group_id = rs.group_id
+           LEFT JOIN group_members gm
+             ON gm.group_id = rs.group_id AND gm.user_id = $2
           WHERE rs.id = $1
-            AND gm.user_id = $2`,
+            AND (gm.user_id IS NOT NULL OR rs.group_id IS NULL)`,
         [id, req.user.id]
       );
 
@@ -588,8 +681,11 @@ recordingsRouter.post(
       const session = rows[0];
       // Joining a session makes this device one of its cameras, which is
       // exactly what a viewer must not be.
-      const joinRole =
-        Number(session.owner_id) === Number(req.user.id)
+      // Without a group, the code is the invite: anyone signed in who has
+      // it joins as a member.
+      const joinRole = session.group_id == null
+        ? "member"
+        : Number(session.owner_id) === Number(req.user.id)
           ? "owner"
           : session.role;
       if (!atLeast(joinRole, "member")) {

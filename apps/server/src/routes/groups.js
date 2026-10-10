@@ -56,12 +56,20 @@ groupRouter.use(requireAuth);
 groupRouter.get("/", async (req, res) => {
   try {
     const { rows } = await pool.query(
+      // In the order the user dragged them into (users.settings.groupOrder);
+      // groups not placed yet, like a newly joined one, come after, newest
+      // first.
       `SELECT g.group_id, g.name, g.is_public, g.owner_id,
               g.primary_color, g.created_at, gm.role, gm.joined_at
          FROM groups g
          JOIN group_members gm ON gm.group_id = g.group_id
+         JOIN users u ON u.user_id = gm.user_id
         WHERE gm.user_id = $1
-        ORDER BY g.created_at DESC`,
+        ORDER BY array_position(
+                   ARRAY(SELECT json_array_elements_text(
+                     COALESCE(u.settings -> 'groupOrder', '[]'::json))),
+                   g.group_id::text) NULLS LAST,
+                 g.created_at DESC`,
       [req.user.id]
     );
 

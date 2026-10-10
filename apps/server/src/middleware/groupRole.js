@@ -29,17 +29,49 @@ export async function getGroupRole(groupId, userId) {
   return Number(rows[0].owner_id) === Number(userId) ? "owner" : rows[0].role;
 }
 
-/// Same lookup, but keyed by the recording session that belongs to the group.
+/// The user's role in a recording session: their role in its group, or for
+/// a session without a group, "owner" for whoever started it and "member"
+/// for anyone who joined it with its code. Null when they can't see it.
 export async function getSessionRole(sessionId, userId) {
   const { rows } = await pool.query(
-    `SELECT gm.role, g.owner_id
+    `SELECT rs.group_id, rs.created_by, gm.role, g.owner_id,
+            EXISTS (
+              SELECT 1 FROM recording_session_participants p
+               WHERE p.session_id = rs.id AND p.user_id = $2
+            ) OR EXISTS (
+              SELECT 1 FROM recording_session_members m
+               WHERE m.session_id = rs.id AND m.user_id = $2
+            ) AS joined
        FROM recording_sessions rs
-       JOIN groups g ON g.group_id = rs.group_id
-       JOIN group_members gm
+       LEFT JOIN groups g ON g.group_id = rs.group_id
+       LEFT JOIN group_members gm
          ON gm.group_id = rs.group_id AND gm.user_id = $2
       WHERE rs.id = $1`,
     [sessionId, userId]
   );
   if (rows.length === 0) return null;
-  return Number(rows[0].owner_id) === Number(userId) ? "owner" : rows[0].role;
+  const row = rows[0];
+  if (row.group_id == null) {
+    if (Number(row.created_by) === Number(userId)) return "owner";
+    return row.joined ? "member" : null;
+  }
+  if (!row.role) return null;
+  return Number(row.owner_id) === Number(userId) ? "owner" : row.role;
+}
+
+/// SQL that is true when `user` (a query parameter like "$2") can see the
+/// session aliased `rs`: they're in its group, or it has no group and they
+/// started or joined it. Mirrors getSessionRole for queries over many rows.
+export function sessionVisibleSql(rs, user) {
+  return `(
+    EXISTS (SELECT 1 FROM group_members gm_v
+             WHERE gm_v.group_id = ${rs}.group_id AND gm_v.user_id = ${user})
+    OR (${rs}.group_id IS NULL AND (
+      ${rs}.created_by = ${user}
+      OR EXISTS (SELECT 1 FROM recording_session_participants p_v
+                  WHERE p_v.session_id = ${rs}.id AND p_v.user_id = ${user})
+      OR EXISTS (SELECT 1 FROM recording_session_members m_v
+                  WHERE m_v.session_id = ${rs}.id AND m_v.user_id = ${user})
+    ))
+  )`;
 }
