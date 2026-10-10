@@ -155,14 +155,6 @@ export function HomeScreen() {
 
           {error && <p className="home-error">{error}</p>}
 
-          {!loading && !error && groups.length === 0 && (
-            <EmptyState title="Welcome to 8kount" action="Find your group" to="/groups">
-              Everything here belongs to a group: sessions, recordings and the
-              people in them. Start by joining your team's group, or create one
-              if you're the coach.
-            </EmptyState>
-          )}
-
           <div className="home-stats">
             <div className="home-stat">
               <span>Groups</span>

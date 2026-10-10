@@ -228,19 +228,6 @@ class _HomeTabState extends State<HomeTab> {
           ),
           const SizedBox(height: 14),
 
-          // First run: nothing on this screen means anything until the user
-          // belongs to a group.
-          if (_groupCount == 0) ...[
-            EmptyState(
-              title: 'Welcome to 8kount',
-              message: "Sessions and recordings belong to a group. Start by "
-                  "finding your team's group and joining it.",
-              actionLabel: 'Find your group',
-              onAction: () => widget.onSwitchTab(0),
-            ),
-            const SizedBox(height: 20),
-          ],
-
           if (banners.isNotEmpty) ...[
             SizedBox(
               height: 108,

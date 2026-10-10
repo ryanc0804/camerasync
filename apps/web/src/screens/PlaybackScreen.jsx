@@ -79,8 +79,8 @@ export function PlaybackScreen() {
                     error={notesError} setError={setNotesError}
                     seek={seek} onHide={() => setNotesOpen(false)} />
                 ) : (
-                  <button type="button" className="notes-show" aria-label="Show notes"
-                    title="Show notes" onClick={() => setNotesOpen(true)}>+</button>
+                  <button type="button" className="notes-show" aria-label="Show comments"
+                    title="Show comments" onClick={() => setNotesOpen(true)}>+</button>
                 )}
               </>
             )}
@@ -539,13 +539,13 @@ function NotesPanel({ sessionId, videoTime, startedAt, notes, setNotes,
   return (
     <section className="notes-box">
       <div className="notes-top">
-        <h2>Notes</h2>
-        <button type="button" className="notes-hide" aria-label="Hide notes"
-          title="Hide notes" onClick={onHide}>−</button>
+        <h2>Comments</h2>
+        <button type="button" className="notes-hide" aria-label="Hide comments"
+          title="Hide comments" onClick={onHide}>−</button>
       </div>
       <div className="notes-list">
         {notes.length === 0 ? (
-          <p className="notes-empty">No notes yet.</p>
+          <p className="notes-empty">No comments yet.</p>
         ) : notes.map((note) => (
           <div className="notes-item" key={note.id}>
             <button type="button" className="notes-jump"
@@ -559,7 +559,7 @@ function NotesPanel({ sessionId, videoTime, startedAt, notes, setNotes,
             </button>
             {note.canDelete && (
               <button type="button" className="notes-delete"
-                aria-label={`Delete note by ${note.author}`}
+                aria-label={`Delete comment by ${note.author}`}
                 onClick={() => removeNote(note.id)}>×</button>
             )}
           </div>
@@ -567,11 +567,11 @@ function NotesPanel({ sessionId, videoTime, startedAt, notes, setNotes,
       </div>
       {error && <p className="notes-error" role="alert">{error}</p>}
       <div className="notes-add">
-        <input value={text} placeholder="Type a note" maxLength={500}
-          aria-label="New note"
+        <input value={text} placeholder="Add a comment" maxLength={500}
+          aria-label="New comment"
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => { if (event.key === "Enter") addNote(); }} />
-        <button type="button" aria-label="Add note"
+        <button type="button" aria-label="Post comment"
           disabled={!text.trim()} onClick={addNote}>+</button>
       </div>
     </section>
