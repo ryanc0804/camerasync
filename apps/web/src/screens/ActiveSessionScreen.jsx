@@ -59,6 +59,9 @@ export function ActiveSessionScreen() {
   // How far ahead the shared start is set. It has to cover the start
   // message reaching every phone over the internet, or they start late.
   const [bufferMs, setBufferMs] = useState(1500);
+  // The session's creator and the group's admins and owner start and stop
+  // takes for everyone; the server says which this user is when joining.
+  const [canControl, setCanControl] = useState(false);
   const [recordingStatus, setRecordingStatus] = useState("idle");
   const [recordingMessage, setRecordingMessage] = useState(
     "Waiting for the host to record."
@@ -288,10 +291,10 @@ export function ActiveSessionScreen() {
 
             setMembers(reply.members);
             setSocketStatus("Connected");
+            const controls = Boolean(reply.session.canControl);
+            setCanControl(controls);
             setRecordingMessage(
-              Number(reply.session.createdBy) === Number(user.id)
-                ? "Ready to record."
-                : "Waiting for the host to record."
+              controls ? "Ready to record." : "Waiting for the host to record."
             );
             if (reply.recording) beginRecording(reply.recording);
           });
@@ -488,7 +491,7 @@ export function ActiveSessionScreen() {
         <>
           {mediaReady && (
             <section className="session-recording-bar">
-              {isCreator && (
+              {canControl && (
                 <div className="session-recording-controls">
                   <label>
                     Buffer (ms)

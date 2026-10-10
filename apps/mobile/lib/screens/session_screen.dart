@@ -37,6 +37,7 @@ class _SessionScreenState extends State<SessionScreen> {
   bool _initialized = false;
   String? _error;
   List<SessionMember> _members = [];
+  bool _canControl = false;
 
   @override
   void initState() {
@@ -71,6 +72,7 @@ class _SessionScreenState extends State<SessionScreen> {
       if (!mounted) return;
       setState(() {
         _initialized = true;
+        _canControl = result.canControl;
         if (!result.ok) _error = result.error;
       });
     } on SyncSocketException catch (e) {
@@ -153,6 +155,7 @@ class _SessionScreenState extends State<SessionScreen> {
                             socket: socket,
                             sessionId: widget.sessionId,
                             recordings: RecordingsApi(widget.auth.api),
+                            canControl: _canControl,
                           ),
                         ),
                       );
