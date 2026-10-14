@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
+import { useNewSession } from "./NewSession.jsx";
 
 // Three-person "group" mark. Inline SVG rather than an emoji so it stays
 // monochrome and inherits the nav item's color on hover/active.
@@ -27,23 +28,6 @@ function GroupsIcon() {
 }
 
 // Video camera mark for the recording section.
-function CameraIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="28"
-      height="28"
-      fill="currentColor"
-      aria-hidden="true"
-    >
-      {/* body */}
-      <rect x="1.5" y="6" width="14" height="12" rx="2.5" />
-      {/* lens barrel pointing right */}
-      <path d="M17.5 11.2l4.1-2.6c.5-.3 1.1 0 1.1.6v7.6c0 .6-.6.9-1.1.6l-4.1-2.6v-3.6z" />
-    </svg>
-  );
-}
-
 function HomeIcon() {
   return (
     <svg
@@ -57,6 +41,42 @@ function HomeIcon() {
       aria-hidden="true"
     >
       <path d="M3.5 10.5 12 3.5l8.5 7v9a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1z" />
+    </svg>
+  );
+}
+
+function NewIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="28"
+      height="28"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 8v8M8 12h8" />
+    </svg>
+  );
+}
+
+function SessionsIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="28"
+      height="28"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
+      <path d="M10 9.2v5.6l4.6-2.8z" fill="currentColor" />
     </svg>
   );
 }
@@ -79,6 +99,7 @@ function CalendarIcon() {
   );
 }
 
+// An outline cog (the Lucide "settings" shape), to match the other icons.
 export function GearIcon({ size = 28 }) {
   return (
     <svg
@@ -88,14 +109,12 @@ export function GearIcon({ size = 28 }) {
       fill="none"
       stroke="currentColor"
       strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
       aria-hidden="true"
     >
-      <circle cx="12" cy="12" r="3.2" />
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M12 2.8v2.6M12 18.6v2.6M21.2 12h-2.6M5.4 12H2.8M18.5 5.5l-1.9 1.9M7.4 16.6l-1.9 1.9M18.5 18.5l-1.9-1.9M7.4 7.4 5.5 5.5"
-      />
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+      <circle cx="12" cy="12" r="3" />
     </svg>
   );
 }
@@ -103,7 +122,7 @@ export function GearIcon({ size = 28 }) {
 const NAV_ITEMS = [
   { to: "/", label: "Home", icon: <HomeIcon />, end: true },
   { to: "/groups", label: "Groups", icon: <GroupsIcon /> },
-  { to: "/record", label: "Record", icon: <CameraIcon /> },
+  { to: "/watch", label: "Sessions", icon: <SessionsIcon /> },
   { to: "/calendar", label: "Calendar", icon: <CalendarIcon /> },
   { to: "/settings", label: "Settings", icon: <GearIcon /> },
 ];
@@ -112,12 +131,22 @@ const NAV_ITEMS = [
 /// beside it. The active route gets a lighter-yellow tile, per the design.
 export function Sidebar() {
   const { user, logout } = useAuth();
+  const openNewSession = useNewSession();
 
   return (
     <nav style={styles.sidebar}>
       <style>{css}</style>
 
       <ul style={styles.list}>
+        {/* Start, schedule or join a session: the + in the phone's bar. */}
+        <li>
+          <button type="button" className="kh-nav kh-new" onClick={() => openNewSession()}>
+            <span style={styles.icon} aria-hidden="true">
+              <NewIcon />
+            </span>
+            New session
+          </button>
+        </li>
         {NAV_ITEMS.map((item) => (
           <li key={item.to}>
             <NavLink
@@ -217,6 +246,7 @@ const css = `
     background: var(--brand-active);
     color: #000;
   }
+  .kh-new { width: 100%; border: none; background: transparent; font-family: inherit; cursor: pointer; }
   .kh-logout {
     display: inline-flex;
     align-items: center;

@@ -241,7 +241,7 @@ function GroupSessions({ group, canManage }) {
       <section className="gs-card">
         {/* The newest few here; View all opens the group's full list. */}
         <div className="gs-section-row">
-          <h2>Recordings</h2>
+          <h2>Sessions</h2>
           {recordings.length > 0 && (
             <Link className="gs-view-all" to={`/watch?group=${encodeURIComponent(group.id)}`}>
               View all
@@ -268,9 +268,9 @@ function GroupSessions({ group, canManage }) {
                         ` · ${session.memberCount} ${session.memberCount === 1 ? "device" : "devices"}`}
                     </span>
                   </span>
-                  {session.totalRecordings != null && (
+                  {session.recordingCount != null && (
                     <span className="gs-rec-count">
-                      {session.totalRecordings} {session.totalRecordings === 1 ? "video" : "videos"}
+                      {session.recordingCount} {session.recordingCount === 1 ? "recording" : "recordings"}
                     </span>
                   )}
                 </Link>

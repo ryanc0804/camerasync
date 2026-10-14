@@ -183,6 +183,16 @@ class AuthService extends ChangeNotifier {
     });
   }
 
+  /// Permanently deletes the account (the server checks [password]) and
+  /// signs out. Throws ApiException with the reason, e.g. a group the user
+  /// still owns.
+  Future<void> deleteAccount(String password) async {
+    await _api.delete('/api/auth/me', {'password': password});
+    await _api.clearCookie();
+    _user = null;
+    notifyListeners();
+  }
+
   Future<void> logout() async {
     try {
       await _api.post('/api/auth/logout');

@@ -13,6 +13,7 @@ class RecordingSession {
     this.scheduledAt,
     this.memberCount,
     this.totalRecordings,
+    this.recordingCount,
     this.createdBy,
   });
 
@@ -26,7 +27,12 @@ class RecordingSession {
 
   /// Null for sessions that predate attendance tracking.
   final int? memberCount;
+
+  /// Angles (one per phone per take) across the session.
   final int? totalRecordings;
+
+  /// Takes: Recording 001, 002, ...
+  final int? recordingCount;
 
   /// Who scheduled or started it. They can end or cancel it, and so can the
   /// group's admins and owner.
@@ -50,6 +56,7 @@ class RecordingSession {
             : DateTime.tryParse(json['scheduledAt'].toString())?.toLocal(),
         memberCount: (json['memberCount'] as num?)?.toInt(),
         totalRecordings: (json['totalRecordings'] as num?)?.toInt(),
+        recordingCount: (json['recordingCount'] as num?)?.toInt(),
         createdBy: (json['createdBy'] as num?)?.toInt(),
       );
 }

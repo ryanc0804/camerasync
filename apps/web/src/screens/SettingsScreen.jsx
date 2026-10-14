@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 
 import packageJson from "../../package.json";
 import { useAuth } from "../auth/AuthContext.jsx";
-import { changePassword } from "../api/auth.js";
+import { changePassword, deleteAccount } from "../api/auth.js";
 import { getGroups, getPrimaryGroupId } from "../api/groups.js";
 
 const MIN_PASSWORD_LENGTH = 8;
@@ -19,6 +19,7 @@ export function SettingsScreen() {
       <AccountSection />
       <PrimaryGroupSection />
       <AboutSection />
+      <DeleteAccountSection />
     </div>
   );
 }
@@ -229,11 +230,73 @@ function AboutSection() {
         Record practices from several phones at once, then review every angle
         together with timestamped comments. Built by a UCF senior design team.
       </p>
+      <p><Link to="/privacy">Privacy policy</Link></p>
+    </section>
+  );
+}
+
+// Required by both app stores: anyone who can make an account can delete it.
+function DeleteAccountSection() {
+  const { logout } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState("");
+
+  const remove = async (event) => {
+    event.preventDefault();
+    setError("");
+    setDeleting(true);
+    try {
+      await deleteAccount(password);
+      // Signs out here too (the server already ended every session).
+      await logout();
+    } catch (err) {
+      setError(err.message);
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <section className="st-card st-danger-card">
+      <h2>Delete account</h2>
+      <p>
+        Permanently deletes your account, the videos you recorded and your
+        comments. Sessions you started stay for your team. If you own a group,
+        hand it over or delete it first.
+      </p>
+      {!open ? (
+        <div className="st-actions">
+          <button type="button" className="st-button st-button-danger"
+            onClick={() => setOpen(true)}>Delete account</button>
+        </div>
+      ) : (
+        <form className="st-password-form" onSubmit={remove}>
+          <label>
+            Enter your password to confirm
+            <input type="password" autoComplete="current-password" required
+              value={password} onChange={(event) => setPassword(event.target.value)} />
+          </label>
+          {error && <p role="alert" className="st-error">{error}</p>}
+          <div className="st-actions">
+            <button type="button" className="st-button" disabled={deleting}
+              onClick={() => { setOpen(false); setPassword(""); setError(""); }}>
+              Cancel
+            </button>
+            <button type="submit" className="st-button st-button-danger" disabled={deleting || !password}>
+              {deleting ? "Deleting..." : "Delete my account"}
+            </button>
+          </div>
+        </form>
+      )}
     </section>
   );
 }
 
 const css = `
+  .st-danger-card h2 { color: #ff8a80; }
+  .st-page .st-button-danger { border-color: #c0392b; background: #c0392b; color: #fff; }
+  .st-page .st-button-danger:hover:not(:disabled) { background: #a93226; }
   .st-page { max-width: 640px; display: flex; flex-direction: column; gap: 16px; }
   .st-page h1 { margin: 0 0 4px; font-size: 1.8rem; }
   .st-card { padding: 18px 20px; border-radius: 14px; background: #151515; }

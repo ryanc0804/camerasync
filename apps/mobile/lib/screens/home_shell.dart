@@ -3,12 +3,15 @@ import 'package:flutter/material.dart';
 import '../auth/auth_service.dart';
 import '../team_accent.dart';
 import '../theme.dart';
-import 'calendar_tab.dart';
-import 'home_tab.dart';
-import 'join_screen.dart';
-import 'groups_screen.dart';
-import 'settings_tab.dart';
 import '../notifications/phone_alerts.dart';
+import '../sessions/new_session.dart';
+import '../tv/tv_link.dart';
+import 'calendar_tab.dart';
+import 'groups_screen.dart';
+import 'home_tab.dart';
+import 'sessions_tab.dart';
+import 'settings_tab.dart';
+import 'watch_screen.dart' show isBigScreen;
 
 // Older imports pull the palette from this file; keep that working.
 export '../theme.dart';
@@ -24,9 +27,17 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
+/// Bar slots. The middle one is the + button, not a tab.
+const _home = 0, _groups = 1, _plus = 2, _sessions = 3;
+
 class _HomeShellState extends State<HomeShell> {
-  // Order matches the design: groups, record, home, settings.
-  int _index = 2;
+  int _index = _home;
+
+  /// Which half of the Sessions tab shows: 0 live & upcoming, 1 past.
+  final _sessionsSegment = ValueNotifier<int>(1);
+
+  /// Ticks when the + menu starts or schedules a session.
+  final _sessionsChanged = ValueNotifier<int>(0);
 
   /// Phone notifications for activity in the user's groups, while signed in.
   late final PhoneAlerts _alerts = PhoneAlerts(widget.auth);
@@ -35,28 +46,67 @@ class _HomeShellState extends State<HomeShell> {
   void initState() {
     super.initState();
     _alerts.start().catchError((_) {});
+    // TV mode: a TV plugged in gets the app's TV screen (see TvLink).
+    TvLink.instance.start();
   }
 
   @override
   void dispose() {
     _alerts.stop();
+    _sessionsSegment.dispose();
+    _sessionsChanged.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Running on the big screen itself (DeX) already shows the full grid.
+    TvLink.instance.suppressed = isBigScreen(MediaQuery.sizeOf(context));
+  }
+
+  void _openSessions({required bool upcoming}) {
+    _sessionsSegment.value = upcoming ? 0 : 1;
+    setState(() => _index = _sessions);
+  }
+
+  Future<void> _newSession() async {
+    final changed = await showNewSessionMenu(context, widget.auth);
+    if (changed) _sessionsChanged.value++;
+  }
+
+  void _openSettings() {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (context) => Scaffold(
+        backgroundColor: kBackground,
+        appBar: AppBar(
+          backgroundColor: kBackground,
+          foregroundColor: Colors.white,
+          title: const Text('Settings'),
+        ),
+        body: SettingsTab(auth: widget.auth, alerts: _alerts),
+      ),
+    ));
   }
 
   @override
   Widget build(BuildContext context) {
     final tabs = [
-      // Groups tab (new)
-      GroupsScreen(auth: widget.auth),
-      // Session list (formerly the Record tab) — moved under the camera icon
-      JoinScreen(auth: widget.auth),
       HomeTab(
         key: const ValueKey('home-tab'),
         auth: widget.auth,
-        onSwitchTab: (i) => setState(() => _index = i),
+        onOpenSessions: _openSessions,
+        onOpenSettings: _openSettings,
+        onOpenGroups: () => setState(() => _index = _groups),
+      ),
+      GroupsScreen(auth: widget.auth),
+      const SizedBox.shrink(), // the + button's slot
+      SessionsTab(
+        auth: widget.auth,
+        segment: _sessionsSegment,
+        refresh: _sessionsChanged,
       ),
       CalendarTab(auth: widget.auth),
-      SettingsTab(auth: widget.auth, alerts: _alerts),
     ];
 
     return Scaffold(
@@ -69,7 +119,13 @@ class _HomeShellState extends State<HomeShell> {
       ),
       bottomNavigationBar: _PillNavBar(
         index: _index,
-        onChanged: (i) => setState(() => _index = i),
+        onChanged: (i) {
+          if (i == _plus) {
+            _newSession();
+          } else {
+            setState(() => _index = i);
+          }
+        },
       ),
     );
   }
@@ -86,19 +142,19 @@ class _PillNavBar extends StatelessWidget {
   final ValueChanged<int> onChanged;
 
   static const _items = <IconData>[
-    Icons.groups,
-    Icons.photo_camera_outlined,
     Icons.home_outlined,
+    Icons.groups,
+    Icons.add,
+    Icons.video_library_outlined,
     Icons.calendar_month_outlined,
-    Icons.settings_outlined,
   ];
 
   static const _labels = <String>[
-    'Groups',
-    'Record',
     'Home',
+    'Groups',
+    'New session',
+    'Sessions',
     'Calendar',
-    'Settings',
   ];
 
   static const _height = 64.0;
@@ -171,8 +227,20 @@ class _PillNavBar extends StatelessWidget {
                               behavior: HitTestBehavior.opaque,
                               onTap: () => onChanged(i),
                               child: Center(
-                                child:
-                                    Icon(_items[i], size: 28, color: team.ink),
+                                // + is a button, not a tab: a filled circle.
+                                child: i == _plus
+                                    ? Container(
+                                        width: 44,
+                                        height: 44,
+                                        decoration: BoxDecoration(
+                                          color: team.ink,
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: Icon(Icons.add,
+                                            size: 30, color: fill),
+                                      )
+                                    : Icon(_items[i],
+                                        size: 28, color: team.ink),
                               ),
                             ),
                           ),

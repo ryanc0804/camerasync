@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { EmptyState } from "../components/EmptyState.jsx";
+import { useNewSession } from "../components/NewSession.jsx";
+import { SessionScheduler } from "../components/SessionScheduler.jsx";
+import { useAutoRefresh } from "../hooks/useAutoRefresh.js";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
@@ -25,9 +28,20 @@ export function WatchScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const navigate = useNavigate();
+  const openNewSession = useNewSession();
   const [params] = useSearchParams();
   const [deletingId, setDeletingId] = useState(null);
   const [deleteError, setDeleteError] = useState("");
+
+  // Finished, with something to watch, newest first.
+  const watchable = (loaded) => loaded
+    .filter((session) => session.status === "complete" && session.recordingCount !== 0)
+    .sort((a, b) => new Date(b.scheduledAt) - new Date(a.scheduledAt));
+
+  // A session that just ended (or a new upload) appears without a reload.
+  useAutoRefresh(() => {
+    getSessions().then((loaded) => setSessions(watchable(loaded))).catch(() => {});
+  }, 15000);
 
   useEffect(() => {
     Promise.all([getGroups(), getSessions()])
@@ -40,11 +54,7 @@ export function WatchScreen() {
             ? requested
             : getPrimaryGroupId(user, loadedGroups)
         );
-        setSessions(
-          loadedSessions
-            .filter((session) => session.status === "complete")
-            .sort((a, b) => new Date(b.scheduledAt) - new Date(a.scheduledAt))
-        );
+        setSessions(watchable(loadedSessions));
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
@@ -76,10 +86,12 @@ export function WatchScreen() {
   return (
     <div className="watch-page">
       <style>{css}</style>
-      <h1>Recordings</h1>
+      <h1>Sessions</h1>
+      <SessionScheduler showForms={false} />
+      <h2 className="watch-past-title">Past</h2>
 
       {loading ? (
-        <p>Loading recordings...</p>
+        <p>Loading sessions...</p>
       ) : error ? (
         <p role="alert" className="watch-error">{error}</p>
       ) : groups.length === 0 && noGroupSessions.length === 0 ? (
@@ -107,9 +119,9 @@ export function WatchScreen() {
             {deleteError && <p role="alert" className="watch-error">{deleteError}</p>}
             {groupSessions.length === 0 ? (
               <EmptyState
-                title={`No recordings in ${groupId === NO_GROUP ? "sessions without a group" : group?.name || "this group"} yet`}
-                action="Record a practice"
-                to="/record"
+                title={`No sessions in ${groupId === NO_GROUP ? "sessions without a group" : group?.name || "this group"} yet`}
+                action="New session"
+                onAction={() => openNewSession()}
               >
                 Every completed session shows up here with its recordings.
               </EmptyState>
@@ -122,7 +134,7 @@ export function WatchScreen() {
                   <strong>{sessionLabel(session)}</strong>
                   <span className="watch-metadata">
                     <span>Members in Session: {session.memberCount ?? "—"}</span>
-                    <span>Total Recordings: {session.totalRecordings ?? "—"}</span>
+                    <span>Recordings: {session.recordingCount ?? "—"}</span>
                   </span>
                 </button>
                 {/* Admins and the owner (who keeps an admin role) can delete. */}
@@ -143,6 +155,7 @@ export function WatchScreen() {
 }
 
 const css = `
+  .watch-past-title { margin: 2rem 0 0.75rem; font-size: 1.3rem; }
   .watch-page { max-width: 900px; }
   .watch-page h1 { margin: 0 0 1.5rem; font-size: 1.8rem; }
   .watch-page p { color: #999; line-height: 1.6; }

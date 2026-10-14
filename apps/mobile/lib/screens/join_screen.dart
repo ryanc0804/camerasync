@@ -7,6 +7,7 @@ import '../auth/auth_service.dart';
 import '../config.dart';
 import '../team_accent.dart';
 import '../theme.dart';
+import '../widgets/auto_refresh.dart';
 import '../widgets/empty_state.dart';
 import 'session_screen.dart';
 import 'watch_screen.dart';
@@ -49,14 +50,17 @@ List<RecordingSession> _sorted(List<RecordingSession> sessions) {
     });
 }
 
-/// Record tab, laid out like the web app's Record page: admins can schedule
-/// or start a session; everyone sees their groups' sessions and can join
-/// one to record. A session's host and the group's admins can end or cancel
-/// it.
+/// The "Live & upcoming" half of the Sessions tab: sessions that can still
+/// be recorded, live first. Everyone can join one to record; a session's
+/// host and the group's admins can end or cancel it. Starting, scheduling
+/// and joining by code are on the + button.
 class JoinScreen extends StatefulWidget {
-  const JoinScreen({super.key, required this.auth});
+  const JoinScreen({super.key, required this.auth, this.refresh});
 
   final AuthService auth;
+
+  /// Fires when a session was started or scheduled elsewhere (the + menu).
+  final Listenable? refresh;
 
   @override
   State<JoinScreen> createState() => _JoinScreenState();
@@ -71,11 +75,6 @@ class _JoinScreenState extends State<JoinScreen> {
   bool _loading = true;
   String? _error;
   String? _busyId;
-
-  List<Group> get _adminGroups => [
-        for (final g in _groups)
-          if (g.role == 'admin') g
-      ];
 
   Group? _groupOf(RecordingSession s) {
     for (final g in _groups) {
@@ -93,7 +92,19 @@ class _JoinScreenState extends State<JoinScreen> {
   @override
   void initState() {
     super.initState();
+    widget.refresh?.addListener(_load);
     _load();
+    // Live sessions appear (and ended ones go) without pulling down.
+    _refresher = AutoRefresher(const Duration(seconds: 10), _load);
+  }
+
+  late final AutoRefresher _refresher;
+
+  @override
+  void dispose() {
+    _refresher.dispose();
+    widget.refresh?.removeListener(_load);
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -108,7 +119,11 @@ class _JoinScreenState extends State<JoinScreen> {
       ]);
       if (!mounted) return;
       setState(() {
-        _sessions = _sorted(results[0] as List<RecordingSession>);
+        // Finished and cancelled sessions are under Past.
+        _sessions = _sorted([
+          for (final s in results[0] as List<RecordingSession>)
+            if (s.isActive || s.isScheduled) s
+        ]);
         _groups = results[1] as List<Group>;
         _loading = false;
       });
@@ -194,137 +209,14 @@ class _JoinScreenState extends State<JoinScreen> {
     }
   }
 
-  Future<void> _schedule({required bool live}) async {
-    final created = await showModalBottomSheet<RecordingSession>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: kSurface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (_) => _NewSessionSheet(
-        groups: _adminGroups,
-        live: live,
-        recordings: _recordings,
-      ),
-    );
-    if (created == null || !mounted) return;
-    await _load();
-    if (live && mounted) {
-      // Starting a session makes you its host: straight into the room.
-      await _join(created);
-    } else {
-      _toast('Scheduled ${created.name}');
-    }
-  }
-
-  /// Joins any live session by its 6-character code: how people get into a
-  /// session that has no group.
-  Future<void> _joinWithCode() async {
-    final controller = TextEditingController();
-    final code = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: kSurface,
-        title: const Text('Join with a code'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLength: 6,
-          textCapitalization: TextCapitalization.none,
-          decoration: const InputDecoration(hintText: 'abc123'),
-          onSubmitted: (value) => Navigator.of(context).pop(value),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.of(context).pop(controller.text),
-              child: const Text('Join')),
-        ],
-      ),
-    );
-    controller.dispose();
-    final id = code?.trim().toLowerCase() ?? '';
-    if (id.isEmpty || !mounted) return;
-    try {
-      final session = await _recordings.joinSession(id);
-      if (!mounted) return;
-      await _openSession(session);
-    } on ApiException catch (e) {
-      _toast(e.message);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final team = TeamAccent.of(context);
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(20, 24, 20, 110),
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 110),
         children: [
-          const Text(
-            'Record',
-            style: TextStyle(
-                color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Join a session to record in sync with the other devices. The host '
-            'starts and stops everyone at once.',
-            style: TextStyle(color: kMuted, height: 1.5),
-          ),
-          const SizedBox(height: 18),
-          Row(
-            children: [
-              if (_adminGroups.isNotEmpty) ...[
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => _schedule(live: false),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: team.accent,
-                      side: BorderSide(color: team.accent),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                    child: const Text('Schedule Session'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-              ],
-              Expanded(
-                child: FilledButton(
-                  onPressed: () => _schedule(live: true),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: team.fill,
-                    foregroundColor: team.ink,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
-                  child: const Text('Create Session'),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          OutlinedButton.icon(
-            onPressed: _joinWithCode,
-            icon: const Icon(Icons.pin_outlined, size: 18),
-            label: const Text('Join with a code'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.white,
-              side: const BorderSide(color: kSurfaceLight),
-              padding: const EdgeInsets.symmetric(vertical: 12),
-            ),
-          ),
-          const SizedBox(height: 24),
-          const Text(
-            'Sessions',
-            style: TextStyle(
-                color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 12),
           if (_loading)
             const Padding(
               padding: EdgeInsets.only(top: 48),
@@ -339,9 +231,9 @@ class _JoinScreenState extends State<JoinScreen> {
             )
           else if (_sessions.isEmpty)
             const EmptyState(
-              title: 'No sessions yet',
-              message: 'When a coach schedules or starts a session for one '
-                  'of your groups, it shows up here. Pull down to refresh.',
+              title: 'Nothing live or scheduled',
+              message: 'Tap + to start or schedule a session. When a coach '
+                  'starts one for your groups, it shows up here to join.',
             )
           else
             for (final s in _sessions)
@@ -518,179 +410,6 @@ class _SessionCard extends StatelessWidget {
                 children: actions,
               ),
             ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Schedule a session for later, or start one now ([live]). Pops with the
-/// created session.
-class _NewSessionSheet extends StatefulWidget {
-  const _NewSessionSheet(
-      {required this.groups, required this.live, required this.recordings});
-
-  final List<Group> groups;
-  final bool live;
-  final RecordingsApi recordings;
-
-  @override
-  State<_NewSessionSheet> createState() => _NewSessionSheetState();
-}
-
-class _NewSessionSheetState extends State<_NewSessionSheet> {
-  final _name = TextEditingController();
-  // '' means no group, which only a live session can have.
-  late String _groupId =
-      widget.groups.isEmpty ? '' : widget.groups.first.id;
-  late DateTime _when = DateTime.now()
-      .add(const Duration(hours: 1))
-      .copyWith(minute: 0, second: 0, millisecond: 0, microsecond: 0);
-  bool _saving = false;
-  String? _error;
-
-  @override
-  void dispose() {
-    _name.dispose();
-    super.dispose();
-  }
-
-  Future<void> _pickDate() async {
-    final date = await showDatePicker(
-      context: context,
-      initialDate: _when,
-      firstDate: DateTime.now(),
-      lastDate: DateTime.now().add(const Duration(days: 365)),
-    );
-    if (date != null) {
-      setState(() => _when =
-          DateTime(date.year, date.month, date.day, _when.hour, _when.minute));
-    }
-  }
-
-  Future<void> _pickTime() async {
-    final time = await showTimePicker(
-        context: context, initialTime: TimeOfDay.fromDateTime(_when));
-    if (time != null) {
-      setState(() => _when =
-          DateTime(_when.year, _when.month, _when.day, time.hour, time.minute));
-    }
-  }
-
-  Future<void> _save() async {
-    final name = _name.text.trim();
-    if (name.isEmpty) {
-      setState(() => _error = 'Give the session a name.');
-      return;
-    }
-    setState(() {
-      _saving = true;
-      _error = null;
-    });
-    try {
-      final session = widget.live
-          ? await widget.recordings.createLiveSession(
-              groupId: _groupId.isEmpty ? null : _groupId, name: name)
-          : await widget.recordings.scheduleSession(
-              groupId: _groupId, name: name, scheduledAt: _when);
-      if (mounted) Navigator.of(context).pop(session);
-    } on ApiException catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = e.message;
-          _saving = false;
-        });
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final team = TeamAccent.of(context);
-    return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(
-            20, 18, 20, 20 + MediaQuery.viewInsetsOf(context).bottom),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              widget.live ? 'Start a session now' : 'Schedule a session',
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              initialValue: _groupId,
-              decoration: const InputDecoration(labelText: 'Group'),
-              dropdownColor: kSurfaceLight,
-              items: [
-                for (final g in widget.groups)
-                  DropdownMenuItem(value: g.id, child: Text(g.name)),
-                if (widget.live)
-                  const DropdownMenuItem(
-                      value: '', child: Text('No group (share the code)')),
-              ],
-              onChanged: _saving
-                  ? null
-                  : (id) => setState(() => _groupId = id ?? _groupId),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _name,
-              enabled: !_saving,
-              autofocus: true,
-              maxLength: 100,
-              decoration: const InputDecoration(
-                  labelText: 'Session name', counterText: ''),
-            ),
-            if (!widget.live) ...[
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _saving ? null : _pickDate,
-                      icon: const Icon(Icons.calendar_today, size: 18),
-                      label: Text(
-                          '${_monthNames[_when.month - 1].substring(0, 3)} ${_when.day}'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _saving ? null : _pickTime,
-                      icon: const Icon(Icons.schedule, size: 18),
-                      label:
-                          Text(TimeOfDay.fromDateTime(_when).format(context)),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 10),
-                child: Text(_error!, style: const TextStyle(color: kLiveRed)),
-              ),
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: _saving ? null : _save,
-              style: FilledButton.styleFrom(
-                backgroundColor: team.fill,
-                foregroundColor: team.ink,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-              ),
-              child: Text(_saving
-                  ? 'Saving…'
-                  : widget.live
-                      ? 'Start session'
-                      : 'Schedule'),
-            ),
           ],
         ),
       ),

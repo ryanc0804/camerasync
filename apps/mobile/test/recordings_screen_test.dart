@@ -30,7 +30,9 @@ void main() {
               'scheduledAt': '2026-09-29T18:00:00.000Z',
               'activeMemberCount': 0,
               'isJoined': true,
-              'totalRecordings': 2,
+              // 8 angles across 2 takes: the card counts the takes.
+              'totalRecordings': 8,
+              'recordingCount': 2,
             },
             {
               'id': 'def456',
@@ -49,6 +51,7 @@ void main() {
               'activeMemberCount': 0,
               'isJoined': true,
               'totalRecordings': 1,
+              'recordingCount': 1,
             },
           ],
         };

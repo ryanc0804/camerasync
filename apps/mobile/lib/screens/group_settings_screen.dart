@@ -359,7 +359,7 @@ class _GroupSessionsState extends State<_GroupSessions> {
           ],
         ),
         _Section(
-          title: 'Recordings',
+          title: 'Sessions',
           // The newest few here; View all opens the group's full list.
           action: done.isEmpty
               ? null
@@ -404,8 +404,8 @@ class _GroupSessionsState extends State<_GroupSessions> {
                     [
                       if (s.scheduledAt != null)
                         '${s.scheduledAt!.month}/${s.scheduledAt!.day}',
-                      if (s.totalRecordings != null)
-                        '${s.totalRecordings} ${s.totalRecordings == 1 ? 'video' : 'videos'}',
+                      if (s.recordingCount != null)
+                        '${s.recordingCount} ${s.recordingCount == 1 ? 'recording' : 'recordings'}',
                     ].join(' · '),
                     style: const TextStyle(color: kMuted),
                   ),

@@ -4,12 +4,12 @@ import { AuthProvider, useAuth } from "./auth/AuthContext.jsx";
 import { AppLayout } from "./layouts/AppLayout.jsx";
 import { AuthScreen } from "./screens/AuthScreen.jsx";
 import { ForgotPasswordScreen } from "./screens/ForgotPasswordScreen.jsx";
+import { PrivacyScreen } from "./screens/PrivacyScreen.jsx";
 import { ResetPasswordScreen } from "./screens/ResetPasswordScreen.jsx";
 import {
   VerifyEmailLinkScreen,
   VerifyEmailScreen,
 } from "./screens/VerifyEmailScreen.jsx";
-import { RecordScreen } from "./screens/RecordScreen.jsx";
 import { PlaybackScreen } from "./screens/PlaybackScreen.jsx";
 import { WatchScreen } from "./screens/WatchScreen.jsx";
 import { ActiveSessionScreen } from "./screens/ActiveSessionScreen.jsx";
@@ -43,6 +43,7 @@ function Root() {
     return (
       <Routes>
         <Route path="/verify-email" element={<VerifyEmailLinkRoute />} />
+        <Route path="/privacy" element={<PrivacyScreen />} />
         <Route path="*" element={<VerifyEmailScreen />} />
       </Routes>
     );
@@ -56,6 +57,8 @@ function Root() {
       <Route path="/verify-email" element={<VerifyEmailLinkRoute />} />
 
       <Route path="/login" element={<LoginRoute />} />
+      {/* The app stores link here, so it works signed out. */}
+      <Route path="/privacy" element={<PrivacyScreen />} />
 
       {/* Everything inside the layout requires a session. */}
       <Route element={<SignedInOnly />}>
@@ -63,7 +66,8 @@ function Root() {
         <Route path="/groups" element={<GroupsScreen />} />
         <Route path="/groups/:id" element={<GroupSettingsScreen />} />
         <Route path="/join/:id" element={<JoinGroupScreen />} />
-        <Route path="/record" element={<RecordScreen />} />
+        {/* The old Record page: starting is the sidebar's + New session. */}
+        <Route path="/record" element={<Navigate to="/watch" replace />} />
         <Route path="/record/:sessionId" element={<ActiveSessionScreen />} />
         <Route path="/watch" element={<WatchScreen />} />
         <Route path="/watch/:sessionId" element={<PlaybackScreen />} />

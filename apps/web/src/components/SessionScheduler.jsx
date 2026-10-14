@@ -11,6 +11,7 @@ import {
   scheduleSession,
 } from "../api/recordings.js";
 import { useAuth } from "../auth/AuthContext.jsx";
+import { useAutoRefresh } from "../hooks/useAutoRefresh.js";
 
 // keeps live sessions first and future sessions nearest
 function sortSessions(sessions, now) {
@@ -41,10 +42,21 @@ function localDateValue(date) {
   return `${year}-${month}-${day}`;
 }
 
-export function SessionScheduler() {
+// Starting, scheduling and joining sessions, and the live and upcoming ones.
+// The New session dialog shows one form (`panel`, no list); the Sessions page
+// shows just the list (`showForms` false).
+export function SessionScheduler({
+  panel = null,
+  showForms = true,
+  showList = true,
+  onDone,
+} = {}) {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [openPanel, setOpenPanel] = useState(null);
+  const [openPanel, setOpenPanel] = useState(panel);
+  // In the dialog a form is all there is: finishing or cancelling it closes
+  // the dialog rather than leaving an empty panel.
+  const closePanel = () => (onDone ? onDone() : setOpenPanel(null));
   const [groups, setGroups] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -76,8 +88,13 @@ export function SessionScheduler() {
   const canManageSession = (session) =>
     session.createdBy === user?.id ||
     groups.some((group) => group.id === session.groupId && group.role === "admin");
+  // Only what can still be recorded: live and upcoming. Finished and
+  // cancelled ones live on the Sessions page.
   const sortedSessions = useMemo(
-    () => sortSessions(sessions, currentTime),
+    () => sortSessions(
+      sessions.filter((session) => ["active", "scheduled"].includes(session.status)),
+      currentTime
+    ),
     [sessions, currentTime]
   );
   const today = localDateValue(new Date());
@@ -104,20 +121,16 @@ export function SessionScheduler() {
       .finally(() => setLoading(false));
   }, []);
 
-  // refreshes session states every thirty seconds
-  useEffect(() => {
-    const timer = window.setInterval(async () => {
-      setCurrentTime(Date.now());
-
-      try {
-        setSessions(await getSessions());
-      } catch (err) {
-        setError(err.message);
-      }
-    }, 30 * 1000);
-
-    return () => window.clearInterval(timer);
-  }, []);
+  // Keeps live and upcoming sessions current (a practice that starts shows
+  // up within a few seconds), and the "joinable" windows with them.
+  useAutoRefresh(async () => {
+    setCurrentTime(Date.now());
+    try {
+      setSessions(await getSessions());
+    } catch {
+      // Keep what's shown; the next refresh tries again.
+    }
+  }, 8000);
 
   // saves a future session
   const submitSession = async (event) => {
@@ -149,7 +162,7 @@ export function SessionScheduler() {
         date: "",
         time: "",
       }));
-      setOpenPanel(null);
+      closePanel();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -171,7 +184,7 @@ export function SessionScheduler() {
 
       setSessions((current) => [...current, session]);
       setForm((current) => ({ ...current, name: "" }));
-      setOpenPanel(null);
+      closePanel();
       navigate(`/record/${session.id}`);
     } catch (err) {
       setError(err.message);
@@ -281,22 +294,23 @@ export function SessionScheduler() {
     <section className="session-scheduler">
       <style>{schedulerCss}</style>
 
+      {showForms && !panel && (
       <div className="session-mode-buttons">
-        <button
-          className={openPanel === "schedule" ? "is-selected" : ""}
-          type="button"
-          onClick={() => togglePanel("schedule")}
-          aria-expanded={openPanel === "schedule"}
-        >
-          Schedule Session
-        </button>
         <button
           className={openPanel === "create" ? "is-selected" : ""}
           type="button"
           onClick={() => togglePanel("create")}
           aria-expanded={openPanel === "create"}
         >
-          Create Session
+          Start now
+        </button>
+        <button
+          className={openPanel === "schedule" ? "is-selected" : ""}
+          type="button"
+          onClick={() => togglePanel("schedule")}
+          aria-expanded={openPanel === "schedule"}
+        >
+          Schedule
         </button>
         <button
           className={openPanel === "code" ? "is-selected" : ""}
@@ -304,11 +318,12 @@ export function SessionScheduler() {
           onClick={() => togglePanel("code")}
           aria-expanded={openPanel === "code"}
         >
-          Join with Code
+          Join with a code
         </button>
       </div>
+      )}
 
-      {openPanel === "code" && (
+      {showForms && openPanel === "code" && (
         <form className="session-schedule-form session-create-form" onSubmit={submitJoinCode}>
           <label>
             Session code
@@ -324,7 +339,7 @@ export function SessionScheduler() {
             />
           </label>
           <div className="session-schedule-actions">
-            <button type="button" onClick={() => setOpenPanel(null)}>
+            <button type="button" onClick={closePanel}>
               Cancel
             </button>
             <button
@@ -338,7 +353,7 @@ export function SessionScheduler() {
         </form>
       )}
 
-      {openPanel === "schedule" && (
+      {showForms && openPanel === "schedule" && (
         <form className="session-schedule-form" onSubmit={submitSession}>
           <label>
             Name
@@ -415,7 +430,7 @@ export function SessionScheduler() {
           <div className="session-schedule-actions">
             <button
               type="button"
-              onClick={() => setOpenPanel(null)}
+              onClick={closePanel}
             >
               Cancel
             </button>
@@ -430,7 +445,7 @@ export function SessionScheduler() {
         </form>
       )}
 
-      {openPanel === "create" && (
+      {showForms && openPanel === "create" && (
         <form
           className="session-schedule-form session-create-form"
           onSubmit={submitLiveSession}
@@ -473,7 +488,7 @@ export function SessionScheduler() {
           )}
 
           <div className="session-schedule-actions">
-            <button type="button" onClick={() => setOpenPanel(null)}>
+            <button type="button" onClick={closePanel}>
               Cancel
             </button>
             <button
@@ -481,7 +496,7 @@ export function SessionScheduler() {
               type="submit"
               disabled={submitting}
             >
-              {submitting ? "Creating..." : "Create Session"}
+              {submitting ? "Starting..." : "Start session"}
             </button>
           </div>
         </form>
@@ -489,12 +504,15 @@ export function SessionScheduler() {
 
       {error && <p className="session-schedule-error">{error}</p>}
 
+      {showList && (
       <div className="scheduled-session-list">
-        <h2>Sessions</h2>
+        <div className="scheduled-session-heading">
+          <h2>Live and upcoming</h2>
+        </div>
         {loading ? (
           <p className="scheduled-session-empty">Loading sessions...</p>
-        ) : sessions.length === 0 ? (
-          <p className="scheduled-session-empty">No sessions yet.</p>
+        ) : sortedSessions.length === 0 ? (
+          <p className="scheduled-session-empty">Nothing live or scheduled. Use + New session to start or schedule one.</p>
         ) : (
           sortedSessions.map((session) => (
             <article
@@ -643,6 +661,7 @@ export function SessionScheduler() {
           ))
         )}
       </div>
+      )}
     </section>
   );
 }
@@ -792,6 +811,9 @@ const schedulerCss = `
   .scheduled-session-details {
     align-items: flex-end;
   }
+  .scheduled-session-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .scheduled-session-heading a { color: var(--accent); font-weight: 600; text-decoration: none; }
+  .scheduled-session-heading a:hover { text-decoration: underline; }
   .scheduled-session-status {
     text-transform: capitalize;
   }

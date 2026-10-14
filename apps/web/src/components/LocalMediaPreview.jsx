@@ -10,6 +10,41 @@ const RECORDING_AUDIO = {
   autoGainControl: false,
 };
 
+// The camera and microphone last picked, so the next session opens on them.
+const DEVICES_KEY = "8kount.mediaDevices";
+
+function savedDevices() {
+  try {
+    return JSON.parse(localStorage.getItem(DEVICES_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveDevices(cameraId, microphoneId) {
+  try {
+    localStorage.setItem(DEVICES_KEY, JSON.stringify({ cameraId, microphoneId }));
+  } catch {
+    // Private windows can refuse storage; the defaults still work.
+  }
+}
+
+// True when the browser already allows both, so asking again would be a
+// pointless extra click. Browsers that can't say (Firefox) get the prompt.
+async function alreadyAllowed() {
+  try {
+    const [camera, microphone] = await Promise.all([
+      navigator.permissions.query({ name: "camera" }),
+      navigator.permissions.query({ name: "microphone" }),
+    ]);
+    return camera.state === "granted" && microphone.state === "granted";
+  } catch {
+    return false;
+  }
+}
+
+// Once the browser allows the camera, sessions open straight on it (no
+// prompt). Hosts switch to controlling from the session's header.
 export function LocalMediaPreview({ disabled, onReady, onDecline }) {
   const videoRef = useRef(null);
   const [stream, setStream] = useState(null);
@@ -18,6 +53,8 @@ export function LocalMediaPreview({ disabled, onReady, onDecline }) {
   const [microphoneId, setMicrophoneId] = useState("");
   const [requesting, setRequesting] = useState(false);
   const [accepted, setAccepted] = useState(false);
+  // Until we know whether the browser already allows the camera.
+  const [checking, setChecking] = useState(true);
   const [error, setError] = useState("");
 
   // puts the current stream in the local preview
@@ -41,13 +78,16 @@ export function LocalMediaPreview({ disabled, onReady, onDecline }) {
     setRequesting(true);
     setError("");
 
+    // A remembered device is a preference (it may be unplugged); a device
+    // picked from the list is required.
+    const pick = (id) => (firstRequest ? { ideal: id } : { exact: id });
     try {
       const nextStream = await navigator.mediaDevices.getUserMedia({
         video: nextCameraId
-          ? { deviceId: { exact: nextCameraId } }
+          ? { deviceId: pick(nextCameraId) }
           : true,
         audio: nextMicrophoneId
-          ? { deviceId: { exact: nextMicrophoneId }, ...RECORDING_AUDIO }
+          ? { deviceId: pick(nextMicrophoneId), ...RECORDING_AUDIO }
           : RECORDING_AUDIO,
       });
 
@@ -62,6 +102,7 @@ export function LocalMediaPreview({ disabled, onReady, onDecline }) {
       setDevices(availableDevices);
       setCameraId(nextCameraId);
       setMicrophoneId(nextMicrophoneId);
+      if (!firstRequest) saveDevices(nextCameraId, nextMicrophoneId);
       setAccepted(true);
       onReady(nextStream);
     } catch {
@@ -76,7 +117,21 @@ export function LocalMediaPreview({ disabled, onReady, onDecline }) {
     }
   };
 
-  const accept = () => getMedia("", "", true);
+  const accept = () => {
+    const saved = savedDevices();
+    return getMedia(saved.cameraId || "", saved.microphoneId || "", true);
+  };
+
+  // Already allowed: start the camera without asking.
+  useEffect(() => {
+    let cancelled = false;
+    alreadyAllowed().then((allowed) => {
+      if (cancelled) return;
+      if (allowed) accept().finally(() => { if (!cancelled) setChecking(false); });
+      else setChecking(false);
+    });
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // switches the local camera or microphone
   const changeCamera = (event) => {
@@ -93,6 +148,10 @@ export function LocalMediaPreview({ disabled, onReady, onDecline }) {
   const microphones = devices.filter(
     (device) => device.kind === "audioinput"
   );
+
+  if (!accepted && checking) {
+    return <p className="local-media-note">Starting camera…</p>;
+  }
 
   if (!accepted) {
     return (

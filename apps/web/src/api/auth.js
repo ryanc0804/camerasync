@@ -135,6 +135,11 @@ export async function updateProfile(changes) {
 }
 
 // Change the password while signed in; other devices get signed out.
+// Permanently deletes the signed-in account (the server checks the password).
+export async function deleteAccount(password) {
+  return request("/api/auth/me", { method: "DELETE", body: { password } });
+}
+
 export async function changePassword({ currentPassword, newPassword }) {
   return request("/api/auth/change-password", {
     method: "POST",
