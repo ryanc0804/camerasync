@@ -23,9 +23,25 @@ dependencies:
   url_launcher: ^6.3.3
 
 dev_dependencies:
+  flutter_launcher_icons: ^0.14.4
   flutter_lints: ^4.0.0
   flutter_test:
     sdk: flutter
 
 flutter:
   uses-material-design: true
+
+# App icons for Android and iOS, from the 8kount logo:
+#   dart run flutter_launcher_icons
+# Android crops icons into circles and squircles; the tool insets the
+# adaptive icon's foreground so the logo stays inside the crop, on black.
+# Afterwards, check that ios/Runner.xcodeproj/project.pbxproj still says
+# ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES (the
+# tool has a bug that overwrites it with AppIcon).
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/app_icon.png"
+  adaptive_icon_background: "#000000"
+  adaptive_icon_foreground: "assets/icon/app_icon.png"
+  remove_alpha_ios: true
