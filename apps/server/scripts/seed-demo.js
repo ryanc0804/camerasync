@@ -64,7 +64,8 @@ const GROUPS = [
     owner: "ryan",
     color: "#ead217",
     members: { coach: "admin", maya: "member", jordan: "member",
-      sofia: "member", andre: "member", alex: "viewer" },
+      sofia: "member", andre: "member", alex: "viewer", priya: "member",
+      hannah: "member", marcus: "member", elijah: "member", diego: "member" },
     // Days ago, for members who joined recently (they show in notifications).
     recentJoins: { alex: 1 },
   },
@@ -113,7 +114,14 @@ const NOTES = {
 
 // days: offset from today; recordings: [angle user keys per recording].
 // A key ending in "?" is a member who joined but never uploaded.
+// The whole squad on camera, for trying the playback grid with many angles
+// (9, 11 and 6 per take; the 4 sample clips repeat across them).
+const SQUAD = ["coach", "ryan", "maya", "jordan", "sofia", "andre", "priya",
+  "hannah", "marcus", "elijah", "diego"];
+
 const SESSIONS = [
+  { group: "ucfcheer", name: "Full squad run-through", days: -1, hour: 17, by: "coach",
+    recordings: [SQUAD.slice(0, 9), SQUAD, SQUAD.slice(0, 6)] },
   { group: "ucfcheer", name: "Stunt practice", days: -2, hour: 18, by: "ryan",
     recordings: [["ryan", "maya", "jordan", "sofia"], ["ryan", "maya", "jordan", "sofia"]] },
   { group: "ucfcheer", name: "Pyramid run-through", days: -5, hour: 17, by: "coach",

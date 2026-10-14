@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/db/pool.js", () => ({ pool: { query: vi.fn() } }));
 
-const { canControlRecording } = await import("../src/sockets/websocket.js");
+const { canControlRecording, roomMembersFrom } = await import("../src/sockets/websocket.js");
 
 describe("canControlRecording", () => {
   const session = { created_by: 1, owner_id: 2 };
@@ -21,5 +21,19 @@ describe("canControlRecording", () => {
 
   it("compares ids whether they arrive as numbers or strings", () => {
     expect(canControlRecording({ created_by: "1", owner_id: "2", role: "member" }, 1)).toBe(true);
+  });
+});
+
+describe("roomMembersFrom", () => {
+  const socket = (id, camera) => ({ data: { user: { id, name: `User ${id}` }, camera } });
+
+  it("marks controllers apart from cameras", () => {
+    const members = roomMembersFrom([socket(1, false), socket(2, true), socket(3, undefined)]);
+    expect(members.map((m) => [m.id, m.camera])).toEqual([[1, false], [2, true], [3, true]]);
+  });
+
+  it("lists someone once, as recording if any of their devices is", () => {
+    const members = roomMembersFrom([socket(1, false), socket(1, true), { data: {} }]);
+    expect(members).toEqual([{ id: 1, name: "User 1", camera: true }]);
   });
 });

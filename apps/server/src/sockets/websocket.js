@@ -41,14 +41,20 @@ function readCookie(cookieHeader, name) {
 
 // gets each connected user once
 async function getRoomMembers(sessionId) {
-  const sockets = await getIO().in(roomName(sessionId)).fetchSockets();
-  const members = new Map();
+  return roomMembersFrom(await getIO().in(roomName(sessionId)).fetchSockets());
+}
 
+/// One entry per person in the room. camera: false marks someone only
+/// starting and stopping the others; with a camera on any of their devices
+/// they count as recording.
+export function roomMembersFrom(sockets) {
+  const members = new Map();
   for (const socket of sockets) {
     const user = socket.data.user;
-    if (user) members.set(user.id, user);
+    if (!user) continue;
+    const camera = socket.data.camera !== false || members.get(user.id)?.camera === true;
+    members.set(user.id, { ...user, camera });
   }
-
   return Array.from(members.values());
 }
 
@@ -138,7 +144,7 @@ export async function initSocket(httpServer) {
   });
 
   io.on("connection", (socket) => {
-    socket.on(EVENTS.JOIN_SESSION, async ({ sessionId } = {}, ack) => {
+    socket.on(EVENTS.JOIN_SESSION, async ({ sessionId, camera } = {}, ack) => {
       if (typeof ack !== "function") return;
       if (!sessionId) {
         return ack({ ok: false, error: "Session ID is required." });
@@ -189,6 +195,8 @@ export async function initSocket(httpServer) {
         }
 
         socket.data.sessionId = sessionId;
+        // A host or admin can join without recording, to run the others.
+        socket.data.camera = camera !== false;
         await socket.join(roomName(sessionId));
         const members = await sendRoomMembers(sessionId);
 

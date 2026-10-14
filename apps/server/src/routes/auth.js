@@ -10,6 +10,7 @@ import {
 } from "../email/mailer.js";
 import { signupEmailError } from "../auth/emailPolicy.js";
 import { requireAuth } from "../middleware/requireAuth.js";
+import { storage } from "../storage/index.js";
 import {
   SESSION_COOKIE,
   createSession,
@@ -574,6 +575,68 @@ authRouter.post("/change-password", requireAuth, async (req, res, next) => {
     res.status(204).end();
   } catch (err) {
     next(err);
+  }
+});
+
+// Deletes the signed-in account and everything that's only theirs: their
+// videos (files too), comments, memberships and sign-ins. Both app stores
+// require this in the app. A group they own must be handed over or deleted
+// first, so a team never loses its group; sessions they started stay for
+// everyone else, with no creator.
+authRouter.delete("/me", requireAuth, async (req, res, next) => {
+  const { password } = req.body ?? {};
+  if (!password) {
+    return res.status(400).json({ error: "Enter your password to delete your account." });
+  }
+
+  const client = await pool.connect();
+  try {
+    const { rows } = await client.query(
+      "SELECT password FROM users WHERE user_id = $1",
+      [req.user.id]
+    );
+    if (!rows[0] || !(await bcrypt.compare(String(password), rows[0].password))) {
+      return res.status(400).json({ error: "Password is incorrect." });
+    }
+
+    const owned = await client.query(
+      "SELECT group_id, name FROM groups WHERE owner_id = $1 ORDER BY name",
+      [req.user.id]
+    );
+    if (owned.rowCount > 0) {
+      const names = owned.rows.map((group) => group.name).join(", ");
+      return res.status(409).json({
+        error: `You own ${names}. Transfer ownership or delete ${
+          owned.rowCount === 1 ? "it" : "them"
+        } first, then delete your account.`,
+        groups: owned.rows.map((group) => ({ id: group.group_id, name: group.name })),
+      });
+    }
+
+    await client.query("BEGIN");
+    const files = await client.query(
+      `SELECT file_id FROM recording_session_videos
+        WHERE user_id = $1 AND file_id IS NOT NULL`,
+      [req.user.id]
+    );
+    // Sign-ins aren't linked to the user row, so they go by hand.
+    await client.query("DELETE FROM sessions WHERE user_id = $1", [req.user.id]);
+    await client.query("DELETE FROM users WHERE user_id = $1", [req.user.id]);
+    await client.query("COMMIT");
+
+    const fileIds = files.rows.map((row) => row.file_id);
+    if (fileIds.length > 0) {
+      // The account is gone either way; a file left behind is only space.
+      await storage.remove(fileIds).catch((err) =>
+        console.error("Unable to delete a deleted account's videos:", err));
+    }
+    res.clearCookie(SESSION_COOKIE, { ...sessionCookieOptions(), maxAge: undefined });
+    res.status(204).end();
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    next(err);
+  } finally {
+    client.release();
   }
 });
 

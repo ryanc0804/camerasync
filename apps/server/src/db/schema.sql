@@ -299,3 +299,20 @@ ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS beep_at_ms INTEGER
 -- people who joined can see it (see sessionVisibleSql in
 -- middleware/groupRole.js).
 ALTER TABLE recording_sessions ALTER COLUMN group_id DROP NOT NULL;
+
+-- A session outlives the account that started it: deleting an account (which
+-- both app stores require) keeps the team's recordings, with no creator.
+ALTER TABLE recording_sessions ALTER COLUMN created_by DROP NOT NULL;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'recording_sessions_created_by_fkey'
+       AND confdeltype <> 'n'
+  ) THEN
+    ALTER TABLE recording_sessions DROP CONSTRAINT recording_sessions_created_by_fkey;
+    ALTER TABLE recording_sessions
+      ADD CONSTRAINT recording_sessions_created_by_fkey
+      FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL;
+  END IF;
+END $$;

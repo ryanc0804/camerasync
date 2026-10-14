@@ -68,7 +68,9 @@ function publicSession(row) {
     createdBy: Number(row.created_by),
     status: row.status,
     memberCount: row.member_count == null ? null : Number(row.member_count),
+    // Angles (one per phone per take) across the session, and the takes.
     totalRecordings: row.total_recordings == null ? null : Number(row.total_recordings),
+    recordingCount: row.recording_count == null ? null : Number(row.recording_count),
     activeMemberCount: Number(row.active_member_count ?? 0),
     isJoined: Boolean(row.is_joined),
   };
@@ -109,6 +111,9 @@ recordingsRouter.get("/sessions", requireAuth, async (req, res, next) => {
               CASE WHEN rs.counts_tracked THEN
                 (SELECT COUNT(*) FROM recording_session_videos v
                   WHERE v.session_id = rs.id) END AS total_recordings,
+              CASE WHEN rs.counts_tracked THEN
+                (SELECT COUNT(DISTINCT v.started_at_ms) FROM recording_session_videos v
+                  WHERE v.session_id = rs.id) END AS recording_count,
               (
                 SELECT COUNT(*)
                   FROM recording_session_members rsm
