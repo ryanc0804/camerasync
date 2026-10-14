@@ -6,6 +6,7 @@ import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
 import '../team_accent.dart';
 import '../theme.dart';
+import '../widgets/auto_refresh.dart';
 import '../widgets/empty_state.dart';
 import 'watch_screen.dart';
 
@@ -18,11 +19,15 @@ class RecordingsScreen extends StatefulWidget {
     required this.auth,
     this.groupId,
     this.title,
+    this.embedded = false,
   });
 
   final AuthService auth;
   final String? groupId;
   final String? title;
+
+  /// Inside the Sessions tab, which has its own title: no app bar here.
+  final bool embedded;
 
   @override
   State<RecordingsScreen> createState() => _RecordingsScreenState();
@@ -45,11 +50,22 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
   void initState() {
     super.initState();
     _load();
+    // A session that just ended (or a new upload) appears on its own.
+    _refresher = AutoRefresher(const Duration(seconds: 20), _load);
+  }
+
+  late final AutoRefresher _refresher;
+
+  @override
+  void dispose() {
+    _refresher.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
     setState(() {
-      _loading = true;
+      // A spinner only the first time; refreshes keep the list on screen.
+      _loading = _sessions.isEmpty;
       _error = null;
     });
     try {
@@ -59,6 +75,8 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
       ]);
       final sessions = (results[0] as List<RecordingSession>)
           .where((s) => s.isComplete)
+          // Nothing to watch: a session that ended without recording.
+          .where((s) => s.recordingCount != 0)
           .where((s) => widget.groupId == null || s.groupId == widget.groupId)
           .toList()
         ..sort((a, b) {
@@ -133,13 +151,50 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final list = RefreshIndicator(
+      onRefresh: _load,
+      child: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: EdgeInsets.fromLTRB(20, 8, 20, widget.embedded ? 110 : 40),
+              children: [
+                if (_error != null)
+                  EmptyState(
+                    title: "Couldn't load sessions",
+                    message: _error!,
+                    actionLabel: 'Retry',
+                    onAction: _load,
+                  )
+                else if (_sessions.isEmpty)
+                  EmptyState(
+                    title: 'No sessions to watch yet',
+                    message: widget.groupId == null
+                        ? 'Finished sessions from your groups show up here '
+                            'once their recordings upload.'
+                        : 'This group has no finished sessions yet.',
+                  )
+                else
+                  for (final s in _sessions)
+                    RecordingCard(
+                      session: s,
+                      groupName: _groupNames[s.groupId],
+                      onTap: () => _open(s),
+                      onDelete: _adminGroups.contains(s.groupId)
+                          ? () => _delete(s)
+                          : null,
+                    ),
+              ],
+            ),
+    );
+    if (widget.embedded) return list;
     return Scaffold(
       backgroundColor: kBackground,
       appBar: AppBar(
         backgroundColor: kBackground,
         foregroundColor: Colors.white,
         title: Text(
-          widget.title ?? 'Recordings',
+          widget.title ?? 'Sessions',
           style: TextStyle(
             color: TeamAccent.of(context).accent,
             fontWeight: FontWeight.w800,
@@ -147,43 +202,7 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
           ),
         ),
       ),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
-                children: [
-                  if (_error != null)
-                    EmptyState(
-                      title: "Couldn't load recordings",
-                      message: _error!,
-                      actionLabel: 'Retry',
-                      onAction: _load,
-                    )
-                  else if (_sessions.isEmpty)
-                    EmptyState(
-                      title: 'No recordings yet',
-                      message: widget.groupId == null
-                          ? 'Completed sessions from your groups show up '
-                              'here. Join a session and record to make the '
-                              'first one.'
-                          : 'This group has no completed sessions yet.',
-                    )
-                  else
-                    for (final s in _sessions)
-                      RecordingCard(
-                        session: s,
-                        groupName: _groupNames[s.groupId],
-                        onTap: () => _open(s),
-                        onDelete: _adminGroups.contains(s.groupId)
-                            ? () => _delete(s)
-                            : null,
-                      ),
-                ],
-              ),
-      ),
+      body: list,
     );
   }
 }
@@ -212,7 +231,7 @@ class RecordingCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final at = session.scheduledAt;
     final date = at == null ? '' : '${at.month}/${at.day}/${at.year}';
-    final count = session.totalRecordings;
+    final count = session.recordingCount;
     final parts = [
       if (groupName != null) groupName!,
       if (date.isNotEmpty) date,

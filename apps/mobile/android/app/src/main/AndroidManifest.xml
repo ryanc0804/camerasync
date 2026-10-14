@@ -8,14 +8,14 @@
     <!-- Alerts for comments, people joining and practices starting. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
-    <!-- usesCleartextTraffic: Android 9+ blocks plain HTTP by default, which
-         would break the local dev server at http://10.0.2.2:4000. Set this to
-         false once the app talks to an HTTPS deployment. -->
+    <!-- Production is HTTPS; network_security_config allows plain HTTP only
+         to a local dev server (localhost over adb reverse, or the emulator's
+         10.0.2.2). -->
     <application
-        android:label="camerasync_mobile"
+        android:label="8kount"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:usesCleartextTraffic="true">
+        android:networkSecurityConfig="@xml/network_security_config">
         <activity
             android:name=".MainActivity"
             android:exported="true"

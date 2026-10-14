@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../api/api_client.dart';
 import '../api/groups_api.dart';
@@ -156,17 +157,52 @@ class _SettingsTabState extends State<SettingsTab> {
             ],
           ),
           _NotificationsCard(auth: widget.auth, alerts: widget.alerts),
-          const _Card(
+          _Card(
             title: 'About',
             children: [
-              Text('8kount',
+              const Text('8kount',
                   style: TextStyle(
                       color: Colors.white, fontWeight: FontWeight.w700)),
-              SizedBox(height: 6),
-              Text(
+              const SizedBox(height: 6),
+              const Text(
                 'Record practices from several phones at once, then review every angle '
                 'together with timestamped comments. Built by a UCF senior design team.',
                 style: TextStyle(color: kMuted, height: 1.4),
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: () => launchUrl(_privacyPolicy,
+                      mode: LaunchMode.externalApplication),
+                  style: TextButton.styleFrom(
+                      foregroundColor: team.accent, padding: EdgeInsets.zero),
+                  child: const Text('Privacy policy'),
+                ),
+              ),
+            ],
+          ),
+          // Both app stores require this: anyone who can make an account
+          // can delete it from the app.
+          _Card(
+            title: 'Delete account',
+            children: [
+              const Text(
+                'Permanently deletes your account, the videos you recorded and '
+                'your comments. Sessions you started stay for your team. If '
+                'you own a group, hand it over or delete it first.',
+                style: TextStyle(color: kMuted, height: 1.4),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton(
+                  onPressed: () => showDialog<void>(
+                    context: context,
+                    builder: (_) => _DeleteAccountDialog(auth: widget.auth),
+                  ),
+                  style: FilledButton.styleFrom(backgroundColor: kLiveRed),
+                  child: const Text('Delete account'),
+                ),
               ),
             ],
           ),
@@ -463,6 +499,90 @@ class _NameDialogState extends State<_NameDialog> {
         ),
         FilledButton(
             onPressed: _saving ? null : _save, child: const Text('Save')),
+      ],
+    );
+  }
+}
+
+final _privacyPolicy = Uri.parse('https://8kount.app/privacy');
+
+/// Asks for the password, then deletes the account. Signing out sends the
+/// app back to the login screen.
+class _DeleteAccountDialog extends StatefulWidget {
+  const _DeleteAccountDialog({required this.auth});
+
+  final AuthService auth;
+
+  @override
+  State<_DeleteAccountDialog> createState() => _DeleteAccountDialogState();
+}
+
+class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
+  final _password = TextEditingController();
+  bool _deleting = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _password.dispose();
+    super.dispose();
+  }
+
+  Future<void> _delete() async {
+    setState(() {
+      _deleting = true;
+      _error = null;
+    });
+    try {
+      final navigator = Navigator.of(context);
+      await widget.auth.deleteAccount(_password.text);
+      navigator.pop();
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.message;
+          _deleting = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Delete your account?'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            "This can't be undone. Your videos and comments are deleted too.",
+            style: TextStyle(height: 1.4),
+          ),
+          TextField(
+            controller: _password,
+            obscureText: true,
+            enabled: !_deleting,
+            decoration: const InputDecoration(labelText: 'Password'),
+            onChanged: (_) => setState(() {}),
+          ),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(_error!, style: const TextStyle(color: kLiveRed)),
+            ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _deleting ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _deleting || _password.text.isEmpty ? null : _delete,
+          style: FilledButton.styleFrom(backgroundColor: kLiveRed),
+          child: Text(_deleting ? 'Deleting…' : 'Delete my account'),
+        ),
       ],
     );
   }

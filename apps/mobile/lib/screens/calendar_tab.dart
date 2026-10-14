@@ -4,6 +4,7 @@ import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
 import '../team_accent.dart';
 import '../theme.dart';
+import '../widgets/auto_refresh.dart';
 import '../widgets/empty_state.dart';
 
 const _weekdays = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
@@ -35,6 +36,15 @@ class _CalendarTabState extends State<CalendarTab> {
   void initState() {
     super.initState();
     _load();
+    _refresher = AutoRefresher(const Duration(seconds: 30), _load);
+  }
+
+  late final AutoRefresher _refresher;
+
+  @override
+  void dispose() {
+    _refresher.dispose();
+    super.dispose();
   }
 
   /// The grid renders regardless; a failed fetch just means no chips.

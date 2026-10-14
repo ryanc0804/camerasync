@@ -10,9 +10,12 @@ import 'package:video_player/video_player.dart';
 import '../api/api_client.dart';
 import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
+import '../recordings/angle_layout.dart';
 import '../recordings/names.dart';
 import '../team_accent.dart';
 import '../theme.dart';
+import '../tv/tv_link.dart';
+import '../tv/tv_protocol.dart';
 import '../widgets/empty_state.dart';
 
 /// A screen at least this big (a TV, a monitor, a tablet on its side) shows
@@ -20,14 +23,14 @@ import '../widgets/empty_state.dart';
 /// show one camera at a time and decode only that one video.
 bool isBigScreen(Size size) => size.width >= 900 && size.height >= 500;
 
-/// Playback for one session (the "Watch" frame in the Figma). On a phone it
-/// plays one camera at a time, with a row of buttons to switch cameras; on a
-/// big screen it shows a grid of every angle like the desktop app. Either
-/// way one shared transport keeps the players on the same clock, and a
-/// comments badge opens the recording's notes.
+/// One session's recordings. A session with more than one recording (take)
+/// opens on the list of them; tapping one plays it. Upright, the chosen
+/// angle plays big with stills of the others underneath; sideways or on a
+/// big screen the angles play together in a grid. One shared transport
+/// keeps the players on the same clock, and comments pop up as they come.
 ///
 /// Previous / next move between the session's recordings (Recording 001,
-/// 002, ...).
+/// 002, ...); back returns to the list.
 class WatchScreen extends StatefulWidget {
   const WatchScreen({super.key, required this.auth, required this.session});
 
@@ -43,6 +46,10 @@ class _WatchScreenState extends State<WatchScreen> {
 
   SessionVideos? _videos;
   int _index = 0;
+
+  /// Showing the list of recordings rather than playing one.
+  bool _picking = false;
+  bool get _hasList => (_videos?.recordings.length ?? 0) > 1;
   bool _loading = true;
   String? _error;
 
@@ -55,6 +62,16 @@ class _WatchScreenState extends State<WatchScreen> {
   /// all on that shared timeline.
   Map<int, Duration> _trims = {};
   Duration _trimOf(int i) => _trims[i] ?? Duration.zero;
+
+  /// A TV is plugged in: the angles play there and this screen is the
+  /// remote (see TvLink). The TV reports its position, which drives the
+  /// timeline and comments here as the players normally would.
+  bool _onTv = false;
+  StreamSubscription<TvState>? _tvStates;
+  int _tvPage = 0;
+  int _tvPageCount = 0;
+  int? _tvFocused;
+  int? _tvCommentId;
 
   /// Where angle [i]'s player is on the shared timeline.
   Duration _timelineAt(int i, VideoPlayerController player) {
@@ -78,6 +95,38 @@ class _WatchScreenState extends State<WatchScreen> {
   }
   int _selected = 0;
   bool _bigScreen = false;
+
+  /// Held sideways: the angles show as a grid, like on a big screen.
+  bool _landscape = false;
+  bool get _gridMode => _bigScreen || _landscape;
+
+  /// Grid pages: 4 angles on a phone; on a TV or tablet as many as fit at a
+  /// watchable size (up to 9: each angle is its own video decoder).
+  int _page = 0;
+  int _bigPerPage = 6;
+  int get _perPage => _bigScreen ? _bigPerPage : 4;
+  int get _pageCount => (_uploadedAngles.length / _perPage).ceil();
+  List<int> get _pageAngles =>
+      _uploadedAngles.skip(_page * _perPage).take(_perPage).toList();
+
+  /// Upright, the selected angle plays big and up to this many others show
+  /// as stills underneath (each still is a paused player, so they're kept
+  /// few on a phone).
+  static const _maxStills = 3;
+  List<int> get _stillAngles =>
+      _uploadedAngles.where((i) => i != _selected).take(_maxStills).toList();
+
+  /// In the grid, the angle tapped to fill the space (tap again, or back,
+  /// to return to the grid); null shows the whole page.
+  int? _focused;
+
+  /// The angles that play: the expanded one, the grid page, or just the
+  /// selected one.
+  Set<int> get _liveAngles {
+    final focused = _focused;
+    if (focused != null) return {focused};
+    return _gridMode ? _pageAngles.toSet() : {_selected};
+  }
   VideoPlayerController? _clockPlayer;
   int _syncGeneration = 0;
 
@@ -101,17 +150,107 @@ class _WatchScreenState extends State<WatchScreen> {
   @override
   void initState() {
     super.initState();
+    _onTv = TvLink.instance.connected;
+    TvLink.instance.addListener(_onTvChanged);
+    _tvStates = TvLink.instance.states.listen(_onTvState);
     _load();
+  }
+
+  // ---- TV mode -----------------------------------------------------------
+
+  /// Plugged in or unplugged mid-recording: hand playback over.
+  Future<void> _onTvChanged() async {
+    final now = TvLink.instance.connected;
+    if (now == _onTv || !mounted) return;
+    setState(() => _onTv = now);
+    if (_picking || _recording == null) return;
+    if (now) {
+      _keepInLine?.cancel();
+      _position = _clockAt;
+      await _closeAllPlayers();
+      _sendToTv();
+    } else {
+      // Back on the phone where the TV left off.
+      final wasPlaying = _playing;
+      setState(() => _playing = false);
+      await _syncPlayers();
+      if (wasPlaying && mounted) _play();
+    }
+  }
+
+  /// The angles of the open recording, as the TV numbers them.
+  List<int> get _tvAngles => _uploadedAngles;
+
+  void _sendToTv() {
+    final recording = _recording;
+    if (recording == null) return;
+    _tvCommentId = null;
+    TvLink.instance.send(TvAction.load, {
+      'session': widget.session.name,
+      'recording': 'Recording ${recording.number.toString().padLeft(3, '0')}',
+      'cookie': widget.auth.api.cookie,
+      'atMs': _position.inMilliseconds,
+      'playing': _playing,
+      'angles': [
+        for (final i in _tvAngles)
+          {
+            'name': recording.videos[i].name,
+            'url': _recordings.absoluteUrl(recording.videos[i].url!),
+            'trimMs': _trimOf(i).inMilliseconds,
+          }
+      ],
+    });
+  }
+
+  void _onTvState(TvState state) {
+    if (!_onTv || !mounted || _picking) return;
+    setState(() {
+      _position = state.position;
+      if (state.duration > Duration.zero) _duration = state.duration;
+      _playing = state.playing;
+      _tvPage = state.page;
+      _tvPageCount = state.pageCount;
+      _tvFocused = state.focused;
+      _ready = true;
+    });
+    // The comment at this moment, up on the TV too.
+    SessionNote? live;
+    for (final n in _notes) {
+      final at = Duration(milliseconds: n.videoTimeMs);
+      if (_position >= at && _position < at + const Duration(seconds: 3)) {
+        live = n;
+      }
+    }
+    if (live?.id != _tvCommentId) {
+      _tvCommentId = live?.id;
+      TvLink.instance.send(
+        TvAction.comment,
+        live == null ? null : {'author': live.authorName, 'body': live.body},
+      );
+    }
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final big = isBigScreen(MediaQuery.sizeOf(context));
-    if (big != _bigScreen) {
+    final size = MediaQuery.sizeOf(context);
+    final big = isBigScreen(size);
+    final landscape = size.width > size.height;
+    // The grid's space on a big screen: the window less its side padding
+    // and the title, timeline and controls above and below it.
+    final perPage = anglesPerPage(
+      Size(size.width - 42, size.height - 260),
+      16 / 9,
+    );
+    if (big != _bigScreen || landscape != _landscape ||
+        (big && perPage != _bigPerPage)) {
       _bigScreen = big;
-      // Plugging into a TV or rotating a tablet opens or closes the other
-      // angles' players.
+      _landscape = landscape;
+      _bigPerPage = perPage;
+      _page = 0;
+      _focused = null;
+      // Rotating, plugging into a TV, or resizing its window changes which
+      // angles show, which opens and closes players.
       if (_recording != null && !_loading) _syncPlayers();
     }
   }
@@ -125,9 +264,15 @@ class _WatchScreenState extends State<WatchScreen> {
       final videos = await _recordings.getSessionVideos(widget.session.id);
       if (!mounted) return;
       _videos = videos;
-      // Newest recording first is how the web lists them; open on the
-      // first one here too.
       _index = 0;
+      // Several recordings: list them first. One: play it straight away.
+      if (videos.recordings.length > 1) {
+        setState(() {
+          _picking = true;
+          _loading = false;
+        });
+        return;
+      }
       await _openRecording();
     } on ApiException catch (e) {
       if (!mounted) return;
@@ -151,10 +296,17 @@ class _WatchScreenState extends State<WatchScreen> {
       _position = Duration.zero;
       _duration = Duration.zero;
       _notes = [];
+      _focused = null;
       _selected = uploaded.isEmpty ? 0 : uploaded.first;
       _trims = recording == null ? {} : angleTrims(recording.videos);
     });
     if (recording == null) return;
+    if (_onTv) {
+      _sendToTv();
+      setState(() => _loading = false);
+      _loadNotes(recording);
+      return;
+    }
     await _syncPlayers();
     if (!mounted) return;
     setState(() => _loading = false);
@@ -165,9 +317,11 @@ class _WatchScreenState extends State<WatchScreen> {
   /// player joins at the current position, playing if the others are.
   Future<void> _syncPlayers() async {
     final recording = _recording;
-    if (recording == null) return;
+    if (recording == null || _onTv) return;
     final generation = ++_syncGeneration;
-    final wanted = _bigScreen ? _uploadedAngles.toSet() : {_selected};
+    final wanted = _gridMode
+        ? _pageAngles.toSet()
+        : {_selected, ..._stillAngles};
 
     _position = _clockAt;
     for (final i in _players.keys.toList()) {
@@ -193,10 +347,22 @@ class _WatchScreenState extends State<WatchScreen> {
       if (player == null) continue;
       _players[missing[k]] = player;
       await player.seekTo(_position + _trimOf(missing[k]));
-      if (_playing) player.play();
     }
 
-    _setClock(_players[_selected] ??
+    // Only the live angles play; stills stay paused on the current moment.
+    final live = _liveAngles;
+    for (final entry in _players.entries) {
+      if (_playing && live.contains(entry.key)) {
+        entry.value.play();
+      } else {
+        entry.value.pause();
+      }
+    }
+
+    final clockIndex = live.contains(_selected)
+        ? _selected
+        : _players.keys.where(live.contains).firstOrNull;
+    _setClock(_players[clockIndex] ??
         (_players.isEmpty ? null : _players.values.first));
     final durations = [
       for (final entry in _players.entries)
@@ -258,11 +424,44 @@ class _WatchScreenState extends State<WatchScreen> {
   Future<void> _selectAngle(int i) async {
     if (i == _selected) return;
     setState(() => _selected = i);
-    if (_bigScreen) {
+    if (_gridMode) {
       _setClock(_players[i] ?? _clockPlayer);
     } else {
       await _syncPlayers();
     }
+  }
+
+  Future<void> _changePage(int delta) async {
+    final next = _page + delta;
+    if (next < 0 || next >= _pageCount) return;
+    setState(() {
+      _page = next;
+      _focused = null;
+    });
+    await _syncPlayers();
+  }
+
+  /// Expands angle [i] in the grid, or with null goes back to the grid. The
+  /// other angles pause while one is expanded and catch up when it closes.
+  Future<void> _setFocus(int? i) async {
+    if (i == _focused) return;
+    final at = _clockAt;
+    setState(() {
+      _focused = i;
+      if (i != null) _selected = i;
+    });
+    await _seek(at);
+    if (!mounted) return;
+    final live = _liveAngles;
+    for (final entry in _players.entries) {
+      if (_playing && live.contains(entry.key)) {
+        entry.value.play();
+      } else {
+        entry.value.pause();
+      }
+    }
+    final clockIndex = live.contains(_selected) ? _selected : live.firstOrNull;
+    _setClock(_players[clockIndex] ?? _clockPlayer);
   }
 
   Future<void> _loadNotes(SessionRecording recording) async {
@@ -288,8 +487,14 @@ class _WatchScreenState extends State<WatchScreen> {
   }
 
   void _play() {
-    for (final p in _players.values) {
-      p.play();
+    if (_onTv) {
+      TvLink.instance.send(TvAction.play, {'atMs': _position.inMilliseconds});
+      setState(() => _playing = true);
+      return;
+    }
+    final live = _liveAngles;
+    for (final entry in _players.entries) {
+      if (live.contains(entry.key)) entry.value.play();
     }
     setState(() => _playing = true);
     _keepInLine?.cancel();
@@ -298,11 +503,18 @@ class _WatchScreenState extends State<WatchScreen> {
   }
 
   void _pause() {
+    if (_onTv) {
+      TvLink.instance.send(TvAction.pause, {'atMs': _position.inMilliseconds});
+      setState(() => _playing = false);
+      return;
+    }
     _keepInLine?.cancel();
     for (final p in _players.values) {
       p.pause();
     }
     setState(() => _playing = false);
+    // Stills catch up to where playback stopped.
+    _seek(_clockAt);
   }
 
   /// While several angles play (a big screen), moves any that has drifted
@@ -318,7 +530,7 @@ class _WatchScreenState extends State<WatchScreen> {
     }
     final at = _timelineAt(clockIndex, clock);
     for (final entry in _players.entries) {
-      if (entry.key == clockIndex) continue;
+      if (entry.key == clockIndex || !_liveAngles.contains(entry.key)) continue;
       final value = entry.value.value;
       if (!value.isInitialized || value.isBuffering) continue;
       final target = at + _trimOf(entry.key);
@@ -331,6 +543,11 @@ class _WatchScreenState extends State<WatchScreen> {
   Future<void> _seek(Duration to) async {
     final target =
         to < Duration.zero ? Duration.zero : (to > _duration ? _duration : to);
+    if (_onTv) {
+      TvLink.instance.send(TvAction.seek, {'atMs': target.inMilliseconds});
+      setState(() => _position = target);
+      return;
+    }
     await Future.wait([
       for (final entry in _players.entries)
         entry.value.seekTo(target + _trimOf(entry.key)),
@@ -338,17 +555,39 @@ class _WatchScreenState extends State<WatchScreen> {
     if (mounted) setState(() => _position = target);
   }
 
-  void _step(int delta) {
+  void _step(int delta) => _goTo(_index + delta);
+
+  void _goTo(int index) {
     final list = _videos?.recordings;
-    if (list == null) return;
-    final next = _index + delta;
-    if (next < 0 || next >= list.length) return;
-    _index = next;
+    if (list == null || index == _index) return;
+    if (index < 0 || index >= list.length) return;
+    _index = index;
     _openRecording();
+  }
+
+  void _openTake(int index) {
+    setState(() => _picking = false);
+    _index = index;
+    _openRecording();
+  }
+
+  Future<void> _backToList() async {
+    if (_onTv) TvLink.instance.send(TvAction.idle);
+    _keepInLine?.cancel();
+    await _closeAllPlayers();
+    if (!mounted) return;
+    setState(() {
+      _picking = true;
+      _playing = false;
+      _focused = null;
+    });
   }
 
   @override
   void dispose() {
+    TvLink.instance.removeListener(_onTvChanged);
+    _tvStates?.cancel();
+    if (_onTv) TvLink.instance.send(TvAction.idle);
     _keepInLine?.cancel();
     _closeAllPlayers();
     super.dispose();
@@ -356,8 +595,231 @@ class _WatchScreenState extends State<WatchScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Back closes an expanded angle, then returns from a recording to the
+    // list, before leaving the screen.
+    final playingFromList = _hasList && !_picking;
+    return PopScope(
+      canPop: _focused == null && !playingFromList,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_focused != null) {
+          _setFocus(null);
+        } else if (playingFromList) {
+          _backToList();
+        }
+      },
+      child: _picking ? _recordingList() : _screen(),
+    );
+  }
+
+  /// The session's recordings, one card each: its number, when it started
+  /// and how many angles it has.
+  Widget _recordingList() {
+    final team = TeamAccent.of(context);
+    final list = _videos?.recordings ?? const <SessionRecording>[];
+    return Scaffold(
+      backgroundColor: kBackground,
+      body: SafeArea(
+        child: Column(
+          children: [
+            _header(),
+            Expanded(
+              child: GridView.builder(
+                padding: const EdgeInsets.fromLTRB(21, 4, 21, 21),
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 420,
+                  mainAxisExtent: 84,
+                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 12,
+                ),
+                itemCount: list.length,
+                itemBuilder: (context, i) {
+                  final r = list[i];
+                  final angles = r.videos.where((v) => v.url != null).length;
+                  final at = DateTime.fromMillisecondsSinceEpoch(r.startedAtMs);
+                  return Material(
+                    color: kSurface,
+                    borderRadius: BorderRadius.circular(14),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () => _openTake(i),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 48,
+                              height: 48,
+                              decoration: BoxDecoration(
+                                color: team.fill,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Icon(Icons.play_arrow, color: team.ink, size: 28),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Recording ${r.number.toString().padLeft(3, '0')}',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '${_clockTime(at)} · $angles ${angles == 1 ? 'angle' : 'angles'}',
+                                    style: const TextStyle(color: kMuted, fontSize: 13),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Icon(Icons.chevron_right, color: kMuted),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// TV mode: the angles play on the TV, and this is the remote. Tap an
+  /// angle to show it on its own there; the timeline, comments and
+  /// play/skip work as usual.
+  Widget _remote(SessionRecording recording) {
+    final team = TeamAccent.of(context);
+    final angles = _tvAngles;
+    return Scaffold(
+      backgroundColor: kBackground,
+      body: SafeArea(
+        child: Column(
+          children: [
+            _header(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(21, 0, 21, 8),
+              child: Text(
+                recordingDisplayName(recording.startedAtMs, recording.number),
+                style: const TextStyle(color: kMuted, fontSize: 13),
+              ),
+            ),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(21, 0, 21, 8),
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: kSurface,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.tv, color: team.accent, size: 32),
+                        const SizedBox(width: 14),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Playing on your TV',
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.w700)),
+                              SizedBox(height: 2),
+                              Text('Tap an angle to show it on its own.',
+                                  style: TextStyle(color: kMuted)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (_tvFocused == null && _tvPageCount > 1)
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        IconButton(
+                          onPressed: _tvPage > 0
+                              ? () => TvLink.instance
+                                  .send(TvAction.page, {'page': _tvPage - 1})
+                              : null,
+                          tooltip: 'Previous angles',
+                          color: team.accent,
+                          icon: const Icon(Icons.chevron_left),
+                        ),
+                        Text('Page ${_tvPage + 1} of $_tvPageCount',
+                            style: const TextStyle(color: kMuted)),
+                        IconButton(
+                          onPressed: _tvPage < _tvPageCount - 1
+                              ? () => TvLink.instance
+                                  .send(TvAction.page, {'page': _tvPage + 1})
+                              : null,
+                          tooltip: 'More angles',
+                          color: team.accent,
+                          icon: const Icon(Icons.chevron_right),
+                        ),
+                      ],
+                    )
+                  else
+                    const SizedBox(height: 12),
+                  for (final (k, i) in angles.indexed)
+                    ListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                      leading: Icon(
+                        _tvFocused == k
+                            ? Icons.fullscreen_exit
+                            : Icons.videocam_outlined,
+                        color: _tvFocused == k ? team.accent : kMuted,
+                      ),
+                      title: Text(recording.videos[i].name,
+                          style: TextStyle(
+                              color: _tvFocused == k ? team.accent : Colors.white,
+                              fontWeight: _tvFocused == k
+                                  ? FontWeight.w700
+                                  : FontWeight.w500)),
+                      subtitle: _tvFocused == k
+                          ? const Text('On its own. Tap for every angle.',
+                              style: TextStyle(color: kMuted))
+                          : null,
+                      onTap: () => TvLink.instance.send(
+                          TvAction.focus, {'angle': _tvFocused == k ? -1 : k}),
+                    ),
+                ],
+              ),
+            ),
+            _liveComment(recording),
+            _timeline(),
+            _transport(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// "5:10 PM"
+  static String _clockTime(DateTime at) {
+    final hour = at.hour % 12 == 0 ? 12 : at.hour % 12;
+    final minute = at.minute.toString().padLeft(2, '0');
+    return '$hour:$minute ${at.hour < 12 ? 'AM' : 'PM'}';
+  }
+
+  Widget _screen() {
     final recording = _recording;
-    final count = _videos?.recordings.length ?? 0;
+    if (_onTv && recording != null) return _remote(recording);
+
+    // Sideways on a phone: the angles take the screen, with the controls in
+    // one slim bar, since a tall header and footer would leave them no room.
+    if (_landscape && !_bigScreen) return _sidewaysLayout(recording);
 
     return Scaffold(
       backgroundColor: kBackground,
@@ -368,23 +830,9 @@ class _WatchScreenState extends State<WatchScreen> {
             if (recording != null)
               Padding(
                 padding: const EdgeInsets.fromLTRB(21, 0, 21, 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        recordingDisplayName(
-                          recording.startedAtMs,
-                          recording.number,
-                        ),
-                        style: const TextStyle(color: kMuted, fontSize: 13),
-                      ),
-                    ),
-                    if (count > 1)
-                      Text(
-                        '${_index + 1} / $count',
-                        style: const TextStyle(color: kMuted, fontSize: 13),
-                      ),
-                  ],
+                child: Text(
+                  recordingDisplayName(recording.startedAtMs, recording.number),
+                  style: const TextStyle(color: kMuted, fontSize: 13),
                 ),
               ),
             Expanded(child: _body()),
@@ -392,8 +840,9 @@ class _WatchScreenState extends State<WatchScreen> {
               _liveComment(recording),
               _timeline(),
             ],
-            if (recording != null && !_bigScreen && recording.videos.length > 1)
-              _cameraButtons(recording),
+            if (recording != null && !_gridMode && _uploadedAngles.length > 1)
+              _stillStrip(recording),
+            if (_gridMode && _pageCount > 1 && _focused == null) _pageBar(),
             _transport(),
           ],
         ),
@@ -437,7 +886,7 @@ class _WatchScreenState extends State<WatchScreen> {
                     )
                   : const Icon(Icons.download, size: 24),
             ),
-          if (_recording != null)
+          if (_recording != null && !_picking)
             IconButton(
               onPressed: _showAddComment,
               tooltip: 'Add a comment',
@@ -591,14 +1040,9 @@ class _WatchScreenState extends State<WatchScreen> {
       );
     }
 
-    final panel = BoxDecoration(
-      color: team.fill,
-      borderRadius: BorderRadius.circular(6),
-    );
-
-    if (!_bigScreen) {
-      // One camera, as large as the screen allows, with the panel shaped to
-      // the video instead of filling a tall phone screen with grey.
+    if (!_gridMode) {
+      // One camera, as large as the screen allows, edge to edge in its own
+      // shape (the selected still in the strip below marks which one it is).
       final player = _players[_selected];
       final ratio = player != null && player.value.isInitialized
           ? player.value.aspectRatio
@@ -608,97 +1052,220 @@ class _WatchScreenState extends State<WatchScreen> {
         child: Center(
           child: AspectRatio(
             aspectRatio: ratio,
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              decoration: panel,
-              child: _AngleTile(
-                video: recording.videos[_selected],
-                player: player,
-                fit: BoxFit.contain,
-              ),
+            child: _AngleTile(
+              video: recording.videos[_selected],
+              player: player,
+              fit: BoxFit.contain,
             ),
           ),
         ),
       );
     }
 
+    // The best-fit grid for this page: each angle in its own shape, as
+    // large as the screen allows, rows centered (like the web). Tapping one
+    // expands it to fill the space; tapping it again goes back.
+    final focused = _focused;
+    final angles = focused != null ? [focused] : _pageAngles;
+    final aspect = commonAspect([
+      for (final i in angles)
+        if (_players[i]?.value.isInitialized ?? false)
+          _players[i]!.value.aspectRatio
+    ]);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(21, 0, 21, 12),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(14),
-        decoration: panel,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // As many columns as keep each angle a sensible size, like the
-            // desktop's grid.
-            final n = recording.videos.length;
-            final columns = n <= 1 ? 1 : (n <= 4 ? 2 : 3);
-            final rows = (n / columns).ceil();
-            const gap = 12.0;
-            final width =
-                (constraints.maxWidth - gap * (columns - 1)) / columns;
-            final height = (constraints.maxHeight - gap * (rows - 1)) / rows;
-            return GridView.builder(
-              physics: const NeverScrollableScrollPhysics(),
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: columns,
-                mainAxisSpacing: gap,
-                crossAxisSpacing: gap,
-                childAspectRatio: width / height,
-              ),
-              itemCount: n,
-              itemBuilder: (context, i) => _AngleTile(
-                video: recording.videos[i],
-                player: _players[i],
-                fit: BoxFit.contain,
-              ),
-            );
-          },
-        ),
+      padding: _landscape && !_bigScreen
+          ? const EdgeInsets.all(4)
+          : const EdgeInsets.fromLTRB(21, 0, 21, 12),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final rects = gridLayout(constraints.biggest, angles.length, aspect);
+          return Stack(
+            children: [
+              for (var k = 0; k < rects.length; k++)
+                Positioned.fromRect(
+                  rect: rects[k],
+                  child: Semantics(
+                    button: true,
+                    label: focused != null
+                        ? 'Back to all angles'
+                        : 'Expand ${recording.videos[angles[k]].name}',
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () =>
+                          _setFocus(focused != null ? null : angles[k]),
+                      child: _AngleTile(
+                        video: recording.videos[angles[k]],
+                        player: _players[angles[k]],
+                        fit: BoxFit.contain,
+                      ),
+                    ),
+                  ),
+                ),
+              if (focused != null && rects.isNotEmpty)
+                Positioned(
+                  top: rects.first.top + 6,
+                  right: constraints.maxWidth - rects.first.right + 6,
+                  child: const IgnorePointer(
+                    child: Icon(Icons.fullscreen_exit,
+                        color: Colors.white,
+                        shadows: [Shadow(blurRadius: 6, color: Colors.black)]),
+                  ),
+                ),
+            ],
+          );
+        },
       ),
     );
   }
 
-  /// One button per camera; the selected one is filled with the team color.
-  Widget _cameraButtons(SessionRecording recording) {
+  /// Upright: the other angles under the big one, as stills of the current
+  /// moment (or name cards past the first few). Tap one to make it the big
+  /// angle.
+  Widget _stillStrip(SessionRecording recording) {
     final team = TeamAccent.of(context);
+    final angles = _uploadedAngles;
     return SizedBox(
-      height: 48,
+      height: 86,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 21),
-        itemCount: recording.videos.length,
+        padding: const EdgeInsets.fromLTRB(21, 4, 21, 6),
+        itemCount: angles.length,
         separatorBuilder: (_, __) => const SizedBox(width: 8),
-        itemBuilder: (context, i) {
-          final video = recording.videos[i];
+        itemBuilder: (context, k) {
+          final i = angles[k];
           final selected = i == _selected;
-          final uploaded = video.url != null;
-          return Center(
-            child: Semantics(
-              selected: selected,
-              child: ChoiceChip(
-                label: Text(
-                    uploaded ? video.name : '${video.name} (not uploaded)'),
-                selected: selected,
-                onSelected: uploaded ? (_) => _selectAngle(i) : null,
-                showCheckmark: false,
-                avatar: Icon(
-                  Icons.videocam,
-                  size: 18,
-                  color: selected ? team.ink : Colors.white70,
+          return Semantics(
+            button: true,
+            selected: selected,
+            label: 'Show ${recording.videos[i].name}',
+            child: GestureDetector(
+              onTap: () => _selectAngle(i),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                width: 76 * 16 / 9,
+                padding: const EdgeInsets.all(2),
+                decoration: BoxDecoration(
+                  color: selected ? team.fill : Colors.transparent,
+                  borderRadius: BorderRadius.circular(6),
                 ),
-                selectedColor: team.fill,
-                backgroundColor: const Color(0xFF262626),
-                labelStyle: TextStyle(
-                  color: selected ? team.ink : Colors.white,
-                  fontWeight: FontWeight.w600,
+                child: _AngleTile(
+                  video: recording.videos[i],
+                  player: _players[i],
+                  fit: BoxFit.cover,
+                  missingLabel: 'Tap to show',
                 ),
-                side: BorderSide.none,
               ),
             ),
           );
         },
+      ),
+    );
+  }
+
+  /// Grid pages: which page of angles is showing, with arrows.
+  Widget _pageBar() {
+    final team = TeamAccent.of(context);
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        IconButton(
+          onPressed: _page > 0 ? () => _changePage(-1) : null,
+          tooltip: 'Previous angles',
+          color: team.accent,
+          icon: const Icon(Icons.chevron_left),
+        ),
+        Text('${_page + 1} / $_pageCount',
+            style: const TextStyle(color: kMuted)),
+        IconButton(
+          onPressed: _page < _pageCount - 1 ? () => _changePage(1) : null,
+          tooltip: 'More angles',
+          color: team.accent,
+          icon: const Icon(Icons.chevron_right),
+        ),
+      ],
+    );
+  }
+
+  /// Sideways on a phone: the grid fills the screen; back, the page and the
+  /// comment pop-up sit over it, and one slim bar holds the controls.
+  Widget _sidewaysLayout(SessionRecording? recording) {
+    final team = TeamAccent.of(context);
+    final enabled = _ready;
+    return Scaffold(
+      backgroundColor: kBackground,
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: Stack(
+                children: [
+                  Positioned.fill(child: _body()),
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    child: IconButton(
+                      onPressed: () => Navigator.of(context).maybePop(),
+                      icon: const Icon(Icons.arrow_back,
+                          color: Colors.white,
+                          shadows: [Shadow(blurRadius: 6, color: Colors.black)]),
+                      tooltip: _focused != null ? 'Back to all angles' : 'Back',
+                    ),
+                  ),
+                  if (_pageCount > 1 && _focused == null)
+                    Positioned(
+                      top: 0,
+                      right: 0,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: _pageBar(),
+                      ),
+                    ),
+                  if (recording != null)
+                    Positioned(
+                      left: 40,
+                      right: 40,
+                      bottom: 4,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: _liveComment(recording),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 0, 4, 2),
+              child: Row(
+                children: [
+                  IconButton(
+                    onPressed: enabled ? (_playing ? _pause : _play) : null,
+                    tooltip: _playing ? 'Pause' : 'Play',
+                    color: team.accent,
+                    icon: Icon(_playing ? Icons.pause : Icons.play_arrow),
+                  ),
+                  Expanded(child: _timeline()),
+                  Text(
+                    '${formatClock(_position)} / ${formatClock(_duration)}',
+                    style: TextStyle(color: team.accent, fontSize: 13),
+                  ),
+                  if (recording != null)
+                    IconButton(
+                      onPressed: _showAddComment,
+                      tooltip: 'Add a comment',
+                      color: Colors.white,
+                      icon: const Icon(Icons.add_comment_outlined),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -881,12 +1448,20 @@ class _WatchScreenState extends State<WatchScreen> {
 /// One angle: the player, or a grey placeholder when that member has not
 /// uploaded, with the member's name along the bottom.
 class _AngleTile extends StatelessWidget {
-  const _AngleTile(
-      {required this.video, required this.player, this.fit = BoxFit.cover});
+  const _AngleTile({
+    required this.video,
+    required this.player,
+    this.fit = BoxFit.cover,
+    this.missingLabel = 'Not uploaded',
+  });
 
   final AngleVideo video;
   final VideoPlayerController? player;
   final BoxFit fit;
+
+  /// Shown when there's no player: not uploaded, or (in the stills strip)
+  /// an angle past the first few that only loads when picked.
+  final String missingLabel;
 
   static const _panel = Color(0xFF49454F);
 
@@ -910,10 +1485,10 @@ class _AngleTile extends StatelessWidget {
                 ),
               )
             else
-              const Center(
+              Center(
                 child: Text(
-                  'Not uploaded',
-                  style: TextStyle(color: Color(0xFFCFCBD6), fontSize: 12),
+                  video.url == null ? 'Not uploaded' : missingLabel,
+                  style: const TextStyle(color: Color(0xFFCFCBD6), fontSize: 12),
                 ),
               ),
             Positioned(
@@ -938,9 +1513,6 @@ class _AngleTile extends StatelessWidget {
   }
 }
 
-/// The comments drawer from the design, as a bottom sheet: each note shows
-/// the moment it refers to and jumps the players there when tapped. The box
-/// at the bottom adds a note at [at], the paused position.
 /// Adds one comment at [at]. There's no list: comments show as dots on the
 /// timeline and pop up as playback reaches them.
 class _AddCommentSheet extends StatefulWidget {

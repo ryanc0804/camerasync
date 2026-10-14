@@ -7,6 +7,7 @@ import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
 import 'screens/verify_email_screen.dart';
 import 'team_accent.dart';
+import 'tv/tv_screen.dart';
 
 void main() {
   // restoreSession reads the saved cookie through a plugin, which needs the
@@ -16,6 +17,14 @@ void main() {
   // Fire-and-forget: the UI shows a spinner while `loading` is true.
   auth.restoreSession();
   runApp(CameraSyncApp(auth: auth));
+}
+
+/// The TV screen's own entry point: the external_display plugin starts a
+/// second Flutter engine here when a TV is plugged in (see TvLink).
+@pragma('vm:entry-point')
+void externalDisplayMain() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const TvApp());
 }
 
 class CameraSyncApp extends StatelessWidget {

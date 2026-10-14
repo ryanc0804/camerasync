@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'camera_screen.dart';
+import 'controller_screen.dart';
 
 import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
@@ -12,7 +13,8 @@ import '../socket/sync_socket.dart';
 /// access). Connects the authenticated socket, joins the session room, and
 /// goes straight to the camera, with the session's name and how many devices
 /// are connected across the top. CameraScreen follows the synchronized
-/// start/stop.
+/// start/stop. A host or admin can turn this phone's camera off and run the
+/// session from ControllerScreen instead.
 class SessionScreen extends StatefulWidget {
   const SessionScreen({
     super.key,
@@ -41,6 +43,13 @@ class _SessionScreenState extends State<SessionScreen> {
   List<SessionMember> _members = [];
   bool _canControl = false;
 
+  /// Running the session without recording on this phone.
+  bool _controllerOnly = false;
+
+  /// A take is scheduled or running; the camera can't be switched mid-take.
+  bool _takeRunning = false;
+  bool _switching = false;
+
   @override
   void initState() {
     super.initState();
@@ -57,6 +66,12 @@ class _SessionScreenState extends State<SessionScreen> {
     _socket = socket;
 
     _subs.add(socket.members.listen((m) => setState(() => _members = m)));
+    _subs.add(socket.recordingStart.listen((_) {
+      if (mounted) setState(() => _takeRunning = true);
+    }));
+    _subs.add(socket.recordingStop.listen((_) {
+      if (mounted) setState(() => _takeRunning = false);
+    }));
     _subs.add(socket.errors.listen((message) {
       if (mounted) setState(() => _error = message);
     }));
@@ -83,6 +98,23 @@ class _SessionScreenState extends State<SessionScreen> {
         _initialized = true;
         _error = e.message;
       });
+    }
+  }
+
+  Future<void> _setControllerOnly(bool controllerOnly) async {
+    final socket = _socket;
+    if (socket == null || _switching || _takeRunning) return;
+    setState(() => _switching = true);
+    final result =
+        await socket.joinSession(widget.sessionId, camera: !controllerOnly);
+    if (!mounted) return;
+    setState(() {
+      _switching = false;
+      if (result.ok) _controllerOnly = controllerOnly;
+    });
+    if (!result.ok) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(result.error ?? "Couldn't switch the camera.")));
     }
   }
 
@@ -116,18 +148,35 @@ class _SessionScreenState extends State<SessionScreen> {
     final socket = _socket!;
     final joined = _error == null;
 
+    final topBar = _SessionTopBar(
+      name: widget.sessionName ?? 'Session ${widget.sessionId}',
+      code: widget.sessionId,
+      members: _members,
+      clockSynced: socket.clockSynced,
+      // Hosts and admins can turn their camera off and just run the take.
+      cameraOn: _canControl ? !_controllerOnly : null,
+      onToggleCamera: _switching || _takeRunning
+          ? null
+          : () => _setControllerOnly(!_controllerOnly),
+    );
+
+    if (joined && _controllerOnly) {
+      return ControllerScreen(
+        socket: socket,
+        sessionId: widget.sessionId,
+        members: _members,
+        topBar: topBar,
+        onUseCamera: () => _setControllerOnly(false),
+      );
+    }
+
     if (joined && _permissionsGranted) {
       return CameraScreen(
         socket: socket,
         sessionId: widget.sessionId,
         recordings: RecordingsApi(widget.auth.api),
         canControl: _canControl,
-        topBar: _SessionTopBar(
-          name: widget.sessionName ?? 'Session ${widget.sessionId}',
-          code: widget.sessionId,
-          connected: _members.length,
-          clockSynced: socket.clockSynced,
-        ),
+        topBar: topBar,
       );
     }
 
@@ -154,24 +203,35 @@ class _SessionScreenState extends State<SessionScreen> {
 
 /// The bar across the top of a session's camera: back, the session's name,
 /// and how many devices are connected (a hint when the clock isn't synced).
+/// Hosts and admins also get a camera on/off switch.
 class _SessionTopBar extends StatelessWidget {
   const _SessionTopBar({
     required this.name,
     required this.code,
-    required this.connected,
+    required this.members,
     required this.clockSynced,
+    this.cameraOn,
+    this.onToggleCamera,
   });
 
   final String name;
 
   /// The session's code, so others can join with it.
   final String code;
-  final int connected;
+  final List<SessionMember> members;
   final bool clockSynced;
+
+  /// Whether this phone records; null hides the switch (not a host).
+  final bool? cameraOn;
+
+  /// Null while the switch can't be used (mid-take).
+  final VoidCallback? onToggleCamera;
 
   @override
   Widget build(BuildContext context) {
     const shadow = [Shadow(blurRadius: 6, color: Colors.black)];
+    final cameras = members.where((m) => m.camera).length;
+    final controlling = members.length - cameras;
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 4, 12, 4),
       child: Row(
@@ -221,12 +281,26 @@ class _SessionTopBar extends StatelessWidget {
                 const Icon(Icons.circle, size: 9, color: Color(0xFF4ADE80)),
                 const SizedBox(width: 6),
                 Text(
-                  '$connected connected',
+                  controlling == 0
+                      ? '${members.length} connected'
+                      : '$cameras recording · $controlling controlling',
                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
                 ),
               ],
             ),
           ),
+          if (cameraOn != null)
+            IconButton(
+              onPressed: onToggleCamera,
+              tooltip: cameraOn!
+                  ? 'Control only (turn this camera off)'
+                  : "Use this phone's camera",
+              icon: Icon(
+                cameraOn! ? Icons.videocam : Icons.videocam_off,
+                color: cameraOn! ? Colors.white : Colors.orangeAccent,
+                shadows: shadow,
+              ),
+            ),
         ],
       ),
     );

@@ -7,13 +7,22 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'events.dart';
 
 /// A user connected to the live session room, as sent by the server's
-/// `session:members` payload (the `publicUser` shape: id, email, name).
+/// `session:members` payload (the `publicUser` shape: id, email, name, plus
+/// whether they're recording).
 class SessionMember {
-  const SessionMember({required this.id, required this.email, this.name});
+  const SessionMember({
+    required this.id,
+    required this.email,
+    this.name,
+    this.camera = true,
+  });
 
   final int id;
   final String email;
   final String? name;
+
+  /// False for a host or admin running the session without recording.
+  final bool camera;
 
   String get displayName =>
       (name != null && name!.isNotEmpty) ? name! : email;
@@ -22,6 +31,7 @@ class SessionMember {
         id: (json['id'] as num).toInt(),
         email: (json['email'] ?? '').toString(),
         name: json['name'] as String?,
+        camera: json['camera'] != false,
       );
 }
 
@@ -265,8 +275,10 @@ class SyncSocket {
 
   /// Joins the session's socket room. The server requires an ack callback and
   /// replies `{ok, error?, members?, recording?, session?}`; it identifies the
-  /// user from the handshake cookie, so no device name is sent.
-  Future<JoinResult> joinSession(String sessionId) {
+  /// user from the handshake cookie, so no device name is sent. With
+  /// [camera] false this phone runs the session without recording; joining
+  /// again switches it.
+  Future<JoinResult> joinSession(String sessionId, {bool camera = true}) {
     final socket = _socket;
     if (socket == null || !socket.connected) {
       return Future.value(
@@ -278,7 +290,7 @@ class SyncSocket {
 
     socket.emitWithAck(
       Events.joinSession,
-      {'sessionId': sessionId},
+      {'sessionId': sessionId, 'camera': camera},
       ack: (reply) {
         if (completer.isCompleted) return;
         if (reply is! Map || reply['ok'] != true) {

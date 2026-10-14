@@ -10,9 +10,9 @@ import '../auth/auth_service.dart';
 import '../config.dart';
 import '../team_accent.dart';
 import '../theme.dart';
+import '../widgets/auto_refresh.dart';
 import '../widgets/empty_state.dart';
 import 'notifications_screen.dart';
-import 'recordings_screen.dart';
 import 'session_screen.dart';
 import 'watch_screen.dart';
 
@@ -22,12 +22,24 @@ import 'watch_screen.dart';
 /// Recordings and notifications have no API yet, so those cards render empty
 /// states until the endpoints exist.
 class HomeTab extends StatefulWidget {
-  const HomeTab({super.key, required this.auth, required this.onSwitchTab});
+  const HomeTab({
+    super.key,
+    required this.auth,
+    required this.onOpenSessions,
+    required this.onOpenSettings,
+    required this.onOpenGroups,
+  });
 
   final AuthService auth;
 
   /// Lets the quick-action buttons jump to another tab in the shell.
-  final ValueChanged<int> onSwitchTab;
+  /// Opens the Sessions tab, on Live & upcoming or on Past.
+  final void Function({required bool upcoming}) onOpenSessions;
+
+  final VoidCallback onOpenSettings;
+
+  /// Switches to the Groups tab.
+  final VoidCallback onOpenGroups;
 
   @override
   State<HomeTab> createState() => _HomeTabState();
@@ -42,11 +54,9 @@ class _HomeTabState extends State<HomeTab> {
   List<RecordingSession> _sessions = [];
   List<Group>? _myGroups;
   int? get _groupCount => _myGroups?.length;
-  int? _videoCount;
   String? _joiningId;
   int _page = 0;
   List<AppNotification>? _notifications;
-  Timer? _notificationTimer;
 
   /// Home shows the newest few; View all has the rest.
   static const _notificationsOnHome = 3;
@@ -55,13 +65,15 @@ class _HomeTabState extends State<HomeTab> {
   void initState() {
     super.initState();
     _load();
-    _notificationTimer =
-        Timer.periodic(const Duration(seconds: 30), (_) => _loadNotifications());
+    // A practice that starts shows up in the banner within seconds.
+    _refresher = AutoRefresher(const Duration(seconds: 10), _load);
   }
+
+  late final AutoRefresher _refresher;
 
   @override
   void dispose() {
-    _notificationTimer?.cancel();
+    _refresher.dispose();
     super.dispose();
   }
 
@@ -86,7 +98,7 @@ class _HomeTabState extends State<HomeTab> {
       MaterialPageRoute(
         builder: (_) => NotificationsScreen(
           auth: widget.auth,
-          onOpenRecord: () => widget.onSwitchTab(1),
+          onOpenRecord: () => widget.onOpenSessions(upcoming: true),
         ),
       ),
     );
@@ -106,15 +118,14 @@ class _HomeTabState extends State<HomeTab> {
           _myGroups = await _groups.getMyGroups();
         } catch (_) {}
       }(),
-      () async {
-        try {
-          _videoCount = await _recordings.getMyVideoCount();
-        } catch (_) {}
-      }(),
       _loadNotifications(),
     ]);
     if (mounted) setState(() {});
   }
+
+  /// Takes across the user's sessions.
+  int get _recordingCount =>
+      _sessions.fold(0, (n, s) => n + (s.recordingCount ?? 0));
 
   String get _greeting {
     final hour = DateTime.now().hour;
@@ -130,25 +141,16 @@ class _HomeTabState extends State<HomeTab> {
 
   /// Newest completed sessions, for the Recent Recordings panel.
   List<RecordingSession> get _recentRecordings {
-    final done = _sessions.where((s) => s.isComplete).toList()
+    // Finished sessions with something to watch.
+    final done = _sessions
+        .where((s) => s.isComplete && s.recordingCount != 0)
+        .toList()
       ..sort((a, b) {
         final at = a.scheduledAt?.millisecondsSinceEpoch ?? 0;
         final bt = b.scheduledAt?.millisecondsSinceEpoch ?? 0;
         return bt.compareTo(at);
       });
     return done.take(10).toList();
-  }
-
-  void _openRecordings({Group? group}) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => RecordingsScreen(
-          auth: widget.auth,
-          groupId: group?.id,
-          title: group?.name,
-        ),
-      ),
-    );
   }
 
   String? _groupName(String? id) {
@@ -213,13 +215,25 @@ class _HomeTabState extends State<HomeTab> {
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 110),
         children: [
-          Text(
-            '$_greeting, $_firstName',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 26,
-              fontWeight: FontWeight.w800,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '$_greeting, $_firstName',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              IconButton(
+                onPressed: widget.onOpenSettings,
+                tooltip: 'Settings',
+                color: Colors.white,
+                icon: const Icon(Icons.settings_outlined, size: 26),
+              ),
+            ],
           ),
           const SizedBox(height: 4),
           const Text(
@@ -264,56 +278,42 @@ class _HomeTabState extends State<HomeTab> {
             const SizedBox(height: 14),
           ],
 
-          Row(
-            children: [
-              Expanded(
-                child: _ActionButton(
-                  label: 'Watch a Recording',
-                  onTap: _openRecordings,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _ActionButton(
-                  label: 'Record a practice',
-                  // Sessions tab (index 1), where recording starts.
-                  onTap: () => widget.onSwitchTab(1),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-
           _SurfaceCard(
             child: Row(
               children: [
                 _Stat(
                   value: _groupCount?.toString() ?? '—',
                   label: 'Groups',
+                  onTap: widget.onOpenGroups,
                 ),
-                _Stat(value: '${_sessions.length}', label: 'sessions'),
-                _Stat(value: _videoCount?.toString() ?? '—', label: 'videos'),
+                _Stat(
+                  value: '${_sessions.length}',
+                  label: 'sessions',
+                  onTap: () => widget.onOpenSessions(upcoming: false),
+                ),
+                _Stat(value: '$_recordingCount', label: 'recordings'),
               ],
             ),
           ),
           const SizedBox(height: 18),
 
           _HeaderRow(
-            title: 'Recent Recordings',
-            onViewAll:
-                _recentRecordings.isEmpty ? null : () => _openRecordings(),
+            title: 'Recent Sessions',
+            onViewAll: _recentRecordings.isEmpty
+                ? null
+                : () => widget.onOpenSessions(upcoming: false),
           ),
           const SizedBox(height: 8),
           if (_recentRecordings.isEmpty)
             EmptyState(
-              title: 'No recordings yet',
+              title: 'No sessions yet',
               message: _groupCount == 0
                   ? 'Join a group first. Recordings from its sessions will '
                       'show up here.'
                   : 'Join a session and record. Your clips will show up here '
                       'once they upload.',
               actionLabel: _groupCount == 0 ? null : 'Find a session',
-              onAction: () => widget.onSwitchTab(1),
+              onAction: () => widget.onOpenSessions(upcoming: true),
             )
           else
             // A sideways row, like the design; View all opens the full list.
@@ -369,7 +369,7 @@ class _HomeTabState extends State<HomeTab> {
                             context,
                             widget.auth,
                             n,
-                            onOpenRecord: () => widget.onSwitchTab(1),
+                            onOpenRecord: () => widget.onOpenSessions(upcoming: true),
                           ),
                         ),
                     ],
@@ -500,33 +500,6 @@ class _SessionBanner extends StatelessWidget {
   }
 }
 
-class _ActionButton extends StatelessWidget {
-  const _ActionButton({required this.label, required this.onTap});
-
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final team = TeamAccent.of(context);
-    return FilledButton(
-      onPressed: onTap,
-      style: FilledButton.styleFrom(
-        backgroundColor: team.fill,
-        foregroundColor: team.ink,
-        shape: const StadiumBorder(),
-        padding: const EdgeInsets.symmetric(vertical: 12),
-      ),
-      child: Text(
-        label,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-      ),
-    );
-  }
-}
-
 class _SectionHeader extends StatelessWidget {
   const _SectionHeader(this.title);
 
@@ -564,28 +537,46 @@ class _SurfaceCard extends StatelessWidget {
   }
 }
 
+/// One count on the dashboard. Groups and sessions open their tabs;
+/// recordings live inside sessions, so that one has nowhere of its own.
 class _Stat extends StatelessWidget {
-  const _Stat({required this.value, required this.label});
+  const _Stat({required this.value, required this.label, this.onTap});
 
   final String value;
   final String label;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-            ),
+    final column = Column(
+      children: [
+        Text(
+          value,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 22,
+            fontWeight: FontWeight.w800,
           ),
-          Text(label, style: const TextStyle(color: kMuted, fontSize: 12)),
-        ],
-      ),
+        ),
+        Text(label, style: const TextStyle(color: kMuted, fontSize: 12)),
+      ],
+    );
+    return Expanded(
+      child: onTap == null
+          ? column
+          : Semantics(
+              button: true,
+              label: '$value $label',
+              excludeSemantics: true,
+              child: InkWell(
+                onTap: onTap,
+                borderRadius: BorderRadius.circular(12),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: column,
+                ),
+              ),
+            ),
     );
   }
 }
