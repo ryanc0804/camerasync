@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
+import { PasswordInput } from "../components/PasswordInput.jsx";
 
 // This release is UCF-only (SCRUM-43).
 
@@ -114,9 +115,8 @@ export function AuthScreen() {
 
             <label style={styles.label}>
               Password
-              <input
+              <PasswordInput
                 className="cs-input"
-                type="password"
                 autoComplete={isSignup ? "new-password" : "current-password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -127,9 +127,8 @@ export function AuthScreen() {
             {isSignup && (
               <label style={styles.label}>
                 Confirm password
-                <input
+                <PasswordInput
                   className="cs-input"
-                  type="password"
                   autoComplete="new-password"
                   value={confirm}
                   onChange={(e) => setConfirm(e.target.value)}

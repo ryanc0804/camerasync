@@ -6,6 +6,7 @@ import {
   resetPassword,
   verifyResetCode,
 } from "../api/auth.js";
+import { PasswordInput } from "../components/PasswordInput.jsx";
 
 // In-app password reset, one step per Figma desktop frame (246:457, 258:432,
 // 258:451): request a 6-digit code by email, verify it, choose a new password.
@@ -170,9 +171,8 @@ export function ForgotPasswordScreen() {
           <form onSubmit={reset} style={styles.form} noValidate>
             <label style={styles.label}>
               New Password
-              <input
+              <PasswordInput
                 className="fp-input"
-                type="password"
                 autoComplete="new-password"
                 autoFocus
                 value={password}
@@ -182,9 +182,8 @@ export function ForgotPasswordScreen() {
             </label>
             <label style={styles.label}>
               Confirm Password
-              <input
+              <PasswordInput
                 className="fp-input"
-                type="password"
                 autoComplete="new-password"
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}

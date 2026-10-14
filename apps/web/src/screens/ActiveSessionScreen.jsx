@@ -10,6 +10,7 @@ import {
   saveRecordingDetails,
   uploadSessionVideo,
 } from "../api/recordings.js";
+import { getGroups } from "../api/groups.js";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { LocalMediaPreview } from "../components/LocalMediaPreview.jsx";
 import {
@@ -49,6 +50,16 @@ export function ActiveSessionScreen() {
   const { user } = useAuth();
   const [session, setSession] = useState(null);
   const [mediaReady, setMediaReady] = useState(false);
+  // This device starts and stops the other cameras without recording itself.
+  const [controllerOnly, setControllerOnly] = useState(false);
+  const controllerOnlyRef = useRef(false);
+  controllerOnlyRef.current = controllerOnly;
+  // Whether this user may start and stop takes (the session's creator, or an
+  // admin or the owner of its group), known before joining so the camera
+  // prompt can offer "Control only".
+  const [mayControl, setMayControl] = useState(false);
+  // In the room: with the camera on, or as a controller.
+  const ready = mediaReady || controllerOnly;
   const [members, setMembers] = useState([]);
   const [socketStatus, setSocketStatus] = useState("Waiting for media");
   const [syncStatus, setSyncStatus] = useState("Syncing");
@@ -82,8 +93,8 @@ export function ActiveSessionScreen() {
   useEffect(() => {
     let cancelled = false;
 
-    getSessions()
-      .then((sessions) => {
+    Promise.all([getSessions(), getGroups().catch(() => [])])
+      .then(([sessions, groups]) => {
         const currentSession = sessions.find(
           (item) => item.id === sessionId
         );
@@ -95,7 +106,13 @@ export function ActiveSessionScreen() {
           throw new Error("Join this session from the Record page first.");
         }
 
-        if (!cancelled) setSession(currentSession);
+        if (!cancelled) {
+          setSession(currentSession);
+          setMayControl(
+            Number(currentSession.createdBy) === Number(user.id) ||
+            groups.some((group) => group.id === currentSession.groupId && group.role === "admin")
+          );
+        }
       })
       .catch((err) => {
         if (!cancelled) setError(err.message);
@@ -108,7 +125,7 @@ export function ActiveSessionScreen() {
 
   // connects the socket and clock after media is ready
   useEffect(() => {
-    if (!session || !mediaReady) return undefined;
+    if (!session || !ready) return undefined;
 
     let socket;
     let clock;
@@ -198,6 +215,17 @@ export function ActiveSessionScreen() {
       setRecordingStatus("waiting");
       setRecordingMessage(`Recording starts in ${Math.round(delay)} ms`);
 
+      if (controllerOnlyRef.current) {
+        recordingTimerRef.current = window.setTimeout(() => {
+          recordingTimerRef.current = null;
+          setRecordingStatus("recording");
+          setRecordingMessage(
+            `${recordingDisplayName(command.startAtEpochMs, command.recordingNumber)} recording on the cameras`
+          );
+        }, delay);
+        return;
+      }
+
       recordingTimerRef.current = window.setTimeout(() => {
         recordingTimerRef.current = null;
 
@@ -259,6 +287,13 @@ export function ActiveSessionScreen() {
         };
       }
 
+      if (controllerOnlyRef.current) {
+        recordingInfoRef.current = null;
+        setRecordingStatus("idle");
+        setRecordingMessage("Take stopped. The cameras are saving and uploading it.");
+        return;
+      }
+
       const recorder = recorderRef.current;
       if (recorder && recorder.state !== "inactive") {
         setRecordingStatus("saving");
@@ -295,7 +330,7 @@ export function ActiveSessionScreen() {
         clock.on("error", () => setSyncStatus("Retrying"));
 
         socket.on("connect", () => {
-          socket.emit("session:join", { sessionId }, (reply) => {
+          socket.emit("session:join", { sessionId, camera: !controllerOnlyRef.current }, (reply) => {
             if (!reply?.ok) {
               setSocketStatus("Disconnected");
               setError(reply?.error || "Unable to join the live session.");
@@ -321,7 +356,7 @@ export function ActiveSessionScreen() {
         socket.on("recording:started", beginRecording);
         socket.on("recording:stopped", finishRecording);
         socket.on("session:close", () => {
-          navigate("/record", { replace: true });
+          navigate("/watch", { replace: true });
         });
       })
       .catch((err) => {
@@ -348,7 +383,23 @@ export function ActiveSessionScreen() {
       if (socketRef.current === socket) socketRef.current = null;
       if (clockRef.current === clock) clockRef.current = null;
     };
-  }, [mediaReady, navigate, session, sessionId, user.id]);
+  }, [ready, navigate, session, sessionId, user.id]);
+
+  // Switching between recording and controlling after joining: join again
+  // with the new choice (the server updates who's a camera). Before the
+  // socket is up, the first join already carries it.
+  const modeChanged = useRef(false);
+  useEffect(() => {
+    if (!modeChanged.current) {
+      modeChanged.current = true;
+      return;
+    }
+    const socket = socketRef.current;
+    if (!socket?.connected) return;
+    socket.emit("session:join", { sessionId, camera: !controllerOnly }, (reply) => {
+      if (reply?.ok) setMembers(reply.members);
+    });
+  }, [controllerOnly, sessionId]);
 
   const isCreator =
     session && Number(session.createdBy) === Number(user?.id);
@@ -413,7 +464,7 @@ export function ActiveSessionScreen() {
 
     try {
       await leaveSession(sessionId);
-      navigate("/record", { replace: true });
+      navigate("/watch", { replace: true });
     } catch (err) {
       setError(err.message);
       setLeaving(false);
@@ -426,7 +477,7 @@ export function ActiveSessionScreen() {
 
     try {
       await endSession(sessionId);
-      navigate("/record", { replace: true });
+      navigate("/watch", { replace: true });
     } catch (err) {
       setError(err.message);
       setLeaving(false);
@@ -442,7 +493,7 @@ export function ActiveSessionScreen() {
     } catch {
       // leaving still removes this browser from the live room
     } finally {
-      navigate("/record", { replace: true });
+      navigate("/watch", { replace: true });
     }
   };
 
@@ -464,8 +515,22 @@ export function ActiveSessionScreen() {
           {session && <code>{session.id}</code>}
         </div>
 
-        {session &&
-          (isCreator ? (
+        {session && (
+        <div className="active-session-actions">
+          {/* Hosts and admins can run the take without recording here,
+              like the camera switch in the phone's session bar. */}
+          {mayControl && (
+            <div className="session-device-mode" role="group" aria-label="This device">
+              <span>This device</span>
+              <button type="button" aria-pressed={!controllerOnly}
+                disabled={recordingStatus !== "idle"}
+                onClick={() => setControllerOnly(false)}>Recording</button>
+              <button type="button" aria-pressed={controllerOnly}
+                disabled={recordingStatus !== "idle"}
+                onClick={() => setControllerOnly(true)}>Controlling</button>
+            </div>
+          )}
+          {isCreator ? (
             confirmingEnd ? (
               <div className="active-session-confirm">
                 <span>End this session for everyone?</span>
@@ -498,21 +563,23 @@ export function ActiveSessionScreen() {
             <button type="button" onClick={leave} disabled={leaving}>
               {leaving ? "Leaving..." : "Leave"}
             </button>
-          ))}
+          )}
+        </div>
+        )}
       </header>
 
       {error && (
         <div className="active-session-error">
           <p>{error}</p>
-          <button type="button" onClick={() => navigate("/record")}>
-            Back to Record
+          <button type="button" onClick={() => navigate("/watch")}>
+            Back to Sessions
           </button>
         </div>
       )}
 
       {session && (
         <>
-          {mediaReady && (
+          {ready && (
             <section className="session-recording-bar">
               {canControl && (
                 <div className="session-recording-controls">
@@ -575,16 +642,33 @@ export function ActiveSessionScreen() {
             </section>
           )}
 
-          <div className={mediaReady ? "active-session-content" : ""}>
-            <LocalMediaPreview
-              disabled={recordingStatus !== "idle"}
-              onReady={handleMediaReady}
-              onDecline={declineMedia}
-            />
+          <div className={ready ? "active-session-content" : ""}>
+            {controllerOnly ? (
+              <section className="session-controller-note">
+                <h2>Controlling the cameras</h2>
+                <p>
+                  This device isn't recording. Start and stop every camera from
+                  here; it still plays the sync beep, so keep its volume up.
+                </p>
+              </section>
+            ) : (
+              <LocalMediaPreview
+                disabled={recordingStatus !== "idle"}
+                onReady={handleMediaReady}
+                onDecline={declineMedia}
+              />
+            )}
 
-            {mediaReady && (
+            {ready && (
               <section className="active-session-members">
                 <h2>In this session</h2>
+                {members.length > 0 && (
+                  <p className="session-camera-count">
+                    {members.filter((member) => member.camera !== false).length} recording
+                    {members.some((member) => member.camera === false) &&
+                      ` · ${members.filter((member) => member.camera === false).length} controlling`}
+                  </p>
+                )}
                 {members.length === 0 ? (
                   <p>Waiting for members to connect...</p>
                 ) : (
@@ -595,6 +679,7 @@ export function ActiveSessionScreen() {
                         {Number(member.id) === Number(session.createdBy) && (
                           <span>Creator</span>
                         )}
+                        {member.camera === false && <span>Controller</span>}
                       </li>
                     ))}
                   </ul>
@@ -605,7 +690,7 @@ export function ActiveSessionScreen() {
         </>
       )}
 
-      {mediaReady && (
+      {ready && (
         <div className="active-session-clock" aria-label="Synchronized time">
           <time>{displayTime}</time>
           <span>
@@ -640,6 +725,13 @@ const activeSessionCss = `
     padding-bottom: 1.5rem;
     border-bottom: 1px solid #242424;
   }
+  .active-session-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; justify-content: flex-end; }
+  .session-device-mode { display: inline-flex; align-items: center; gap: 0; }
+  .session-device-mode > span { margin-right: 0.6rem; }
+  .active-session-page .session-device-mode button { border-radius: 0; padding: 0.45rem 0.8rem; }
+  .active-session-page .session-device-mode button:nth-of-type(1) { border-radius: 7px 0 0 7px; }
+  .active-session-page .session-device-mode button:nth-of-type(2) { border-radius: 0 7px 7px 0; border-left: none; }
+  .active-session-page .session-device-mode button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   .active-session-header span,
   .active-session-socket-status {
     color: #999;
@@ -678,6 +770,10 @@ const activeSessionCss = `
   .active-session-confirm span {
     color: #ddd;
   }
+  .session-controller-note { padding: 1.25rem 1.5rem; border-radius: 12px; background: #141414; }
+  .session-controller-note h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+  .session-controller-note p { margin: 0; color: #a8a8a8; line-height: 1.5; }
+  .session-camera-count { margin: 0 0 0.6rem; color: #a8a8a8; font-size: 0.9rem; }
   .session-sync-tip { margin: 8px 0 0; color: #9a9a9a; font-size: 0.82rem; line-height: 1.45; }
   .session-recording-bar {
     display: flex;

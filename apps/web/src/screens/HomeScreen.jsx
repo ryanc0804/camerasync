@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
 import { getGroups } from "../api/groups.js";
 import { EmptyState } from "../components/EmptyState.jsx";
+import { useNewSession } from "../components/NewSession.jsx";
+import { useAutoRefresh } from "../hooks/useAutoRefresh.js";
 import { NotificationList } from "../components/NotificationList.jsx";
 import { getNotifications, markNotificationsSeen } from "../api/notifications.js";
-import { endSession, getMyVideoCount, getSessions, joinSession } from "../api/recordings.js";
+import { endSession, getSessions, joinSession } from "../api/recordings.js";
 
 const NOTIFICATIONS_ON_HOME = 4;
 
@@ -22,9 +24,9 @@ function greeting() {
 export function HomeScreen() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const openNewSession = useNewSession();
   const [groups, setGroups] = useState([]);
   const [sessions, setSessions] = useState([]);
-  const [videoCount, setVideoCount] = useState(null);
   const [loading, setLoading] = useState(true);
   const [joiningId, setJoiningId] = useState(null);
   const [endingId, setEndingId] = useState(null);
@@ -42,10 +44,9 @@ export function HomeScreen() {
   const firstName = (user?.name || user?.email || "").split(/[\s@]/)[0];
 
   useEffect(() => {
-    Promise.all([getGroups(), getSessions(), getMyVideoCount()])
-      .then(([loadedGroups, loadedSessions, loadedVideoCount]) => {
+    Promise.all([getGroups(), getSessions()])
+      .then(([loadedGroups, loadedSessions]) => {
         setGroups(loadedGroups);
-        setVideoCount(loadedVideoCount);
         setSessions(
           loadedSessions.filter((session) => session.status !== "cancelled")
         );
@@ -53,6 +54,14 @@ export function HomeScreen() {
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
+
+  // Keeps the live card and recent sessions current: a practice that starts
+  // shows up within a few seconds, without a reload.
+  useAutoRefresh(() => {
+    getSessions()
+      .then((loaded) => setSessions(loaded.filter((session) => session.status !== "cancelled")))
+      .catch(() => {});
+  }, 8000);
 
   // Notifications load on their own (a failure just leaves the panel empty)
   // and refresh every 30 seconds. Showing them here counts as seeing them;
@@ -82,8 +91,10 @@ export function HomeScreen() {
   );
   // Completed sessions are the recordings; per the design, Home is the
   // primary way into them ("View all" opens the full list).
+  // Takes across the user's sessions.
+  const recordingCount = sessions.reduce((total, session) => total + (session.recordingCount ?? 0), 0);
   const recentRecordings = sessions
-    .filter((session) => session.status === "complete")
+    .filter((session) => session.status === "complete" && session.recordingCount !== 0)
     .sort((a, b) => new Date(b.scheduledAt) - new Date(a.scheduledAt))
     .slice(0, 5);
   const live = liveSessions[Math.min(liveIndex, liveSessions.length - 1)];
@@ -134,10 +145,10 @@ export function HomeScreen() {
       <style>{css}</style>
 
       {/* One grid, so each row lines up across both columns as in the
-          Desktop-home design: greeting and stats beside the live card, then
-          recent recordings beside notifications. */}
+          Desktop-home design: the greeting across the top, the stats beside
+          the live card (same height), then recent recordings beside
+          notifications. */}
       <div className="home-grid">
-        <div className="home-top">
           <header className="home-header">
             <div>
               <div className="home-date">{today}</div>
@@ -145,57 +156,46 @@ export function HomeScreen() {
                 {greeting()}, {firstName}
               </h1>
             </div>
-            <div className="home-actions">
-              <button type="button" className="home-action" onClick={() => navigate("/watch")}>
-                Watch a Recording
-              </button>
-              <button type="button" className="home-action" onClick={() => navigate("/record")}>
-                Record a practice
-              </button>
-            </div>
           </header>
 
           {error && <p className="home-error">{error}</p>}
 
           <div className="home-stats">
-            <div className="home-stat">
+            {/* Groups and Sessions open their pages; recordings are inside
+                sessions, so that count has nowhere of its own to go. */}
+            <Link className="home-stat home-stat-link" to="/groups">
               <span>Groups</span>
               <strong>{loading ? "…" : groups.length}</strong>
-            </div>
-            <div className="home-stat">
+            </Link>
+            <Link className="home-stat home-stat-link" to="/watch">
               <span>Sessions</span>
               <strong>{loading ? "…" : sessions.length}</strong>
-            </div>
+            </Link>
             <div className="home-stat">
-              <span>Videos</span>
-              <strong>{loading ? "…" : videoCount ?? "—"}</strong>
+              <span>Recordings</span>
+              <strong>{loading ? "…" : recordingCount}</strong>
             </div>
           </div>
-        </div>
 
         <div className="home-live">
-          <div className="home-swipe">
-            <span>{liveSessions.length > 1 ? "Swipe for more" : ""}</span>
-            {liveSessions.length > 1 && (
-              <span className="home-dots">
-                {liveSessions.map((session, i) => (
-                  <button
-                    key={session.id}
-                    type="button"
-                    className={i === liveIndex ? "dot dot-active" : "dot"}
-                    aria-label={`Show live session ${i + 1}`}
-                    onClick={() => setLiveIndex(i)}
-                  />
-                ))}
-              </span>
-            )}
-          </div>
-
           {live ? (
             <div className="home-live-card">
-              <div>
+              <div className="home-live-info">
                 <div className="home-live-tag">
                   <span className="home-live-dot" /> Live Now
+                  {liveSessions.length > 1 && (
+                    <span className="home-dots">
+                      {liveSessions.map((session, i) => (
+                        <button
+                          key={session.id}
+                          type="button"
+                          className={i === liveIndex ? "dot dot-active" : "dot"}
+                          aria-label={`Show live session ${i + 1} of ${liveSessions.length}`}
+                          onClick={() => setLiveIndex(i)}
+                        />
+                      ))}
+                    </span>
+                  )}
                 </div>
                 <h3>{live.name}</h3>
                 <p>
@@ -206,7 +206,7 @@ export function HomeScreen() {
                 </p>
               </div>
 
-              <div>
+              <div className="home-live-actions">
                 {live.isJoined ? (
                   <button type="button" className="home-join" onClick={() => navigate(`/record/${live.id}`)}>
                     Enter Session
@@ -248,19 +248,25 @@ export function HomeScreen() {
               </div>
             </div>
           ) : (
+            // Nothing live: the card is where a session starts.
             <div className="home-panel home-live-empty">
               {loading ? (
                 <p className="home-empty">Checking for live sessions…</p>
               ) : (
-                <EmptyState
-                  compact
-                  title="Nothing live right now"
-                  action={groups.length > 0 ? "Start a session" : undefined}
-                  to="/record"
-                >
-                  When a coach starts a session, it appears here with a Join
-                  button.
-                </EmptyState>
+                <>
+                  <strong>Nothing live right now</strong>
+                  {groups.length > 0 ? (
+                    <div className="home-create">
+                      <button type="button" className="home-create-start"
+                        onClick={() => openNewSession("create")}>Start a session</button>
+                      <button type="button" onClick={() => openNewSession("schedule")}>
+                        Schedule
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="home-live-hint">Join a group to start sessions.</span>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -269,7 +275,7 @@ export function HomeScreen() {
         <section className="home-column">
           {/* Same as mobile: "View all" sits at the right of the section title. */}
           <div className="home-section-row">
-            <h2 className="home-section">Recent Recordings</h2>
+            <h2 className="home-section">Recent Sessions</h2>
             {recentRecordings.length > 0 && (
               <button type="button" className="home-view-all" onClick={() => navigate("/watch")}>
                 View all
@@ -280,8 +286,8 @@ export function HomeScreen() {
             {recentRecordings.length === 0 ? (
               <EmptyState
                 title="No recordings yet"
-                action={groups.length > 0 ? "Record a practice" : undefined}
-                to="/record"
+                action={groups.length > 0 ? "New session" : undefined}
+                onAction={() => openNewSession()}
               >
                 {groups.length > 0
                   ? "Run a synced session and its recordings will show up here."
@@ -308,9 +314,9 @@ export function HomeScreen() {
                               ` · ${session.memberCount} ${session.memberCount === 1 ? "device" : "devices"}`}
                           </span>
                         </span>
-                        {session.totalRecordings != null && (
+                        {session.recordingCount != null && (
                           <span className="home-rec-count">
-                            {session.totalRecordings} {session.totalRecordings === 1 ? "video" : "videos"}
+                            {session.recordingCount} {session.recordingCount === 1 ? "recording" : "recordings"}
                           </span>
                         )}
                       </button>
@@ -355,7 +361,7 @@ const css = `
     gap: 32px;
     max-width: 1200px;
   }
-  .home-top { display: flex; flex-direction: column; gap: 28px; min-width: 0; }
+  .home-header, .home-error { grid-column: 1 / -1; }
   .home-header {
     display: flex;
     align-items: center;
@@ -365,19 +371,6 @@ const css = `
   }
   .home-date { color: #d0d0d0; font-size: 1rem; margin-bottom: 4px; }
   .home-title { margin: 0; font-size: 2.1rem; font-weight: 800; letter-spacing: -0.5px; }
-  .home-actions { display: flex; gap: 12px; }
-  .home-action {
-    font: inherit;
-    font-weight: 700;
-    padding: 0.75rem 1.4rem;
-    border: none;
-    border-radius: 12px;
-    background: var(--accent);
-    color: var(--accent-ink);
-    cursor: pointer;
-    transition: background 0.12s;
-  }
-  .home-action:hover { background: var(--accent-hover); }
 
   .home-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
   .home-stat {
@@ -389,45 +382,50 @@ const css = `
     background: #161616;
     border-radius: 16px;
   }
+  .home-stat-link { color: inherit; text-decoration: none; border: 1px solid transparent; transition: border-color 0.12s, background 0.12s; }
+  .home-stat-link:hover, .home-stat-link:focus-visible { border-color: var(--accent); background: #1c1c1c; }
   .home-stat span { color: #a0a0a0; font-size: 1rem; }
   .home-stat strong { font-size: 2.4rem; font-weight: 800; line-height: 1; }
 
-  /* The live card keeps its own height and lines up with the bottom of the
-     stats, rather than stretching up beside the greeting. */
-  .home-live { display: flex; flex-direction: column; justify-content: flex-end; min-width: 0; }
-  .home-swipe {
+  /* The live card shares the stats' row, so it's the same height as them:
+     the session on the left, Join on the right. */
+  .home-live { display: flex; flex-direction: column; min-width: 0; contain: size; }
+  .home-live > * { flex: 1; }
+  .home-dots { display: inline-flex; gap: 6px; margin-left: auto; }
+  .dot { width: 9px; height: 9px; padding: 0; border: none; border-radius: 50%; background: rgba(0,0,0,0.25); cursor: pointer; }
+  .dot-active { background: var(--accent-ink); }
+  .home-live-card {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    min-height: 20px;
-    margin-bottom: 8px;
-    color: #999;
-    font-size: 0.85rem;
-  }
-  .home-dots { display: flex; gap: 6px; }
-  .dot { width: 9px; height: 9px; padding: 0; border: none; border-radius: 50%; background: #3a3a3a; cursor: pointer; }
-  .dot-active { background: var(--accent); }
-  .home-live-card {
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 20px 22px;
+    gap: 14px;
+    padding: 18px 20px;
     background: var(--accent);
-    border-radius: 18px;
+    border-radius: 16px;
     color: var(--accent-ink);
   }
-  .home-live-empty { display: flex; align-items: center; justify-content: center; }
+  .home-live-info { flex: 1; min-width: 0; }
+  .home-live-actions { flex: 0 0 auto; text-align: center; }
+  .home-live-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; text-align: center; }
+  .home-live-hint { color: #999; font-size: 0.9rem; }
+  .home-create { display: flex; gap: 10px; }
+  .home-create button {
+    font: inherit; font-weight: 700; padding: 0.6rem 1.1rem; border-radius: 10px;
+    border: 1px solid #444; background: transparent; color: #f0f0f0; cursor: pointer;
+  }
+  .home-create button:hover { border-color: var(--accent); }
+  .home-create .home-create-start { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+  .home-create .home-create-start:hover { background: var(--accent-hover); }
   .home-live-tag { display: flex; align-items: center; gap: 7px; font-size: 0.9rem; font-weight: 600; }
   .home-live-dot { width: 9px; height: 9px; border-radius: 50%; background: #f0432e; }
-  .home-live-card h3 { margin: 8px 0 4px; font-size: 1.6rem; font-weight: 800; }
-  .home-live-card p { margin: 0; color: rgba(0,0,0,0.6); }
+  .home-live-card h3 { margin: 6px 0 2px; font-size: 1.3rem; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .home-live-card p { margin: 0; color: rgba(0,0,0,0.6); font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .home-join {
-    width: 100%;
     font: inherit;
     font-weight: 700;
-    font-size: 1rem;
-    padding: 0.8rem;
+    font-size: 0.95rem;
+    padding: 0.55rem 1rem;
+    white-space: nowrap;
     border: none;
     border-radius: 10px;
     background: #000;
@@ -435,7 +433,7 @@ const css = `
     cursor: pointer;
   }
   .home-join:disabled { cursor: default; opacity: 0.6; }
-  .home-end-row { display: flex; justify-content: center; gap: 18px; margin-top: 10px; }
+  .home-end-row { display: flex; justify-content: center; gap: 6px; margin-top: 2px; white-space: nowrap; }
   .home-end-row button {
     font: inherit;
     font-size: 0.85rem;
@@ -518,5 +516,6 @@ const css = `
 
   @media (max-width: 1080px) {
     .home-grid { grid-template-columns: 1fr; }
+    .home-live { contain: none; }
   }
 `;

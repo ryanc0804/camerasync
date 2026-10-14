@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { resetPassword } from "../api/auth.js";
+import { PasswordInput } from "../components/PasswordInput.jsx";
 
 // The page users land on from the password-reset email link:
 //   /reset-password?token=<token>
@@ -84,9 +85,8 @@ export function ResetPasswordScreen({ token }) {
 
             <label style={styles.label}>
               New password
-              <input
+              <PasswordInput
                 className="cs-input"
-                type="password"
                 autoComplete="new-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -96,9 +96,8 @@ export function ResetPasswordScreen({ token }) {
 
             <label style={styles.label}>
               Confirm new password
-              <input
+              <PasswordInput
                 className="cs-input"
-                type="password"
                 autoComplete="new-password"
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}

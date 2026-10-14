@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { EmptyState } from "../components/EmptyState.jsx";
+import { useNewSession } from "../components/NewSession.jsx";
 
 import { getGroups } from "../api/groups.js";
 import { getSessions } from "../api/recordings.js";
+import { useAutoRefresh } from "../hooks/useAutoRefresh.js";
 import { groupAccent } from "../theme/groupTheme.js";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -44,6 +46,7 @@ function buildMonthGrid(year, month) {
 }
 
 export function CalendarScreen() {
+  const openNewSession = useNewSession();
   const today = useMemo(() => new Date(), []);
   const [cursor, setCursor] = useState(
     () => new Date(today.getFullYear(), today.getMonth(), 1)
@@ -70,6 +73,13 @@ export function CalendarScreen() {
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
+
+  // New and cancelled sessions show up without a reload.
+  useAutoRefresh(() => {
+    getSessions()
+      .then((loaded) => setSessions(loaded.filter((session) => session.status !== "cancelled")))
+      .catch(() => {});
+  }, 30000);
 
   const groupsById = useMemo(
     () => new Map(groups.map((group) => [group.id, group])),
@@ -207,8 +217,9 @@ export function CalendarScreen() {
           {loading ? (
             <p>Loading sessions...</p>
           ) : selectedSessions.length === 0 ? (
-            <EmptyState compact title="Nothing scheduled" action="Schedule a session" to="/record">
-              Pick another day, or schedule one from the Record page.
+            <EmptyState compact title="Nothing scheduled" action="Schedule a session"
+              onAction={() => openNewSession("schedule")}>
+              Pick another day, or schedule one.
             </EmptyState>
           ) : (
             <div className="cal-agenda-list">
