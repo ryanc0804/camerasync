@@ -41,6 +41,9 @@ class _SessionScreenState extends State<SessionScreen> {
   bool _permissionsGranted = false;
   bool _initialized = false;
   String? _error;
+
+  /// The connection dropped and is retrying; the camera stays up.
+  bool _reconnecting = false;
   List<SessionMember> _members = [];
   bool _canControl = false;
 
@@ -84,6 +87,9 @@ class _SessionScreenState extends State<SessionScreen> {
     }));
     _subs.add(socket.errors.listen((message) {
       if (mounted) setState(() => _error = message);
+    }));
+    _subs.add(socket.connection.listen((connected) {
+      if (mounted) setState(() => _reconnecting = !connected);
     }));
     _subs.add(socket.sessionClosed.listen((_) {
       if (!mounted) return;
@@ -189,6 +195,7 @@ class _SessionScreenState extends State<SessionScreen> {
       code: widget.sessionId,
       members: _members,
       clockSynced: socket.clockSynced,
+      reconnecting: _reconnecting,
     );
 
     if (joined && _controllerOnly) {
@@ -247,6 +254,7 @@ class _SessionTopBar extends StatelessWidget {
     required this.code,
     required this.members,
     required this.clockSynced,
+    this.reconnecting = false,
   });
 
   final String name;
@@ -255,6 +263,10 @@ class _SessionTopBar extends StatelessWidget {
   final String code;
   final List<SessionMember> members;
   final bool clockSynced;
+
+  /// The connection dropped; Start and Stop won't reach this phone until
+  /// it's back.
+  final bool reconnecting;
 
   @override
   Widget build(BuildContext context) {
@@ -288,7 +300,12 @@ class _SessionTopBar extends StatelessWidget {
                   'Code $code',
                   style: const TextStyle(color: Colors.white70, fontSize: 12, shadows: shadow),
                 ),
-                if (!clockSynced)
+                if (reconnecting)
+                  const Text(
+                    'Connection lost. Reconnecting…',
+                    style: TextStyle(color: Colors.orangeAccent, fontSize: 12, shadows: shadow),
+                  )
+                else if (!clockSynced)
                   const Text(
                     'Clock not synced; recordings may drift.',
                     style: TextStyle(color: Colors.orangeAccent, fontSize: 12, shadows: shadow),

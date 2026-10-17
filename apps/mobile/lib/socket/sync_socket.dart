@@ -114,6 +114,7 @@ class SyncSocket {
   final _recordingStop = StreamController<void>.broadcast();
   final _sessionClosed = StreamController<void>.broadcast();
   final _errors = StreamController<String>.broadcast();
+  final _connection = StreamController<bool>.broadcast();
 
   /// Connected users in the joined session.
   Stream<List<SessionMember>> get members => _members.stream;
@@ -131,7 +132,18 @@ class SyncSocket {
   /// Connection-level errors (e.g. rejected handshake).
   Stream<String> get errors => _errors.stream;
 
+  /// After the first connect: false when the connection drops (bad Wi-Fi, a
+  /// server restart) while it keeps retrying, true once it's back and has
+  /// rejoined the session.
+  Stream<bool> get connection => _connection.stream;
+
   bool get connected => _socket?.connected ?? false;
+
+  /// The session this socket last joined, and whether as a camera. The
+  /// server forgets a connection's room when it drops (bad Wi-Fi, a server
+  /// restart), so it's joined again on reconnect.
+  String? _sessionId;
+  bool _sessionCamera = true;
 
   /// Connects the socket and runs the first clock sync. Completes once the
   /// socket is connected (or throws on a rejected handshake/timeout).
@@ -153,14 +165,39 @@ class SyncSocket {
     _socket = socket;
 
     socket.onConnect((_) {
-      if (!connectCompleter.isCompleted) connectCompleter.complete();
+      if (!connectCompleter.isCompleted) {
+        connectCompleter.complete();
+        return;
+      }
+      // Reconnected: back into the session, falling in with a take that
+      // started while the connection was down.
+      final sessionId = _sessionId;
+      if (sessionId == null) {
+        _connection.add(true);
+      } else {
+        unawaited(joinSession(sessionId, camera: _sessionCamera)
+            .then((result) => _connection.add(result.ok)));
+      }
+    });
+
+    socket.onDisconnect((_) {
+      if (connectCompleter.isCompleted) _connection.add(false);
     });
 
     socket.onConnectError((err) {
       final message = _connectErrorMessage(err);
-      _errors.add(message);
       if (!connectCompleter.isCompleted) {
+        _errors.add(message);
         connectCompleter.completeError(SyncSocketException(message));
+        return;
+      }
+      // The server turned the connection away (e.g. the login expired):
+      // retrying won't help. Anything else is a dropped connection that
+      // socket.io keeps retrying.
+      if (err is Map) {
+        _errors.add(message);
+      } else {
+        _connection.add(false);
       }
     });
 
@@ -302,6 +339,9 @@ class SyncSocket {
           return;
         }
 
+        _sessionId = sessionId;
+        _sessionCamera = camera;
+
         final membersData = reply['members'];
         if (membersData is List) {
           _members.add(
@@ -374,6 +414,7 @@ class SyncSocket {
   /// Leaves the current session room. The server tracks which room this
   /// socket is in, so no payload is needed.
   void leaveSession() {
+    _sessionId = null;
     _socket?.emit(Events.leaveSession);
   }
 
@@ -384,6 +425,7 @@ class SyncSocket {
     _recordingStop.close();
     _sessionClosed.close();
     _errors.close();
+    _connection.close();
   }
 }
 
