@@ -10,10 +10,10 @@ import {
 import { pool } from "../db/pool.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
 import { SYNC_BEEP_DELAY_MS } from "../recordings/syncBeep.js";
-import { DEFAULT_RECORDING_BUFFER_MS, EVENTS } from "./events.js";
+import { EVENTS } from "./events.js";
+import { startDelayMs, trackRoundTrips } from "./startDelay.js";
 
 const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:5173";
-const MAX_RECORDING_BUFFER_MS = 60000;
 let io = null;
 const activeRecordings = new Map();
 // Fallback numbering for the legacy /api/recordings/update flow, whose
@@ -64,13 +64,6 @@ async function sendRoomMembers(sessionId) {
   return members;
 }
 
-// keeps the recording buffer safe and numeric
-function cleanBuffer(bufferMs) {
-  const number = Number(bufferMs);
-  if (!Number.isFinite(number)) return DEFAULT_RECORDING_BUFFER_MS;
-  return Math.min(MAX_RECORDING_BUFFER_MS, Math.max(0, Math.round(number)));
-}
-
 // Who may start and stop takes for everyone in a session: whoever created
 // it, plus the group's admins and owner, from any device.
 export function canControlRecording({ created_by, role, owner_id }, userId) {
@@ -119,6 +112,9 @@ export async function initSocket(httpServer) {
       origin: WEB_ORIGIN,
       credentials: true,
     },
+    // Heartbeats also time each connection for the start delay (see
+    // startDelay.js), so they come every 10 s rather than the default 25.
+    pingInterval: 10000,
   });
   io.adapter(createAdapter(pool));
 
@@ -144,6 +140,8 @@ export async function initSocket(httpServer) {
   });
 
   io.on("connection", (socket) => {
+    trackRoundTrips(socket);
+
     socket.on(EVENTS.JOIN_SESSION, async ({ sessionId, camera } = {}, ack) => {
       if (typeof ack !== "function") return;
       if (!sessionId) {
@@ -230,7 +228,7 @@ export async function initSocket(httpServer) {
     // lets the host send one shared recording start time
     socket.on(
       EVENTS.START_RECORDING,
-      async ({ sessionId, bufferMs } = {}, ack = () => {}) => {
+      async ({ sessionId } = {}, ack = () => {}) => {
         try {
           if (!(await isSessionHost(socket, sessionId))) {
             return ack({
@@ -239,10 +237,9 @@ export async function initSocket(httpServer) {
             });
           }
 
-          const recording = await startSessionRecording(
-            sessionId,
-            cleanBuffer(bufferMs)
-          );
+          // The server picks the delay; any bufferMs an older app sends is
+          // ignored.
+          const recording = await startSessionRecording(sessionId);
           ack({ ok: true, recording });
         } catch (err) {
           ack({ ok: false, error: err.message });
@@ -298,17 +295,17 @@ export async function getRecordingSession(sessionId) {
   };
 }
 
-export async function startSessionRecording(
-  sessionId,
-  bufferMs = DEFAULT_RECORDING_BUFFER_MS
-) {
+export async function startSessionRecording(sessionId) {
   if (activeRecordings.has(sessionId)) {
     throw new Error("This session is already recording.");
   }
 
+  // Waits for the slowest device in the room (see startDelay.js).
+  const sockets = await getIO().in(roomName(sessionId)).fetchSockets();
+  const bufferMs = startDelayMs(sockets.map((socket) => socket.data.roundTripMs));
+
   const serverSentAtEpochMs = Date.now();
-  const safeBufferMs = cleanBuffer(bufferMs);
-  const startAtEpochMs = serverSentAtEpochMs + safeBufferMs;
+  const startAtEpochMs = serverSentAtEpochMs + bufferMs;
 
   // The number is persisted against the start time so playback shows the
   // same "Recording N" the host saw, even after a server restart.
@@ -324,7 +321,7 @@ export async function startSessionRecording(
   const recording = {
     sessionId,
     recordingNumber,
-    bufferMs: safeBufferMs,
+    bufferMs,
     serverSentAtEpochMs,
     startAtEpochMs,
     // The device that asked for the start plays the sync beep at this time.
