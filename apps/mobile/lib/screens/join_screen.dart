@@ -331,7 +331,8 @@ class _SessionCard extends StatelessWidget {
           ),
           child: const Text('End Session'),
         ),
-      if (s.isComplete)
+      // Takes already recorded can be watched while the session is live.
+      if (s.isComplete || (s.isActive && (s.recordingCount ?? 0) > 0))
         TextButton(
           onPressed: onWatch,
           style: TextButton.styleFrom(foregroundColor: team.accent),

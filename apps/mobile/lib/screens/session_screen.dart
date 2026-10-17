@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'camera_screen.dart';
 import 'controller_screen.dart';
+import 'watch_screen.dart';
 
 import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
@@ -67,7 +68,16 @@ class _SessionScreenState extends State<SessionScreen> {
 
     _subs.add(socket.members.listen((m) => setState(() => _members = m)));
     _subs.add(socket.recordingStart.listen((_) {
-      if (mounted) setState(() => _takeRunning = true);
+      if (!mounted) return;
+      setState(() => _takeRunning = true);
+      // Watching when the next take starts: back to the camera, which is
+      // already recording underneath.
+      final here = _sessionRoute;
+      if (_watching && here != null) {
+        Navigator.of(context).popUntil((route) => route == here);
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('A new take started.')));
+      }
     }));
     _subs.add(socket.recordingStop.listen((_) {
       if (mounted) setState(() => _takeRunning = false);
@@ -118,6 +128,32 @@ class _SessionScreenState extends State<SessionScreen> {
     }
   }
 
+  /// The session's recordings, watched without leaving it: the camera (or
+  /// the controls) stays up underneath and comes back when the next take
+  /// starts.
+  bool _watching = false;
+  ModalRoute<dynamic>? _sessionRoute;
+
+  Future<void> _watchRecordings() async {
+    // Not mid-take: the take has to finish (and upload) first.
+    if (_takeRunning) return;
+    _sessionRoute = ModalRoute.of(context);
+    setState(() => _watching = true);
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => WatchScreen(
+        auth: widget.auth,
+        session: RecordingSession(
+          id: widget.sessionId,
+          name: widget.sessionName ?? 'Session ${widget.sessionId}',
+          status: 'active',
+          activeMemberCount: _members.length,
+          isJoined: true,
+        ),
+      ),
+    ));
+    if (mounted) setState(() => _watching = false);
+  }
+
   Future<void> _requestPermissions() async {
     final statuses = await [Permission.camera, Permission.microphone].request();
     setState(() {
@@ -153,11 +189,6 @@ class _SessionScreenState extends State<SessionScreen> {
       code: widget.sessionId,
       members: _members,
       clockSynced: socket.clockSynced,
-      // Hosts and admins can turn their camera off and just run the take.
-      cameraOn: _canControl ? !_controllerOnly : null,
-      onToggleCamera: _switching || _takeRunning
-          ? null
-          : () => _setControllerOnly(!_controllerOnly),
     );
 
     if (joined && _controllerOnly) {
@@ -166,7 +197,8 @@ class _SessionScreenState extends State<SessionScreen> {
         sessionId: widget.sessionId,
         members: _members,
         topBar: topBar,
-        onUseCamera: () => _setControllerOnly(false),
+        onUseCamera: _switching ? null : () => _setControllerOnly(false),
+        onWatch: _watchRecordings,
       );
     }
 
@@ -177,6 +209,11 @@ class _SessionScreenState extends State<SessionScreen> {
         recordings: RecordingsApi(widget.auth.api),
         canControl: _canControl,
         topBar: topBar,
+        onWatch: _watchRecordings,
+        // Hosts and admins can turn their camera off and just run the take.
+        onControlOnly: _canControl && !_switching
+            ? () => _setControllerOnly(true)
+            : null,
       );
     }
 
@@ -203,15 +240,13 @@ class _SessionScreenState extends State<SessionScreen> {
 
 /// The bar across the top of a session's camera: back, the session's name,
 /// and how many devices are connected (a hint when the clock isn't synced).
-/// Hosts and admins also get a camera on/off switch.
+/// The recordings and the camera on/off switch sit beside the shutter.
 class _SessionTopBar extends StatelessWidget {
   const _SessionTopBar({
     required this.name,
     required this.code,
     required this.members,
     required this.clockSynced,
-    this.cameraOn,
-    this.onToggleCamera,
   });
 
   final String name;
@@ -221,17 +256,9 @@ class _SessionTopBar extends StatelessWidget {
   final List<SessionMember> members;
   final bool clockSynced;
 
-  /// Whether this phone records; null hides the switch (not a host).
-  final bool? cameraOn;
-
-  /// Null while the switch can't be used (mid-take).
-  final VoidCallback? onToggleCamera;
-
   @override
   Widget build(BuildContext context) {
     const shadow = [Shadow(blurRadius: 6, color: Colors.black)];
-    final cameras = members.where((m) => m.camera).length;
-    final controlling = members.length - cameras;
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 4, 12, 4),
       child: Row(
@@ -281,26 +308,12 @@ class _SessionTopBar extends StatelessWidget {
                 const Icon(Icons.circle, size: 9, color: Color(0xFF4ADE80)),
                 const SizedBox(width: 6),
                 Text(
-                  controlling == 0
-                      ? '${members.length} connected'
-                      : '$cameras recording · $controlling controlling',
+                  '${members.length} ${members.length == 1 ? 'device' : 'devices'} connected',
                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
                 ),
               ],
             ),
           ),
-          if (cameraOn != null)
-            IconButton(
-              onPressed: onToggleCamera,
-              tooltip: cameraOn!
-                  ? 'Control only (turn this camera off)'
-                  : "Use this phone's camera",
-              icon: Icon(
-                cameraOn! ? Icons.videocam : Icons.videocam_off,
-                color: cameraOn! ? Colors.white : Colors.orangeAccent,
-                shadows: shadow,
-              ),
-            ),
         ],
       ),
     );

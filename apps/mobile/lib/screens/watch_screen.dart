@@ -16,6 +16,7 @@ import '../team_accent.dart';
 import '../theme.dart';
 import '../tv/tv_link.dart';
 import '../tv/tv_protocol.dart';
+import '../widgets/auto_refresh.dart';
 import '../widgets/empty_state.dart';
 
 /// A screen at least this big (a TV, a monitor, a tablet on its side) shows
@@ -153,6 +154,8 @@ class _WatchScreenState extends State<WatchScreen> {
     _onTv = TvLink.instance.connected;
     TvLink.instance.addListener(_onTvChanged);
     _tvStates = TvLink.instance.states.listen(_onTvState);
+    // A live session's takes show up as their uploads finish.
+    _refresher = AutoRefresher(const Duration(seconds: 10), _refreshList);
     _load();
   }
 
@@ -253,6 +256,34 @@ class _WatchScreenState extends State<WatchScreen> {
       // angles show, which opens and closes players.
       if (_recording != null && !_loading) _syncPlayers();
     }
+  }
+
+  late final AutoRefresher _refresher;
+
+  /// Picks up a live session's takes as their uploads finish: while the
+  /// list is showing, while there's nothing to show yet, or while the open
+  /// recording has no angle uploaded. Never under a recording that plays.
+  Future<void> _refreshList() async {
+    if (_loading) return;
+    final waiting = _recording == null || _uploadedAngles.isEmpty;
+    if (!_picking && !waiting) return;
+    try {
+      final videos = await _recordings.getSessionVideos(widget.session.id);
+      if (!mounted || _loading) return;
+      if (_picking) {
+        setState(() => _videos = videos);
+        return;
+      }
+      if (videos.recordings.isEmpty) return;
+      final hadNone = _recording == null;
+      _videos = videos;
+      if (hadNone && videos.recordings.length > 1) {
+        setState(() => _picking = true);
+      } else {
+        _index = _index.clamp(0, videos.recordings.length - 1);
+        if (_uploadedAngles.isNotEmpty || hadNone) await _openRecording();
+      }
+    } catch (_) {}
   }
 
   Future<void> _load() async {
@@ -587,6 +618,7 @@ class _WatchScreenState extends State<WatchScreen> {
   void dispose() {
     TvLink.instance.removeListener(_onTvChanged);
     _tvStates?.cancel();
+    _refresher.dispose();
     if (_onTv) TvLink.instance.send(TvAction.idle);
     _keepInLine?.cancel();
     _closeAllPlayers();
