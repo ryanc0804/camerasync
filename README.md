@@ -110,7 +110,9 @@ flutter pub get
 flutter run
 ```
 
-See `apps/mobile/README.md`.
+See `apps/mobile/README.md`. To put the app on phones without the app
+stores (Android APK, or an iPhone through a Mac), see
+`apps/mobile/INSTALL.md`.
 
 ## Status
 
