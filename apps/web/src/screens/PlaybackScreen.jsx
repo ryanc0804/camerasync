@@ -13,6 +13,7 @@ import {
 } from "../api/recordings.js";
 import { anglesPerPage, commonAspect, layoutAngles } from "../recording/angleLayout.js";
 import { angleTrims } from "../recording/angleTrims.js";
+import { useAutoRefresh } from "../hooks/useAutoRefresh.js";
 
 export function PlaybackScreen() {
   const { sessionId } = useParams();
@@ -55,6 +56,15 @@ export function PlaybackScreen() {
   const recording = recordingIndex === null ? null : recordings[recordingIndex];
   const startedAt = recording?.startedAt;
   const showingList = recordings.length > 1 && recordingIndex === null;
+
+  // A live session's takes show up as their uploads finish. Only while the
+  // list is up, so a recording being watched is never swapped underneath.
+  useAutoRefresh(() => {
+    if (recordingIndex !== null && recordings.length > 0) return;
+    getSessionVideos(sessionId)
+      .then((data) => setRecordings(data.recordings))
+      .catch(() => {});
+  }, 10000);
 
   useEffect(() => {
     if (!startedAt) return;
