@@ -70,7 +70,6 @@ export function ActiveSessionScreen() {
   const [error, setError] = useState("");
   // How far ahead the shared start is set. It has to cover the start
   // message reaching every phone over the internet, or they start late.
-  const [bufferMs, setBufferMs] = useState(1500);
   // The session's creator and the group's admins and owner start and stop
   // takes for everyone; the server says which this user is when joining.
   const [canControl, setCanControl] = useState(false);
@@ -132,57 +131,42 @@ export function ActiveSessionScreen() {
     let timer;
     let cancelled = false;
 
-    // saves the video and its timing file together
+    // uploads the video for playback; it's saved to this computer only if
+    // the upload fails, so the take isn't lost
     const saveRecording = (recorder, extension) => {
       const info = recordingInfoRef.current;
       if (!info) return;
 
-      const actualStopAtEpochMs = clock?.now() ?? Date.now();
       const video = new Blob(recordingChunksRef.current, {
         type: recorder.mimeType || "video/webm",
       });
-      const baseName = recordingBaseName(info);
-      const videoFileName = `${baseName}.${extension}`;
-      const metadata = {
-        ...info,
-        actualStopAtEpochMs,
-        timesyncOffsetAtStopMs: clock?.offset ?? 0,
-        durationMs: info.actualStartAtEpochMs
-          ? actualStopAtEpochMs - info.actualStartAtEpochMs
-          : 0,
-        mimeType: video.type,
-        videoFileName,
-      };
-
-      downloadFile(video, videoFileName);
-      downloadFile(
-        new Blob([JSON.stringify(metadata, null, 2)], {
-          type: "application/json",
-        }),
-        `${baseName}.json`
-      );
+      const videoFileName = `${recordingBaseName(info)}.${extension}`;
 
       recorderRef.current = null;
       recordingInfoRef.current = null;
       recordingChunksRef.current = [];
       setRecordingStatus("idle");
-      setRecordingMessage(`Saved ${videoFileName}`);
-      if (video.size > 0) {
-        setRecordingMessage(`Saved ${videoFileName}. Uploading for playback...`);
-        // When the recorder really started, so playback can line this angle
-        // up with the phones, which start a moment after the shared time.
-        const actualStartedAt = info.actualStartAtEpochMs
-          ? Math.round(info.actualStartAtEpochMs)
-          : undefined;
-        saveRecordingDetails(sessionId, info.plannedStartAtEpochMs, actualStartedAt)
-          .then(() => uploadSessionVideo(
-            sessionId, info.plannedStartAtEpochMs, video, videoFileName, actualStartedAt
-          ))
-          .then(() => setRecordingMessage(`Saved and uploaded ${videoFileName}`))
-          .catch((err) => setRecordingMessage(
-            `Saved ${videoFileName} on this device, but upload failed: ${err.message}`
-          ));
+      if (video.size === 0) {
+        setRecordingMessage("Nothing was recorded on this device.");
+        return;
       }
+      setRecordingMessage("Uploading for playback...");
+      // When the recorder really started, so playback can line this angle
+      // up with the phones, which start a moment after the shared time.
+      const actualStartedAt = info.actualStartAtEpochMs
+        ? Math.round(info.actualStartAtEpochMs)
+        : undefined;
+      saveRecordingDetails(sessionId, info.plannedStartAtEpochMs, actualStartedAt)
+        .then(() => uploadSessionVideo(
+          sessionId, info.plannedStartAtEpochMs, video, videoFileName, actualStartedAt
+        ))
+        .then(() => setRecordingMessage("Uploaded for playback"))
+        .catch((err) => {
+          downloadFile(video, videoFileName);
+          setRecordingMessage(
+            `Upload failed (${err.message}), so ${videoFileName} was saved to this computer instead.`
+          );
+        });
     };
 
     // waits for the shared server start time
@@ -430,7 +414,8 @@ export function ActiveSessionScreen() {
     setRecordingMessage("Sending the synchronized start...");
     socket.emit(
       "recording:start",
-      { sessionId, bufferMs: Number(bufferMs) },
+      // The server picks the start time, allowing for the slowest device.
+      { sessionId },
       (reply) => {
         if (!reply?.ok) {
           beepRequestedRef.current = false;
@@ -588,19 +573,6 @@ export function ActiveSessionScreen() {
             <section className="session-recording-bar">
               {canControl && (
                 <div className="session-recording-controls">
-                  <label>
-                    Buffer (ms)
-                    <input
-                      type="number"
-                      min="0"
-                      max="60000"
-                      step="1"
-                      value={bufferMs}
-                      onChange={(event) => setBufferMs(event.target.value)}
-                      disabled={recordingStatus !== "idle"}
-                    />
-                  </label>
-
                   {recordingStatus === "idle" ? (
                     <button
                       className="session-recording-start"
@@ -728,8 +700,17 @@ const activeSessionCss = `
     padding-bottom: 1.5rem;
     border-bottom: 1px solid #242424;
   }
-  .active-session-watch { color: var(--accent); font-weight: 600; text-decoration: none; }
-  .active-session-watch:hover { text-decoration: underline; }
+  /* Outlined in the team color, like Watch on the Sessions page. */
+  .active-session-watch {
+    padding: 0.45rem 0.8rem;
+    border: 1px solid var(--accent);
+    border-radius: 7px;
+    color: var(--accent);
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .active-session-watch:hover { background: rgba(255,255,255,0.06); }
   .active-session-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; justify-content: flex-end; }
   .session-device-mode { display: inline-flex; align-items: center; gap: 0; }
   .session-device-mode > span { margin-right: 0.6rem; }
@@ -793,24 +774,6 @@ const activeSessionCss = `
     display: flex;
     align-items: flex-end;
     gap: 0.7rem;
-  }
-  .session-recording-controls label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-    color: #999;
-    font-size: 0.75rem;
-  }
-  .session-recording-controls input {
-    width: 7rem;
-    box-sizing: border-box;
-    padding: 0.55rem 0.65rem;
-    border: 1px solid #383838;
-    border-radius: 7px;
-    background: #171717;
-    color: #eee;
-    font: inherit;
-    font-variant-numeric: tabular-nums;
   }
   .active-session-page .session-recording-start {
     border-color: var(--accent);
