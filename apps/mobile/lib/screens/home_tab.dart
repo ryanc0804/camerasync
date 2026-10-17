@@ -450,7 +450,7 @@ class _SessionBanner extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   session.isActive
-                      ? '$devices ${devices == 1 ? 'Device' : 'Devices'} '
+                      ? '$devices ${devices == 1 ? 'device' : 'devices'} '
                           'connected'
                       : _scheduledLabel,
                   style: TextStyle(

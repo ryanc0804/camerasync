@@ -1,11 +1,13 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:async';
 import '../api/api_client.dart';
 import '../api/recordings_api.dart';
 import '../socket/sync_socket.dart';
 import '../sync_beep.dart';
+import '../widgets/shutter_side_button.dart';
 
 /// Camera view. Works in two modes:
 ///
@@ -22,6 +24,8 @@ class CameraScreen extends StatefulWidget {
     this.embedded = false,
     this.canControl = false,
     this.topBar,
+    this.onWatch,
+    this.onControlOnly,
   });
 
   final SyncSocket? socket;
@@ -43,6 +47,14 @@ class CameraScreen extends StatefulWidget {
   /// Shown across the top of the full-screen camera instead of an app bar,
   /// like the session's name and how many devices are connected.
   final Widget? topBar;
+
+  /// In a session, opens its recordings from a button beside the shutter
+  /// (greyed out while a take runs).
+  final VoidCallback? onWatch;
+
+  /// For hosts and admins: turns this phone's camera off to just run the
+  /// take, from a button on the shutter's other side.
+  final VoidCallback? onControlOnly;
 
   bool get isSolo => socket == null;
 
@@ -108,6 +120,10 @@ class _CameraScreenState extends State<CameraScreen> {
       // A stop that lands before the shared start cancels it too.
       _subs.add(socket.recordingStop.listen((_) {
         _pendingStart?.cancel();
+        // Stopped before it started: nothing to save, just unlock.
+        if (!(_cameraController?.value.isRecordingVideo ?? false)) {
+          _unlockOrientation();
+        }
         _stopRecording();
       }));
     }
@@ -143,7 +159,43 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
+  /// A take keeps one orientation: the way the phone is held as it begins.
+  /// The saved video is fixed to it, and so is the screen (upright stays
+  /// upright; sideways can still flip end for end), so a bump mid-take
+  /// can't swing the preview around. Unlocked when the take stops.
+  bool _orientationLocked = false;
+
+  Future<void> _lockOrientation() async {
+    final controller = _cameraController;
+    if (_orientationLocked || controller == null) return;
+    _orientationLocked = true;
+    final portrait = MediaQuery.of(context).orientation == Orientation.portrait;
+    try {
+      await controller.lockCaptureOrientation();
+    } catch (e) {
+      debugPrint('Could not lock capture orientation: $e');
+    }
+    await SystemChrome.setPreferredOrientations(portrait
+        ? const [DeviceOrientation.portraitUp]
+        : const [
+            DeviceOrientation.landscapeLeft,
+            DeviceOrientation.landscapeRight
+          ]);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _unlockOrientation() async {
+    if (!_orientationLocked) return;
+    _orientationLocked = false;
+    try {
+      await _cameraController?.unlockCaptureOrientation();
+    } catch (_) {}
+    await SystemChrome.setPreferredOrientations(const []);
+    if (mounted) setState(() {});
+  }
+
   void _scheduleStart(RecordingStartCommand command) {
+    unawaited(_lockOrientation());
     _plannedStartAtEpochMs = command.serverStartAtEpochMs;
     _recordingNumber = command.recordingNumber;
 
@@ -189,6 +241,7 @@ class _CameraScreenState extends State<CameraScreen> {
           socket.localToServer(DateTime.now().millisecondsSinceEpoch);
     }
 
+    if (!_orientationLocked) await _lockOrientation();
     try {
       _actualStartAtEpochMs = null;
       await _cameraController!.startVideoRecording();
@@ -206,6 +259,7 @@ class _CameraScreenState extends State<CameraScreen> {
       debugPrint('Recording started');
     } catch (e) {
       debugPrint('Start recording error: $e');
+      await _unlockOrientation();
     }
   }
 
@@ -226,6 +280,7 @@ class _CameraScreenState extends State<CameraScreen> {
       final file = await _cameraController!.stopVideoRecording();
 
       setState(() => _recording = false);
+      await _unlockOrientation();
 
       debugPrint('Video saved: ${file.path}');
 
@@ -238,6 +293,7 @@ class _CameraScreenState extends State<CameraScreen> {
       }
     } catch (e) {
       debugPrint('Stop recording error: $e');
+      await _unlockOrientation();
     }
   }
 
@@ -295,6 +351,7 @@ class _CameraScreenState extends State<CameraScreen> {
 
   @override
   void dispose() {
+    if (_orientationLocked) SystemChrome.setPreferredOrientations(const []);
     _pendingStart?.cancel();
     _pendingBeep?.cancel();
     _beep?.dispose();
@@ -370,15 +427,27 @@ class _CameraScreenState extends State<CameraScreen> {
             left: 0,
             right: 0,
             child: Center(
-              child: Text(
-                _recordingNumber == null
-                    ? '● REC'
-                    : '● REC  ·  Recording ${_recordingNumber!.toString().padLeft(3, '0')}',
-                style: const TextStyle(
-                  color: Colors.redAccent,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1,
-                ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _recordingNumber == null
+                        ? '● REC'
+                        : '● REC  ·  Recording ${_recordingNumber!.toString().padLeft(3, '0')}',
+                    style: const TextStyle(
+                      color: Colors.redAccent,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                  if (_orientationLocked) ...[
+                    const SizedBox(width: 8),
+                    const Icon(Icons.screen_lock_rotation,
+                        size: 16,
+                        color: Colors.white70,
+                        semanticLabel: 'Rotation locked for this take'),
+                  ],
+                ],
               ),
             ),
           ),
@@ -533,7 +602,7 @@ class _CameraScreenState extends State<CameraScreen> {
       return Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Opacity(opacity: 0.35, child: _shutterButton()),
+          _withSideButtons(Opacity(opacity: 0.35, child: _shutterButton())),
           const SizedBox(height: 10),
           Text(
             _recording ? 'Recording' : 'Waiting for the host to start',
@@ -552,13 +621,13 @@ class _CameraScreenState extends State<CameraScreen> {
           : _hostShutter,
       child: _shutterButton(),
     );
-    if (widget.isSolo || _recording) return shutter;
+    if (widget.isSolo || _recording) return _withSideButtons(shutter);
     // The host's shutter starts every camera and plays the sync beep; it
     // lines up best from the middle of the room (sound takes ~3 ms a metre).
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        shutter,
+        _withSideButtons(shutter),
         const SizedBox(height: 10),
         const Text(
           'Starts every camera with a beep.\nBest from the middle of the room, volume up.',
@@ -572,6 +641,37 @@ class _CameraScreenState extends State<CameraScreen> {
         ),
       ],
     );
+  }
+
+  /// [shutter] with the recordings on its left and, for hosts, the camera
+  /// off switch on its right (above and below it in landscape). An empty
+  /// slot stands in for a missing button so the shutter stays centred.
+  Widget _withSideButtons(Widget shutter) {
+    final onWatch = widget.onWatch;
+    if (onWatch == null) return shutter;
+    final busy = _recording || (_pendingStart?.isActive ?? false);
+    final onControlOnly = widget.onControlOnly;
+    const gap = SizedBox(width: 28, height: 28);
+    final children = [
+      ShutterSideButton(
+        icon: Icons.video_library_outlined,
+        tooltip: 'Watch recordings',
+        onPressed: busy ? null : onWatch,
+      ),
+      gap,
+      shutter,
+      gap,
+      onControlOnly == null
+          ? const SizedBox.square(dimension: ShutterSideButton.size)
+          : ShutterSideButton(
+              icon: Icons.videocam,
+              tooltip: 'Control only (turn this camera off)',
+              onPressed: busy ? null : onControlOnly,
+            ),
+    ];
+    return MediaQuery.of(context).orientation == Orientation.landscape
+        ? Column(mainAxisSize: MainAxisSize.min, children: children)
+        : Row(mainAxisSize: MainAxisSize.min, children: children);
   }
 
   Widget _shutterButton() {

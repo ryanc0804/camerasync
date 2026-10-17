@@ -595,6 +595,18 @@ export function SessionScheduler({
                       </button>
                     ) : null}
 
+                    {/* Takes already recorded can be watched while the
+                        session is still live. */}
+                    {session.status === "active" && session.recordingCount > 0 && (
+                      <button
+                        className="session-watch-button"
+                        type="button"
+                        onClick={() => navigate(`/watch/${session.id}`)}
+                      >
+                        Watch
+                      </button>
+                    )}
+
                     {canManageSession(session) &&
                       session.status === "active" && (
                         <button
@@ -872,6 +884,16 @@ const schedulerCss = `
     background: transparent;
     color: #72d58c;
     opacity: 1;
+  }
+  .session-watch-button {
+    padding: 8px 12px;
+    border: 1px solid var(--accent);
+    border-radius: 7px;
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
   }
   .session-end-button {
     padding: 8px 12px;

@@ -517,6 +517,11 @@ export function ActiveSessionScreen() {
 
         {session && (
         <div className="active-session-actions">
+          <a className="active-session-watch" href={`/watch/${sessionId}`}
+            target="_blank" rel="noopener noreferrer"
+            title="Opens in a new tab, so this session keeps running">
+            Watch recordings ↗
+          </a>
           {/* Hosts and admins can run the take without recording here,
               like the camera switch in the phone's session bar. */}
           {mayControl && (
@@ -664,9 +669,7 @@ export function ActiveSessionScreen() {
                 <h2>In this session</h2>
                 {members.length > 0 && (
                   <p className="session-camera-count">
-                    {members.filter((member) => member.camera !== false).length} recording
-                    {members.some((member) => member.camera === false) &&
-                      ` · ${members.filter((member) => member.camera === false).length} controlling`}
+                    {members.length} {members.length === 1 ? "device" : "devices"} connected
                   </p>
                 )}
                 {members.length === 0 ? (
@@ -725,6 +728,8 @@ const activeSessionCss = `
     padding-bottom: 1.5rem;
     border-bottom: 1px solid #242424;
   }
+  .active-session-watch { color: var(--accent); font-weight: 600; text-decoration: none; }
+  .active-session-watch:hover { text-decoration: underline; }
   .active-session-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; justify-content: flex-end; }
   .session-device-mode { display: inline-flex; align-items: center; gap: 0; }
   .session-device-mode > span { margin-right: 0.6rem; }

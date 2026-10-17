@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../socket/sync_socket.dart';
 import '../sync_beep.dart';
+import '../widgets/shutter_side_button.dart';
 
 /// A session with this phone's camera off: a host or admin starts and stops
 /// every other camera from here without recording on this phone. The start
@@ -16,6 +17,7 @@ class ControllerScreen extends StatefulWidget {
     required this.members,
     required this.topBar,
     required this.onUseCamera,
+    required this.onWatch,
   });
 
   final SyncSocket socket;
@@ -23,8 +25,11 @@ class ControllerScreen extends StatefulWidget {
   final List<SessionMember> members;
   final Widget topBar;
 
-  /// Turns this phone's camera back on.
-  final VoidCallback onUseCamera;
+  /// Turns this phone's camera back on; null while switching.
+  final VoidCallback? onUseCamera;
+
+  /// Opens the session's recordings (greyed out while a take runs).
+  final VoidCallback onWatch;
 
   @override
   State<ControllerScreen> createState() => _ControllerScreenState();
@@ -172,42 +177,56 @@ class _ControllerScreenState extends State<ControllerScreen> {
                 ),
               ),
             ),
-            Semantics(
-              button: true,
-              label: active ? 'Stop all cameras' : 'Start all cameras',
-              child: GestureDetector(
-                onTap: _startOrStop,
-                child: Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white24,
-                    border: Border.all(color: Colors.white, width: 3),
-                  ),
-                  child: Center(
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 180),
-                      width: active ? 30 : 62,
-                      height: active ? 30 : 62,
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ShutterSideButton(
+                  icon: Icons.video_library_outlined,
+                  tooltip: 'Watch recordings',
+                  onPressed: active ? null : widget.onWatch,
+                ),
+                const SizedBox(width: 28),
+                Semantics(
+                  button: true,
+                  label: active ? 'Stop all cameras' : 'Start all cameras',
+                  child: GestureDetector(
+                    onTap: _startOrStop,
+                    child: Container(
+                      width: 80,
+                      height: 80,
                       decoration: BoxDecoration(
-                        color: Colors.redAccent,
-                        borderRadius: BorderRadius.circular(active ? 6 : 31),
+                        shape: BoxShape.circle,
+                        color: Colors.white24,
+                        border: Border.all(color: Colors.white, width: 3),
+                      ),
+                      child: Center(
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 180),
+                          width: active ? 30 : 62,
+                          height: active ? 30 : 62,
+                          decoration: BoxDecoration(
+                            color: Colors.redAccent,
+                            borderRadius:
+                                BorderRadius.circular(active ? 6 : 31),
+                          ),
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
+                const SizedBox(width: 28),
+                ShutterSideButton(
+                  icon: Icons.videocam_off,
+                  color: Colors.orangeAccent,
+                  tooltip: "Use this phone's camera",
+                  onPressed: active ? null : widget.onUseCamera,
+                ),
+              ],
             ),
             const SizedBox(height: 8),
             Text(
               active ? 'Stop all cameras' : 'Start all cameras',
               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-            ),
-            TextButton.icon(
-              onPressed: active ? null : widget.onUseCamera,
-              icon: const Icon(Icons.videocam_outlined),
-              label: const Text("Use this phone's camera"),
             ),
             const SizedBox(height: 12),
           ],
