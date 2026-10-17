@@ -31,13 +31,27 @@ class PhoneAlerts {
     channelDescription: 'Comments, people joining and practices starting',
     importance: Importance.high,
     priority: Priority.high,
+    // The status bar needs a white-on-transparent icon; the full-color app
+    // icon would show as a plain white square.
+    icon: 'ic_stat_8kount',
+  );
+
+  static const _details = NotificationDetails(
+    android: _channel,
+    iOS: DarwinNotificationDetails(),
   );
 
   Future<void> start() async {
     if (!_ready) {
       await _plugin.initialize(
         settings: const InitializationSettings(
-          android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+          android: AndroidInitializationSettings('ic_stat_8kount'),
+          // Asked for in requestPermission, from Settings, not at launch.
+          iOS: DarwinInitializationSettings(
+            requestAlertPermission: false,
+            requestBadgePermission: false,
+            requestSoundPermission: false,
+          ),
         ),
       );
       _ready = true;
@@ -52,9 +66,16 @@ class PhoneAlerts {
     _timer = null;
   }
 
-  /// Asks Android 13+ for permission to show notifications. Returns whether
-  /// they're allowed.
+  /// Asks for permission to show notifications (Android 13+ and iPhone).
+  /// Returns whether they're allowed.
   Future<bool> requestPermission() async {
+    final ios = _plugin.resolvePlatformSpecificImplementation<
+        IOSFlutterLocalNotificationsPlugin>();
+    if (ios != null) {
+      return await ios.requestPermissions(
+              alert: true, badge: true, sound: true) ??
+          false;
+    }
     final android = _plugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
     return await android?.requestNotificationsPermission() ?? true;
@@ -96,7 +117,7 @@ class PhoneAlerts {
         id: n.id.hashCode,
         title: alertTitle(n),
         body: alertBody(n),
-        notificationDetails: const NotificationDetails(android: _channel),
+        notificationDetails: _details,
       );
     }
   }
