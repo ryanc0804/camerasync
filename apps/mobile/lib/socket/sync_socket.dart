@@ -342,11 +342,10 @@ class SyncSocket {
   }
 
   /// Asks the server to start a take on every device in [sessionId], at a
-  /// shared time [bufferMs] from now. Returns null when it started, or the
-  /// reason it didn't.
-  Future<String?> requestStart(String sessionId, {int bufferMs = 1500}) =>
-      _command(Events.startRecording,
-          {'sessionId': sessionId, 'bufferMs': bufferMs}, 'start');
+  /// shared time it picks (long enough for the slowest device). Returns null
+  /// when it started, or the reason it didn't.
+  Future<String?> requestStart(String sessionId) =>
+      _command(Events.startRecording, {'sessionId': sessionId}, 'start');
 
   /// Asks the server to stop the take on every device in [sessionId].
   Future<String?> requestStop(String sessionId) =>

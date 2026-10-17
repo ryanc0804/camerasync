@@ -93,6 +93,10 @@ class _CameraScreenState extends State<CameraScreen> {
   _UploadState _upload = _UploadState.idle;
   String _uploadMessage = '';
 
+  /// Clears "Uploaded for playback" after a few seconds; a failed upload
+  /// stays up, with its retry.
+  Timer? _hideUploadDone;
+
   bool get _uploadsEnabled =>
       widget.sessionId != null && widget.recordings != null;
 
@@ -311,6 +315,7 @@ class _CameraScreenState extends State<CameraScreen> {
     }
     if (!mounted) return;
 
+    _hideUploadDone?.cancel();
     setState(() {
       _upload = _UploadState.uploading;
       _uploadMessage = 'Uploading recording…';
@@ -331,6 +336,11 @@ class _CameraScreenState extends State<CameraScreen> {
       setState(() {
         _upload = _UploadState.done;
         _uploadMessage = 'Uploaded for playback';
+      });
+      _hideUploadDone = Timer(const Duration(seconds: 4), () {
+        if (mounted && _upload == _UploadState.done) {
+          setState(() => _upload = _UploadState.idle);
+        }
       });
     } on ApiException catch (e) {
       debugPrint('Upload failed: ${e.message}');
@@ -354,6 +364,7 @@ class _CameraScreenState extends State<CameraScreen> {
     if (_orientationLocked) SystemChrome.setPreferredOrientations(const []);
     _pendingStart?.cancel();
     _pendingBeep?.cancel();
+    _hideUploadDone?.cancel();
     _beep?.dispose();
 
     for (final sub in _subs) {
