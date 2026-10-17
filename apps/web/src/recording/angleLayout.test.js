@@ -53,42 +53,25 @@ describe("commonAspect", () => {
 });
 
 describe("layoutAngles", () => {
-  for (const mode of ["grid", "spotlight"]) {
-    for (const [width, height] of [[1200, 640], [360, 600], [780, 330]]) {
-      for (const aspect of [H, V]) {
-        it(`${mode} keeps 1-6 tiles on a ${width}x${height} screen without overlap (${aspect > 1 ? "horizontal" : "vertical"})`, () => {
-          for (let count = 1; count <= 6; count += 1) {
-            const rects = layoutAngles({ width, height, count, aspect, mode, featured: count - 1 });
-            expect(rects).toHaveLength(count);
-            for (const rect of rects) {
-              expect(rect.width).toBeGreaterThan(0);
-              expect(inside(rect, width, height)).toBe(true);
-              // Each tile has the video's shape: no black bars.
-              expect(rect.width / rect.height).toBeCloseTo(aspect, 3);
-            }
-            for (let a = 0; a < count; a += 1) {
-              for (let b = a + 1; b < count; b += 1) {
-                expect(overlaps(rects[a], rects[b])).toBe(false);
-              }
+  for (const [width, height] of [[1200, 640], [360, 600], [780, 330]]) {
+    for (const aspect of [H, V]) {
+      it(`keeps 1-6 tiles on a ${width}x${height} screen without overlap (${aspect > 1 ? "horizontal" : "vertical"})`, () => {
+        for (let count = 1; count <= 6; count += 1) {
+          const rects = layoutAngles({ width, height, count, aspect });
+          expect(rects).toHaveLength(count);
+          for (const rect of rects) {
+            expect(rect.width).toBeGreaterThan(0);
+            expect(inside(rect, width, height)).toBe(true);
+            // Each tile has the video's shape: no black bars.
+            expect(rect.width / rect.height).toBeCloseTo(aspect, 3);
+          }
+          for (let a = 0; a < count; a += 1) {
+            for (let b = a + 1; b < count; b += 1) {
+              expect(overlaps(rects[a], rects[b])).toBe(false);
             }
           }
-        });
-      }
+        }
+      });
     }
   }
-
-  it("makes the featured angle the big one in spotlight", () => {
-    const rects = layoutAngles({ width: 1200, height: 640, count: 4, aspect: H, mode: "spotlight", featured: 2 });
-    const biggest = rects.reduce((max, r, i) => (r.width > rects[max].width ? i : max), 0);
-    expect(biggest).toBe(2);
-    // The rest sit to the right of it on a wide screen.
-    for (const [i, r] of rects.entries()) {
-      if (i !== 2) expect(r.left).toBeGreaterThan(rects[2].left + rects[2].width - 1);
-    }
-  });
-
-  it("puts the small angles underneath on a tall screen", () => {
-    const rects = layoutAngles({ width: 360, height: 640, count: 3, aspect: H, mode: "spotlight" });
-    expect(rects[1].top).toBeGreaterThan(rects[0].top + rects[0].height - 1);
-  });
 });

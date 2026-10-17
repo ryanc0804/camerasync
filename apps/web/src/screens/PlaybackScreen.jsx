@@ -112,7 +112,8 @@ export function PlaybackScreen() {
                   sessionId={sessionId} userId={Number(user.id)} onUploaded={setRecordings}
                   videoTime={videoTime} seek={seek} notes={notes} setNotes={setNotes}
                   notesError={notesError} setNotesError={setNotesError}
-                  recordingIndex={recordingIndex} toolsSlot={toolsSlot} />
+                  recordingIndex={recordingIndex} toolsSlot={toolsSlot}
+                  title={`${session.name} · ${takeName(recording, recordingIndex)}`} />
               </>
             )}
           </div>
@@ -164,7 +165,7 @@ function RecordingList({ sessionId, recordings }) {
 }
 
 function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, seek,
-  notes, setNotes, notesError, setNotesError, recordingIndex, toolsSlot }) {
+  notes, setNotes, notesError, setNotesError, recordingIndex, toolsSlot, title }) {
   const [uploading, setUploading] = useState(false);
   const [page, setPage] = useState(0);
   const [panelLayouts, setPanelLayouts] = useState({});
@@ -172,10 +173,6 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
   const [openVolume, setOpenVolume] = useState(null);
   const [choosingPanel, setChoosingPanel] = useState(null);
   const [focusedPanel, setFocusedPanel] = useState(null);
-  // Grid: every angle the same size. Spotlight: one large (featuredPanel),
-  // the rest small beside it; clicking a small one makes it the large one.
-  const [layoutMode, setLayoutMode] = useState("grid");
-  const [featuredPanel, setFeaturedPanel] = useState(0);
   // Each angle's shape (width / height), learned as its video loads, and the
   // space the angles are laid out in.
   const [aspects, setAspects] = useState({});
@@ -203,11 +200,13 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
   const panelVideos = panels.map(
     (id) => videos.find((video) => video.userId === id) || null
   );
-  // As many angles per page as fit at a watchable size (each at least
-  // 240px wide): 9 on a laptop, more on a big monitor.
+  // As many angles per page as fit while each stays big enough to watch
+  // (at least 340px wide): 4 on a laptop, 9-16 on a big monitor. Clicking
+  // an angle shows it on its own.
   const perPage = gridSize.width > 0
-    ? anglesPerPage(gridSize.width, gridSize.height, commonAspect(Object.values(aspects)))
-    : 6;
+    ? anglesPerPage(gridSize.width, gridSize.height,
+      commonAspect(Object.values(aspects)), { minTileWidth: 340 })
+    : 4;
   const pages = Math.ceil(panels.length / perPage);
   useEffect(() => {
     if (page > 0 && page >= pages) setPage(Math.max(0, pages - 1));
@@ -218,23 +217,46 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
   // angles fit (the page arrows sit in the play bar), so this can't loop.
   const transportRef = useRef(null);
   const [gridHeight, setGridHeight] = useState(null);
+
+  // Fullscreen: the whole player (angles, play bar, comments) fills the
+  // screen with a slim bar on top, and the grid re-fits to it. F toggles it,
+  // Esc leaves (the browser handles that), Space plays and pauses.
+  const boxRef = useRef(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const canFullscreen = typeof document !== "undefined" && document.fullscreenEnabled;
+  useEffect(() => {
+    const onChange = () => setFullscreen(
+      Boolean(boxRef.current) && document.fullscreenElement === boxRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else boxRef.current?.requestFullscreen().catch(() => {});
+  };
   useLayoutEffect(() => {
     if (!gridElement) return undefined;
     const fit = () => {
       const grid = gridElement.getBoundingClientRect();
       const transport = transportRef.current?.getBoundingClientRect();
       const below = transport ? transport.bottom - grid.bottom : 0;
-      const top = grid.top + window.scrollY;
-      // The page's own bottom padding, so the whole player fits without
-      // scrolling.
+      // In fullscreen the player is the whole screen; otherwise leave the
+      // page's own bottom padding, so the player fits without scrolling.
+      const top = fullscreen ? grid.top : grid.top + window.scrollY;
       const main = gridElement.closest("main");
-      const padding = main ? parseFloat(getComputedStyle(main).paddingBottom) || 0 : 16;
+      const padding = fullscreen ? 8
+        : main ? parseFloat(getComputedStyle(main).paddingBottom) || 0 : 16;
       setGridHeight(Math.max(320, Math.floor(window.innerHeight - top - below - padding - 4)));
     };
     fit();
+    // Entering or leaving fullscreen settles a frame later.
+    const frame = requestAnimationFrame(fit);
     window.addEventListener("resize", fit);
-    return () => window.removeEventListener("resize", fit);
-  }, [gridElement, Boolean(error), toolsSlot]);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", fit);
+    };
+  }, [gridElement, Boolean(error), toolsSlot, fullscreen]);
 
   useLayoutEffect(() => {
     if (!gridElement) return undefined;
@@ -250,23 +272,25 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     return () => observer.disconnect();
   }, [gridElement, gridHeight]);
 
-  // The current page's tiles: the best-fit grid or the spotlight, in the
-  // angles' usual shape, or just the enlarged one.
+  // The current page's tiles: the best-fit grid, in the angles' usual shape,
+  // or just the enlarged one.
   const pageStart = page * perPage;
   const pageCount = Math.min(perPage, Math.max(0, panelVideos.length - pageStart));
   const pageAspect = commonAspect(
     Array.from({ length: pageCount }, (_, i) => aspects[pageStart + i])
   );
+  // With more than one page, the angles leave a strip on each side for the
+  // page arrows, so the arrows never cover a video.
+  const ARROW = 48;
+  const gutter = pages > 1 ? ARROW + 6 : 0;
   const pageRects = focusedPanel !== null
     ? null
     : layoutAngles({
-      width: gridSize.width,
+      width: Math.max(0, gridSize.width - 2 * gutter),
       height: gridSize.height,
       count: pageCount,
       aspect: pageAspect,
-      mode: layoutMode,
-      featured: Math.floor(featuredPanel / perPage) === page ? featuredPanel - pageStart : 0,
-    });
+    }).map((rect) => ({ ...rect, left: rect.left + gutter }));
   const focusRect = focusedPanel === null
     ? null
     : layoutAngles({
@@ -282,6 +306,13 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     if (!rect) return { display: "none" };
     return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
   };
+
+  // The page arrows sit just outside the angles, in the side strips.
+  const tilesLeft = pageRects?.length ? Math.min(...pageRects.map((r) => r.left)) : 0;
+  const tilesRight = pageRects?.length
+    ? Math.max(...pageRects.map((r) => r.left + r.width)) : gridSize.width;
+  const prevArrowLeft = Math.max(0, tilesLeft - ARROW - 4);
+  const nextArrowLeft = Math.min(gridSize.width - ARROW, tilesRight + 4);
 
   // Only the angles on screen load and play: the current page, or just the
   // enlarged one. Each video is a full-quality stream to download and
@@ -494,26 +525,35 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     setPanelLayouts((current) => ({ ...current, [recordingIndex]: nextPanels }));
   };
 
-  const addPanel = () => {
-    updatePanels([...panels, null]);
-    setPage(Math.floor(panels.length / perPage));
-  };
-
-  const removePanel = (panelIndex) => {
-    const settings = panels.map((_, index) => getPanelAudio(index));
-    setAudioSettings((current) => ({
-      ...current,
-      [recordingIndex]: settings.filter((_, index) => index !== panelIndex),
-    }));
-    updatePanels(panels.filter((_, index) => index !== panelIndex));
-    setPage(Math.min(page, Math.ceil((panels.length - 1) / perPage) - 1));
-  };
-
   const chooseVideo = (panelIndex, value) => {
     const nextPanels = [...panels];
     nextPanels[panelIndex] = value === "" ? null : Number(value);
     updatePanels(nextPanels);
   };
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      const target = event.target;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (target.closest?.("input, textarea, select, [contenteditable='true']")) return;
+      if ((event.key === "f" || event.key === "F") && canFullscreen) {
+        event.preventDefault();
+        toggleFullscreen();
+      } else if (event.key === " " && !target.closest?.("button")) {
+        event.preventDefault();
+        (playingRef.current ? pause : play)();
+      } else if ((event.key === "ArrowRight" || event.key === "ArrowLeft")
+          && pages > 1 && focusedPanel === null && !target.closest?.("input")) {
+        const next = page + (event.key === "ArrowRight" ? 1 : -1);
+        if (next >= 0 && next < pages) {
+          event.preventDefault();
+          changePage(next);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
 
   const changePage = (nextPage) => {
     setPage(nextPage);
@@ -522,25 +562,74 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     setFocusedPanel(null);
   };
 
+  // Swiping sideways over the angles turns the page when they don't all
+  // fit: two fingers on a trackpad, or one on a touchscreen. One page per
+  // swipe; the browser's swipe-to-go-back is held off over the grid.
+  const swipe = useRef({ dx: 0, at: 0, touchX: null });
+  const turnPage = useRef(null);
+  turnPage.current = (direction) => {
+    const next = page + direction;
+    if (focusedPanel !== null || next < 0 || next >= pages) return;
+    changePage(next);
+  };
+  useEffect(() => {
+    if (!gridElement) return undefined;
+    const onWheel = (event) => {
+      if (Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+      event.preventDefault();
+      const now = Date.now();
+      // A swipe's momentum keeps sending events; wait for it to settle.
+      if (now - swipe.current.at < 700) return;
+      swipe.current.dx += event.deltaX;
+      if (Math.abs(swipe.current.dx) > 60) {
+        turnPage.current(swipe.current.dx > 0 ? 1 : -1);
+        swipe.current = { ...swipe.current, dx: 0, at: now };
+      }
+    };
+    const onTouchStart = (event) => { swipe.current.touchX = event.touches[0]?.clientX ?? null; };
+    const onTouchEnd = (event) => {
+      const start = swipe.current.touchX;
+      const end = event.changedTouches[0]?.clientX;
+      swipe.current.touchX = null;
+      if (start == null || end == null || Math.abs(end - start) < 60) return;
+      turnPage.current(end < start ? 1 : -1);
+    };
+    gridElement.addEventListener("wheel", onWheel, { passive: false });
+    gridElement.addEventListener("touchstart", onTouchStart, { passive: true });
+    gridElement.addEventListener("touchend", onTouchEnd);
+    return () => {
+      gridElement.removeEventListener("wheel", onWheel);
+      gridElement.removeEventListener("touchstart", onTouchStart);
+      gridElement.removeEventListener("touchend", onTouchEnd);
+    };
+  }, [gridElement]);
+
 
   const tools = (
     <>
-      {panels.length > 1 && (
-        <div className="playback-layout-switch" role="group" aria-label="Layout">
-          <button type="button" aria-pressed={layoutMode === "grid"}
-            onClick={() => setLayoutMode("grid")}>Grid</button>
-          <button type="button" aria-pressed={layoutMode === "spotlight"}
-            onClick={() => setLayoutMode("spotlight")}>Spotlight</button>
-        </div>
+      {canFullscreen && (
+        <button type="button" className="playback-fullscreen" onClick={toggleFullscreen}
+          aria-label={fullscreen ? "Exit full screen" : "Full screen"}
+          title={fullscreen ? "Exit full screen (F or Esc)" : "Full screen (F)"}>
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            {fullscreen
+              ? <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
+              : <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />}
+          </svg>
+        </button>
       )}
-      <button type="button" onClick={addPanel} disabled={uploading}
-        aria-label="Add one panel">+1</button>
     </>
   );
 
   return (
-    <section className="playback-box">
-      {toolsSlot ? createPortal(tools, toolsSlot) : <div className="playback-top">{tools}</div>}
+    <section className="playback-box" ref={boxRef}>
+      {fullscreen ? (
+        <div className="playback-fs-bar">
+          <strong>{title}</strong>
+          <div className="playback-fs-tools">{tools}</div>
+        </div>
+      ) : toolsSlot ? createPortal(tools, toolsSlot) : <div className="playback-top">{tools}</div>}
       {buffering && <p className="playback-buffering" role="status">Loading angles…</p>}
       {panelVideos.length === 0 ? (
         <p className="playback-empty">No videos have been uploaded for this recording yet.</p>
@@ -557,10 +646,6 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
             return (
             <figure key={pageIndex * perPage + index} style={tileStyle(panelIndex)}
               className={focused ? "playback-focused" : undefined}>
-              <button type="button" className="playback-panel-remove"
-                aria-label={`Remove panel ${pageIndex * perPage + index + 1}`}
-                disabled={uploading || panels.length === 1}
-                onClick={() => removePanel(pageIndex * perPage + index)}>−</button>
               {video?.url && (
                 <button type="button" className="playback-panel-change" disabled={uploading}
                   aria-label={`Change video for panel ${panelIndex + 1}`}
@@ -658,8 +743,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                 }}
               /> : <div className="playback-missing" />}
               {/* Clicking an angle plays it on its own (click again for the
-                  grid); in spotlight a small one becomes the big one first.
-                  An empty panel opens the camera list instead. */}
+                  grid). An empty panel opens the camera list instead. */}
               <button type="button" className="playback-add-video" disabled={uploading}
                 aria-label={!video?.url
                   ? `Choose video for panel ${panelIndex + 1}`
@@ -671,11 +755,6 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                     return;
                   }
                   setChoosingPanel(null);
-                  if (layoutMode === "spotlight" && focusedPanel === null &&
-                      featuredPanel !== panelIndex && pageCount > 1) {
-                    setFeaturedPanel(panelIndex);
-                    return;
-                  }
                   if (panels.length > 1) toggleFocus(panelIndex);
                 }}>
                 {!video?.url && choosingPanel !== pageIndex * perPage + index && "+"}
@@ -707,6 +786,30 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
             </figure>
             );
           })}
+          {/* More angles than fit: arrows on the grid's sides (or swipe, or
+              the arrow keys). */}
+          {pages > 1 && focusedPanel === null && page > 0 && (
+            <button type="button" className="playback-page-arrow"
+              style={{ left: prevArrowLeft }}
+              aria-label="Previous angles" disabled={uploading}
+              onClick={() => changePage(page - 1)}>
+              <svg viewBox="0 0 24 24" width="44" height="44" aria-hidden="true">
+                <path d="M15 4l-8 8 8 8" fill="none" stroke="currentColor" strokeWidth="2.5"
+                  strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          )}
+          {pages > 1 && focusedPanel === null && page + 1 < pages && (
+            <button type="button" className="playback-page-arrow"
+              style={{ left: nextArrowLeft }}
+              aria-label="More angles" disabled={uploading}
+              onClick={() => changePage(page + 1)}>
+              <svg viewBox="0 0 24 24" width="44" height="44" aria-hidden="true">
+                <path d="M9 4l8 8-8 8" fill="none" stroke="currentColor" strokeWidth="2.5"
+                  strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          )}
         </div>
         );
       })}
@@ -765,14 +868,8 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
         </div>
         <span>{formatTime(duration * 1000)}</span>
       </div>
-      {pages > 1 && (
-        <div className="playback-pages">
-          <button type="button" aria-label="Previous video page" disabled={uploading || page === 0}
-            onClick={() => changePage(page - 1)}>‹</button>
-          <span>{page + 1} / {pages}</span>
-          <button type="button" aria-label="Next video page" disabled={uploading || page + 1 === pages}
-            onClick={() => changePage(page + 1)}>›</button>
-        </div>
+      {pages > 1 && focusedPanel === null && (
+        <span className="playback-pages" aria-live="polite">Page {page + 1} of {pages}</span>
       )}
       <form className="playback-comment" onSubmit={postComment}>
         <input value={commentText} maxLength={500}
@@ -830,6 +927,20 @@ const css = `
   }
   .playback-page .playback-download:hover { background: rgba(255,255,255,0.08); }
   .playback-box { position: relative; }
+  .playback-box:fullscreen { background: #050505; padding: 10px 20px 8px; box-sizing: border-box; overflow: hidden; }
+  .playback-box::backdrop { background: #050505; }
+  .playback-fs-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .playback-fs-bar strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1.05rem; }
+  .playback-fs-tools { display: flex; align-items: center; gap: 10px; }
+  /* Styled like the download icon beside it: just the icon, team color. */
+  .playback-title-tools .playback-fullscreen, .playback-box .playback-fullscreen {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 38px; height: 38px; padding: 0; border: none; border-radius: 8px;
+    background: transparent; color: var(--accent);
+  }
+  .playback-title-tools .playback-fullscreen:hover, .playback-box .playback-fullscreen:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
   .playback-top, .playback-controls, .playback-pages { display: flex; justify-content: center; align-items: center; gap: 12px; }
   .playback-top { margin-bottom: 0.6rem; }
   .playback-title-tools { display: flex; align-items: center; gap: 10px; }
@@ -843,10 +954,6 @@ const css = `
   .recording-meta { color: #999; font-size: 0.85rem; }
   .playback-title-tools select, .playback-title-tools button { font: inherit; color: #f0f0f0; background: #292929; border: 1px solid #555; border-radius: 6px; padding: 0.4rem 0.8rem; cursor: pointer; }
   .playback-title-tools button:disabled, .playback-title-tools select:disabled { opacity: 0.4; cursor: default; }
-  .playback-title-tools .playback-layout-switch button { border-radius: 0; }
-  .playback-title-tools .playback-layout-switch button:first-child { border-radius: 6px 0 0 6px; }
-  .playback-title-tools .playback-layout-switch button:last-child { border-radius: 0 6px 6px 0; border-left: none; }
-  .playback-title-tools .playback-layout-switch button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   @media (max-width: 900px) {
     .playback-transport { flex-wrap: wrap; }
     .playback-comment { flex-basis: 100%; }
@@ -858,25 +965,16 @@ const css = `
   .playback-box button:disabled { opacity: 0.4; cursor: default; }
   /* Tiles are placed by layoutAngles (recording/angleLayout.js): each takes
      its video's shape, so there are no black bars inside it. */
-  .playback-grid { position: relative; height: 70vh; min-height: 320px; }
+  .playback-grid { position: relative; height: 70vh; min-height: 320px; overscroll-behavior-x: contain; touch-action: pan-y; }
   .playback-grid figure { position: absolute; margin: 0; display: flex; flex-direction: column; background: #000; border-radius: 6px; overflow: hidden; transition: left 0.2s, top 0.2s, width 0.2s, height 0.2s; }
-  .playback-layout-switch { display: inline-flex; }
-  .playback-box .playback-layout-switch button { border-radius: 0; }
-  .playback-box .playback-layout-switch button:first-child { border-radius: 6px 0 0 6px; }
-  .playback-box .playback-layout-switch button:last-child { border-radius: 0 6px 6px 0; border-left: none; }
-  .playback-box .playback-layout-switch button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-  .playback-box .playback-panel-remove { position: absolute; top: 6px; right: 6px; z-index: 3; width: 28px; height: 28px; padding: 0; border-radius: 50%; }
-  .playback-box .playback-panel-change { position: absolute; top: 6px; right: 40px; z-index: 3; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 50%; }
+  .playback-box .playback-panel-change { position: absolute; top: 6px; right: 6px; z-index: 3; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 50%; }
   /* A tile's buttons show while the mouse is over it (or a key reaches
      them), so they don't sit on top of the video the rest of the time. */
   @media (hover: hover) {
-    .playback-grid figure .playback-panel-remove,
     .playback-grid figure .playback-panel-change,
     .playback-grid figure .playback-audio { opacity: 0; transition: opacity 0.15s; }
-    .playback-grid figure:hover .playback-panel-remove,
     .playback-grid figure:hover .playback-panel-change,
     .playback-grid figure:hover .playback-audio,
-    .playback-grid figure:focus-within .playback-panel-remove,
     .playback-grid figure:focus-within .playback-panel-change,
     .playback-grid figure:focus-within .playback-audio { opacity: 1; }
   }
@@ -895,10 +993,22 @@ const css = `
   .playback-box .playback-add-video:hover { background: rgba(255,255,255,0.04); }
   .playback-panel-picker label { display: block; margin-top: 8px; padding: 8px; background: #292929; font-size: 0.7rem; }
   .playback-panel-picker input { display: block; max-width: 100%; margin-top: 6px; font: inherit; }
-  .playback-pages { flex: 0 0 auto; gap: 6px; }
+  .playback-pages { flex: 0 0 auto; color: #999; font-size: 0.85rem; }
+  .playback-box .playback-page-arrow {
+    position: absolute; top: 50%; z-index: 4; transform: translateY(-50%);
+    display: flex; align-items: center; justify-content: center;
+    width: 48px; height: 96px; padding: 0; border: none; border-radius: 0;
+    background: none; color: #fff; cursor: pointer;
+    filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.9));
+    opacity: 0.75; transition: opacity 0.15s, transform 0.15s;
+  }
+  .playback-box .playback-page-arrow:hover, .playback-box .playback-page-arrow:focus-visible { opacity: 1; background: none; }
   .playback-live-note { min-height: 1.3rem; margin: 0.4rem 0 0; text-align: center; color: #f0f0f0; font-size: 0.85rem; overflow-wrap: anywhere; }
   .playback-live-note strong { color: var(--accent); }
-  .playback-transport { display: flex; align-items: center; gap: 12px; margin-top: 0.3rem; }
+  /* The timeline gets a full-width row; play, pages and the comment box sit
+     under it, so none of them squeeze it. */
+  .playback-transport { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 0.3rem; }
+  .playback-transport .playback-seek { order: -1; flex: 1 1 100%; }
   .playback-transport .playback-controls { flex: 0 0 auto; gap: 6px; }
   .playback-seek { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
   .playback-seek span { color: #999; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
@@ -916,7 +1026,7 @@ const css = `
     margin-left: 8px; padding: 0 6px; border: none; background: transparent;
     color: #ff6b6b; font-size: 1rem; line-height: 1;
   }
-  .playback-comment { display: flex; gap: 8px; flex: 0 1 320px; min-width: 200px; margin: 0; }
+  .playback-comment { display: flex; gap: 8px; flex: 0 1 360px; min-width: 200px; margin: 0 0 0 auto; }
   .playback-comment input {
     flex: 1; min-width: 0; padding: 0.45rem 0.6rem; border: 1px solid #555; border-radius: 6px;
     background: #292929; color: #f0f0f0; font: inherit; font-size: 0.9rem;

@@ -44,16 +44,10 @@ export function commonAspect(aspects) {
   return sorted[Math.floor(sorted.length / 2)];
 }
 
-/// Rectangles ({ left, top, width, height }) for `count` tiles, in order.
-///
-///   grid       every angle the same size, rows centered
-///   spotlight  `featured` large, the others small beside it (to the right
-///              on a wide screen, underneath on a tall one)
-export function layoutAngles({ width, height, count, aspect, mode = "grid", featured = 0, gap = 12 }) {
+/// Rectangles ({ left, top, width, height }) for `count` tiles, in order:
+/// every angle the same size, rows centered.
+export function layoutAngles({ width, height, count, aspect, gap = 12 }) {
   if (!width || !height || count === 0) return [];
-  if (mode === "spotlight" && count > 1) {
-    return spotlight(width, height, count, aspect, Math.min(featured, count - 1), gap);
-  }
   return grid(width, height, count, aspect, gap);
 }
 
@@ -73,56 +67,4 @@ function grid(width, height, count, aspect, gap) {
     });
   }
   return rects;
-}
-
-function spotlight(width, height, count, aspect, featured, gap) {
-  const others = count - 1;
-  const side = width >= height;
-  // The strip takes a share of the screen sized to the videos' shape.
-  const share = aspect >= 1 ? (side ? 0.24 : 0.22) : (side ? 0.16 : 0.3);
-  const stripW = side ? width * share : width;
-  const stripH = side ? height : height * share;
-  const mainW = side ? width - stripW - gap : width;
-  const mainH = side ? height : height - stripH - gap;
-
-  const main = bestGrid(mainW, mainH, 1, aspect, gap);
-  const mainRect = {
-    left: (mainW - main.tileWidth) / 2,
-    top: (mainH - main.tileHeight) / 2,
-    width: main.tileWidth,
-    height: main.tileHeight,
-  };
-
-  const small = side
-    ? bestGrid(stripW, stripH, others, aspect, gap)
-    : { columns: others, rows: 1, ...rowOf(stripW, stripH, others, aspect, gap) };
-  const blockW = small.columns * small.tileWidth + (small.columns - 1) * gap;
-  const blockH = small.rows * small.tileHeight + (small.rows - 1) * gap;
-  const left0 = side ? mainW + gap + (stripW - blockW) / 2 : (stripW - blockW) / 2;
-  const top0 = side ? (stripH - blockH) / 2 : mainH + gap + (stripH - blockH) / 2;
-
-  const rects = [];
-  let n = 0;
-  for (let i = 0; i < count; i += 1) {
-    if (i === featured) {
-      rects.push(mainRect);
-      continue;
-    }
-    rects.push({
-      left: left0 + (n % small.columns) * (small.tileWidth + gap),
-      top: top0 + Math.floor(n / small.columns) * (small.tileHeight + gap),
-      width: small.tileWidth,
-      height: small.tileHeight,
-    });
-    n += 1;
-  }
-  return rects;
-}
-
-// One row of `count` tiles filling a strip's height, shrunk to fit its width.
-function rowOf(width, height, count, aspect, gap) {
-  const byHeight = height * aspect;
-  const byWidth = (width - gap * (count - 1)) / count;
-  const tileWidth = Math.max(0, Math.min(byHeight, byWidth));
-  return { tileWidth, tileHeight: tileWidth / aspect };
 }

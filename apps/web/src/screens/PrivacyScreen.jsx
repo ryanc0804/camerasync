@@ -1,10 +1,10 @@
 import { Link } from "react-router-dom";
 
 // The privacy policy, at /privacy: both app stores link to it, so it works
-// signed out. A draft written from what the app actually stores; review it
-// before publishing, and set CONTACT_EMAIL to an inbox someone reads.
-const UPDATED = "October 14, 2026";
-const CONTACT_EMAIL = "privacy@8kount.app";
+// signed out. Written from what the app actually stores; update it (and the
+// date) when that changes.
+const UPDATED = "October 17, 2026";
+const CONTACT_EMAIL = "camerasync36@gmail.com";
 
 export function PrivacyScreen() {
   return (

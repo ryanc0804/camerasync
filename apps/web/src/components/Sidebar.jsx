@@ -180,7 +180,8 @@ export function Sidebar() {
   );
 }
 
-export const SIDEBAR_WIDTH = 150;
+// Slim, so the pages (and the angles in playback) get the width.
+export const SIDEBAR_WIDTH = 116;
 
 const styles = {
   sidebar: {
@@ -199,20 +200,20 @@ const styles = {
   list: {
     listStyle: "none",
     margin: 0,
-    padding: "0.6rem 0.6rem 0",
+    padding: "0.55rem 0.5rem 0",
     display: "flex",
     flexDirection: "column",
-    gap: 26,
+    gap: 12,
     flex: 1,
   },
   icon: {
     display: "block",
     lineHeight: 1,
-    marginBottom: 8,
+    marginBottom: 5,
   },
   footer: {
-    padding: "1rem 0.75rem 1.25rem",
-    fontSize: "0.8rem",
+    padding: "0.75rem 0.4rem 1rem",
+    fontSize: "0.74rem",
     textAlign: "center",
   },
   user: {
@@ -231,16 +232,18 @@ const css = `
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 0.9rem 0.4rem;
-    border-radius: 14px;
+    padding: 0.7rem 0.25rem;
+    border-radius: 12px;
     color: var(--brand-ink);
     text-decoration: none;
-    font-size: 0.85rem;
+    font-size: 0.78rem;
     font-weight: 600;
+    line-height: 1.2;
     text-align: center;
     transition: background 0.12s;
   }
   .kh-nav:hover { background: rgba(255,255,255,0.28); }
+  .kh-nav svg { width: 26px; height: 26px; }
   .kh-nav-active,
   .kh-nav-active:hover {
     background: var(--brand-active);
@@ -250,10 +253,11 @@ const css = `
   .kh-logout {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
     font: inherit;
     font-weight: 700;
-    padding: 0.45rem 0.8rem;
+    padding: 0.4rem 0.35rem;
+    white-space: nowrap;
     border: none;
     border-radius: 10px;
     background: transparent;
