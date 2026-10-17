@@ -323,6 +323,8 @@ export function ActiveSessionScreen() {
 
             setMembers(reply.members);
             setSocketStatus("Connected");
+            // Clears "Reconnecting…" once a dropped connection is back.
+            setError("");
             const controls = Boolean(reply.session.canControl);
             setCanControl(controls);
             setRecordingMessage(
@@ -334,7 +336,12 @@ export function ActiveSessionScreen() {
 
         socket.on("connect_error", (err) => {
           setSocketStatus("Disconnected");
-          setError(err.message);
+          // A network drop or server restart ("xhr poll error"); socket.io
+          // keeps retrying and rejoins on connect. Anything else, like a
+          // rejected login, is shown as is.
+          setError(err.type === "TransportError"
+            ? "Lost the connection to the server. Reconnecting…"
+            : err.message);
         });
         socket.on("session:members", setMembers);
         socket.on("recording:started", beginRecording);
