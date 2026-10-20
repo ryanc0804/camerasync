@@ -10,4 +10,5 @@ class Events {
   static const stopRecording = 'recording:stop';
   static const recordingStarted = 'recording:started';
   static const recordingStopped = 'recording:stopped';
+  static const cameraDropped = 'recording:dropped';
 }

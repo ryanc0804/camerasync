@@ -6,6 +6,8 @@
 // server pings every client and times the pong), so it works for every
 // client without any changes on their side.
 
+import { SYNC_BEEP_DELAY_MS } from "../recordings/syncBeep.js";
+
 // Never shorter than this: plenty on a normal connection, and what a device
 // gets before its first heartbeat has been timed.
 export const MIN_START_DELAY_MS = 1500;
@@ -47,4 +49,30 @@ export function trackRoundTrips(socket, now = Date.now) {
     if (recent.length > RECENT_ROUND_TRIPS) recent.shift();
     socket.data.roundTripMs = Math.max(...recent);
   });
+}
+
+// How long the cameras keep rolling after the end beep starts: the beep
+// itself (240 ms), the playing device's audio latency, and some margin.
+export const END_BEEP_TAIL_MS = 800;
+
+// Never closer to the start beep than this, so a very short take still has
+// the two beeps apart.
+const END_BEEP_AFTER_START_BEEP_MS = 600;
+
+// When a stop takes effect. A take that hasn't reached its shared start yet
+// is simply cancelled. Otherwise the device that pressed Stop plays the end
+// beep once the command has reached the slowest device, and every camera
+// stops END_BEEP_TAIL_MS later, so all of them record it.
+export function stopSchedule(roundTripsMs, startAtEpochMs, now) {
+  if (now < startAtEpochMs) {
+    return { stopAtEpochMs: now, endBeepAtEpochMs: null };
+  }
+  const known = roundTripsMs.filter((ms) => Number.isFinite(ms) && ms >= 0);
+  const slowest = known.length > 0 ? Math.max(...known) : 0;
+  const delay = Math.min(MAX_START_DELAY_MS, Math.max(1000, Math.round(slowest + 300)));
+  const endBeepAtEpochMs = Math.max(
+    now + delay,
+    startAtEpochMs + SYNC_BEEP_DELAY_MS + END_BEEP_AFTER_START_BEEP_MS
+  );
+  return { endBeepAtEpochMs, stopAtEpochMs: endBeepAtEpochMs + END_BEEP_TAIL_MS };
 }

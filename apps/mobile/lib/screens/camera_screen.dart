@@ -3,8 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:async';
+import 'dart:math' as math;
 import '../api/api_client.dart';
 import '../api/recordings_api.dart';
+import '../keep_awake.dart';
+import '../notifications/take_alerts.dart';
 import '../socket/sync_socket.dart';
 import '../sync_beep.dart';
 import '../widgets/shutter_side_button.dart';
@@ -64,9 +67,27 @@ class CameraScreen extends StatefulWidget {
 
 enum _UploadState { idle, uploading, done, failed }
 
+/// How long before a take's shared start the camera is told to record.
+/// Phones only really start a beat after they're asked (0.9 s on an Android
+/// in testing, 0.1-0.2 s on iPhones), so asking early has them rolling by
+/// the start. The extra second at the front costs nothing: playback lines
+/// the angles up by the sync beep.
+const kCameraLeadMs = 1000;
+
 class _CameraScreenState extends State<CameraScreen> {
   final List<StreamSubscription> _subs = [];
   Timer? _pendingStart;
+
+  /// The stop is in, and the cameras keep rolling until its time so they
+  /// all record the end beep.
+  Timer? _pendingStop;
+
+  /// The take this phone left the app during. It carries on without this
+  /// camera; rejoining doesn't fall back into it (the clip from before
+  /// leaving is what's kept), only the next take.
+  int? _droppedTakeStartAt;
+
+  late final AppLifecycleListener _lifecycle;
   CameraController? _cameraController;
   bool _cameraReady = false;
   bool _recording = false;
@@ -103,6 +124,11 @@ class _CameraScreenState extends State<CameraScreen> {
   @override
   void initState() {
     super.initState();
+    KeepAwake.acquire();
+    _lifecycle = AppLifecycleListener(
+      onInactive: _onLeftScreen,
+      onResume: _onBackOnScreen,
+    );
     _initialize();
   }
 
@@ -121,15 +147,7 @@ class _CameraScreenState extends State<CameraScreen> {
     final socket = widget.socket;
     if (socket != null) {
       _subs.add(socket.recordingStart.listen(_scheduleStart));
-      // A stop that lands before the shared start cancels it too.
-      _subs.add(socket.recordingStop.listen((_) {
-        _pendingStart?.cancel();
-        // Stopped before it started: nothing to save, just unlock.
-        if (!(_cameraController?.value.isRecordingVideo ?? false)) {
-          _unlockOrientation();
-        }
-        _stopRecording();
-      }));
+      _subs.add(socket.recordingStop.listen(_scheduleStop));
     }
   }
 
@@ -152,6 +170,8 @@ class _CameraScreenState extends State<CameraScreen> {
       );
 
       await _cameraController!.initialize();
+      // Sets up recording ahead of time on iPhone, so a take starts sooner.
+      await _cameraController!.prepareForVideoRecording().catchError((_) {});
 
       if (!mounted) return;
 
@@ -199,11 +219,15 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   void _scheduleStart(RecordingStartCommand command) {
+    if (command.serverStartAtEpochMs == _droppedTakeStartAt) return;
     unawaited(_lockOrientation());
     _plannedStartAtEpochMs = command.serverStartAtEpochMs;
+    _plannedLocalStartAtEpochMs = command.localStartAtEpochMs;
     _recordingNumber = command.recordingNumber;
+    _pendingStop?.cancel();
 
     final delay = command.localStartAtEpochMs -
+        kCameraLeadMs -
         DateTime.now().millisecondsSinceEpoch;
 
     _pendingStart?.cancel();
@@ -223,6 +247,88 @@ class _CameraScreenState extends State<CameraScreen> {
       Duration(milliseconds: delay < 0 ? 0 : delay),
       _startRecording,
     );  //Timer
+  }
+
+  /// The take's shared start on this device's clock.
+  int? _plannedLocalStartAtEpochMs;
+
+  /// Keeps recording until the stop's time, playing the end beep first if
+  /// this phone pressed Stop. A take stopped before its shared start is
+  /// cancelled: anything already recorded for it (the camera starts early)
+  /// is thrown away.
+  void _scheduleStop(RecordingStopCommand command) {
+    _pendingStart?.cancel();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final startAt = _plannedLocalStartAtEpochMs;
+    final stopAt = command.localStopAtEpochMs;
+    final cancelled = command.localEndBeepAtEpochMs == null &&
+        stopAt != null &&
+        startAt != null &&
+        stopAt < startAt;
+
+    if (cancelled) _pendingBeep?.cancel();
+    final endBeepAt = command.localEndBeepAtEpochMs;
+    if (_beepOnNextStop && endBeepAt != null && _endBeep != null) {
+      _pendingEndBeep?.cancel();
+      _pendingEndBeep = Timer(
+        Duration(milliseconds: math.max(0, endBeepAt - now)),
+        () => _endBeep?.play(),
+      );
+    }
+    _beepOnNextStop = false;
+
+    if (!(_cameraController?.value.isRecordingVideo ?? false)) {
+      // Stopped before it started: nothing to save, just unlock.
+      _unlockOrientation();
+      _plannedStartAtEpochMs = null;
+      return;
+    }
+    _pendingStop?.cancel();
+    _pendingStop = Timer(
+      Duration(milliseconds: stopAt == null ? 0 : math.max(0, stopAt - now)),
+      () => _stopRecording(discard: cancelled),
+    );
+    setState(() {});
+  }
+
+  /// The app is leaving the screen (home button, app switcher, a call). The
+  /// phone takes the camera away from a background app, so a take in
+  /// progress is stopped here while it can still be saved, uploaded and
+  /// lined up; the rest of the room is told, and the camera is let go until
+  /// the app is back, as the camera plugin requires.
+  Future<void> _onLeftScreen() async {
+    final controller = _cameraController;
+    if (controller == null) return;
+    final takeStartAt = _plannedStartAtEpochMs;
+    final midTake = !widget.isSolo &&
+        takeStartAt != null &&
+        (controller.value.isRecordingVideo ||
+            (_pendingStart?.isActive ?? false));
+    _pendingStart?.cancel();
+    _pendingStop?.cancel();
+    if (midTake) {
+      _droppedTakeStartAt = takeStartAt;
+      widget.socket?.reportCameraDropped();
+      unawaited(TakeAlerts.recordingStopped());
+    }
+    if (controller.value.isRecordingVideo) await _stopRecording();
+    if (!mounted || _cameraController != controller) return;
+    _cameraController = null;
+    setState(() => _cameraReady = false);
+    await controller.dispose();
+  }
+
+  Future<void> _onBackOnScreen() async {
+    if (_cameraController == null && !_permissionDenied) {
+      await _initializeCamera();
+    }
+    if (!mounted || _droppedTakeStartAt == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text(
+          'You left the app, so your recording stopped. What was recorded '
+          'is saved, and you\'ll join the next take.'),
+      duration: Duration(seconds: 6),
+    ));
   }
 
   Future<void> _startRecording() async {
@@ -267,7 +373,10 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
-  Future<void> _stopRecording() async {
+  /// Stops and uploads the take. [discard] drops it instead: a take
+  /// cancelled before its start, that this camera began early for.
+  Future<void> _stopRecording({bool discard = false}) async {
+    _pendingStop?.cancel();
     if (_cameraController == null ||
         !_cameraController!.value.isRecordingVideo) {
       debugPrint('Not recording');
@@ -277,6 +386,7 @@ class _CameraScreenState extends State<CameraScreen> {
     final startedAt = _plannedStartAtEpochMs;
     final actualStartedAt = _actualStartAtEpochMs;
     _plannedStartAtEpochMs = null;
+    _plannedLocalStartAtEpochMs = null;
     _actualStartAtEpochMs = null;
     _recordingNumber = null;
 
@@ -288,12 +398,14 @@ class _CameraScreenState extends State<CameraScreen> {
 
       debugPrint('Video saved: ${file.path}');
 
-      if (_uploadsEnabled && startedAt != null) {
+      if (_uploadsEnabled && startedAt != null && !discard) {
         _lastVideoPath = file.path;
         _lastVideoName = file.name;
         _lastStartedAtEpochMs = startedAt;
         _lastActualStartedAtEpochMs = actualStartedAt;
-        await _uploadLastVideo();
+        // Not awaited: leaving the app stops a take, and the camera is let
+        // go right after, whether or not the upload finishes first.
+        unawaited(_uploadLastVideo());
       }
     } catch (e) {
       debugPrint('Stop recording error: $e');
@@ -361,6 +473,11 @@ class _CameraScreenState extends State<CameraScreen> {
 
   @override
   void dispose() {
+    KeepAwake.release();
+    _lifecycle.dispose();
+    _pendingStop?.cancel();
+    _pendingEndBeep?.cancel();
+    _endBeep?.dispose();
     if (_orientationLocked) SystemChrome.setPreferredOrientations(const []);
     _pendingStart?.cancel();
     _pendingBeep?.cancel();
@@ -580,19 +697,30 @@ class _CameraScreenState extends State<CameraScreen> {
   SyncBeep? _beep;
   Timer? _pendingBeep;
 
+  /// This phone pressed Stop, so it plays the end beep.
+  bool _beepOnNextStop = false;
+  SyncBeep? _endBeep;
+  Timer? _pendingEndBeep;
+
   /// The host's shutter starts or stops the take on every device; the server
   /// then sends the shared start (or stop) back here like everywhere else.
   Future<void> _hostShutter() async {
     final socket = widget.socket;
     final sessionId = widget.sessionId;
     if (socket == null || sessionId == null || _requesting) return;
+    // Already stopping: the cameras are just recording the end beep.
+    if (_pendingStop?.isActive ?? false) return;
     final stopping = _recording || (_pendingStart?.isActive ?? false);
     setState(() => _requesting = true);
+    // Loaded now so it plays on time when the start (or stop) comes back.
     if (!stopping) {
-      // Loaded now so it plays on time when the start comes back.
       _beepOnNextStart = true;
       _beep ??= SyncBeep();
       await _beep!.prepare().catchError((_) {});
+    } else {
+      _beepOnNextStop = true;
+      _endBeep ??= SyncBeep(tones: kEndBeepTonesHz);
+      await _endBeep!.prepare().catchError((_) {});
     }
     final error = stopping
         ? await socket.requestStop(sessionId)
@@ -601,6 +729,7 @@ class _CameraScreenState extends State<CameraScreen> {
     setState(() => _requesting = false);
     if (error != null) {
       _beepOnNextStart = false;
+      _beepOnNextStop = false;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(error)));
     }

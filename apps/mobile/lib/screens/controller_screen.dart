@@ -48,14 +48,43 @@ class _ControllerScreenState extends State<ControllerScreen> {
   SyncBeep? _beep;
   Timer? _pendingBeep;
 
+  /// The stop is in; the cameras roll on until its time to record the end
+  /// beep, which this phone plays if it pressed Stop.
+  Timer? _pendingStop;
+  bool _beepOnNextStop = false;
+  SyncBeep? _endBeep;
+  Timer? _pendingEndBeep;
+
   @override
   void initState() {
     super.initState();
     _subs.add(widget.socket.recordingStart.listen(_scheduleStart));
-    _subs.add(widget.socket.recordingStop.listen((_) {
-      _pendingStart?.cancel();
+    _subs.add(widget.socket.recordingStop.listen(_scheduleStop));
+  }
+
+  void _scheduleStop(RecordingStopCommand command) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final wasStarting = _pendingStart?.isActive ?? false;
+    _pendingStart?.cancel();
+    if (wasStarting) _pendingBeep?.cancel();
+
+    final endBeepAt = command.localEndBeepAtEpochMs;
+    if (_beepOnNextStop && endBeepAt != null && _endBeep != null) {
+      _pendingEndBeep?.cancel();
+      _pendingEndBeep = Timer(
+        Duration(milliseconds: endBeepAt < now ? 0 : endBeepAt - now),
+        () => _endBeep?.play(),
+      );
+    }
+    _beepOnNextStop = false;
+
+    final stopAt = command.localStopAtEpochMs;
+    final wait = stopAt == null || stopAt < now ? 0 : stopAt - now;
+    _pendingStop?.cancel();
+    _pendingStop = Timer(Duration(milliseconds: wait), () {
       if (mounted) setState(() => _recording = false);
-    }));
+    });
+    if (mounted) setState(() {});
   }
 
   void _scheduleStart(RecordingStartCommand command) {
@@ -80,13 +109,17 @@ class _ControllerScreenState extends State<ControllerScreen> {
   }
 
   Future<void> _startOrStop() async {
-    if (_requesting) return;
+    if (_requesting || (_pendingStop?.isActive ?? false)) return;
     final stopping = _recording || (_pendingStart?.isActive ?? false);
     setState(() => _requesting = true);
     if (!stopping) {
       _beepOnNextStart = true;
       _beep ??= SyncBeep();
       await _beep!.prepare().catchError((_) {});
+    } else {
+      _beepOnNextStop = true;
+      _endBeep ??= SyncBeep(tones: kEndBeepTonesHz);
+      await _endBeep!.prepare().catchError((_) {});
     }
     final error = stopping
         ? await widget.socket.requestStop(widget.sessionId)
@@ -95,6 +128,7 @@ class _ControllerScreenState extends State<ControllerScreen> {
     setState(() => _requesting = false);
     if (error != null) {
       _beepOnNextStart = false;
+      _beepOnNextStop = false;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(error)));
     }
@@ -105,6 +139,9 @@ class _ControllerScreenState extends State<ControllerScreen> {
     _pendingStart?.cancel();
     _pendingBeep?.cancel();
     _beep?.dispose();
+    _pendingStop?.cancel();
+    _pendingEndBeep?.cancel();
+    _endBeep?.dispose();
     for (final sub in _subs) {
       sub.cancel();
     }
@@ -116,10 +153,13 @@ class _ControllerScreenState extends State<ControllerScreen> {
     final cameras = widget.members.where((m) => m.camera).length;
     final controlling = widget.members.length - cameras;
     final starting = _pendingStart?.isActive ?? false;
+    final stoppingTake = _pendingStop?.isActive ?? false;
     final active = _recording || starting;
 
     final String status;
-    if (_recording) {
+    if (_recording && stoppingTake) {
+      status = 'Stopping…';
+    } else if (_recording) {
       status = 'Recording on $cameras ${cameras == 1 ? 'camera' : 'cameras'}';
     } else if (starting) {
       status = 'Starting…';

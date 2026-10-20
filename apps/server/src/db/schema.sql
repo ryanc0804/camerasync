@@ -316,3 +316,13 @@ BEGIN
       FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL;
   END IF;
 END $$;
+
+-- When the end beep (see src/recordings/syncBeep.js) played for this
+-- recording, in server-clock ms. The device that stops a take plays it just
+-- before every camera stops. NULL for takes stopped before it existed.
+ALTER TABLE session_recordings ADD COLUMN IF NOT EXISTS end_beep_epoch_ms BIGINT;
+
+-- Where the end beep was found in this video, in ms from its start. Lines up
+-- an angle that started too late to hear the start beep. NULL when it
+-- wasn't heard.
+ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS end_beep_at_ms INTEGER;

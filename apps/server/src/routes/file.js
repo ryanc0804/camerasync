@@ -15,7 +15,7 @@ import { atLeast, getSessionRole, sessionVisibleSql } from "../middleware/groupR
 import { storage } from "../storage/index.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
 import { startOffsetMs } from "../recordings/startOffset.js";
-import { findSyncBeep } from "../recordings/syncBeep.js";
+import { findEndBeep, findSyncBeep } from "../recordings/syncBeep.js";
 import { remuxForStreaming } from "../recordings/remux.js";
 
 export const fileRouter = Router();
@@ -287,6 +287,9 @@ fileRouter.post(
       // findSyncBeep never throws; null just means playback falls back to
       // the start time the device reported.
       const beepAtMs = await findSyncBeep(tempPath);
+      // And for the end beep, which lines up an angle that started too late
+      // to hear the first.
+      const endBeepAtMs = await findEndBeep(tempPath);
       // Index at the front and seekable, so playback starts quickly. Keeps
       // the original if it can't (no re-encode either way).
       await remuxForStreaming(tempPath, path.extname(fileId));
@@ -306,18 +309,20 @@ fileRouter.post(
         await ensureRecordingNumber(req.query.sessionId, Number(req.query.startedAt));
         ({ rows } = await pool.query(
           `INSERT INTO recording_session_videos
-             (session_id, user_id, started_at_ms, file_id, start_offset_ms, beep_at_ms)
-           VALUES ($1, $2, $3, $4, $5, $6)
+             (session_id, user_id, started_at_ms, file_id, start_offset_ms, beep_at_ms,
+              end_beep_at_ms)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
            ON CONFLICT (session_id, user_id, started_at_ms)
            DO UPDATE SET file_id = EXCLUDED.file_id,
              start_offset_ms = COALESCE(recording_session_videos.start_offset_ms,
                                         EXCLUDED.start_offset_ms),
-             beep_at_ms = EXCLUDED.beep_at_ms
+             beep_at_ms = EXCLUDED.beep_at_ms,
+             end_beep_at_ms = EXCLUDED.end_beep_at_ms
            WHERE recording_session_videos.file_id IS NULL
            RETURNING file_id`,
           [req.query.sessionId, req.user.id, Number(req.query.startedAt), fileId,
             startOffsetMs(req.query.actualStartedAt, Number(req.query.startedAt)),
-            beepAtMs]
+            beepAtMs, endBeepAtMs]
         ));
       } catch (err) {
         await storage.remove([fileId]).catch(() => {});

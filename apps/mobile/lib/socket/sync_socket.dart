@@ -62,6 +62,24 @@ class RecordingStartCommand {
   final int? recordingNumber;
 }
 
+/// A stop command. Cameras keep rolling until [localStopAtEpochMs] (this
+/// device's clock), so every one of them records the end beep, which the
+/// device that pressed Stop plays at [localEndBeepAtEpochMs]. Both are null
+/// from servers that stop at once, and the end beep is null for a take
+/// cancelled before its start.
+class RecordingStopCommand {
+  const RecordingStopCommand({
+    this.serverStartAtEpochMs,
+    this.localStopAtEpochMs,
+    this.localEndBeepAtEpochMs,
+  });
+
+  /// The take being stopped, when the server said.
+  final int? serverStartAtEpochMs;
+  final int? localStopAtEpochMs;
+  final int? localEndBeepAtEpochMs;
+}
+
 /// Result of the `session:join` ack.
 class JoinResult {
   const JoinResult({
@@ -111,7 +129,8 @@ class SyncSocket {
 
   final _members = StreamController<List<SessionMember>>.broadcast();
   final _recordingStart = StreamController<RecordingStartCommand>.broadcast();
-  final _recordingStop = StreamController<void>.broadcast();
+  final _recordingStop = StreamController<RecordingStopCommand>.broadcast();
+  final _cameraDropped = StreamController<SessionMember>.broadcast();
   final _sessionClosed = StreamController<void>.broadcast();
   final _errors = StreamController<String>.broadcast();
   final _connection = StreamController<bool>.broadcast();
@@ -123,8 +142,12 @@ class SyncSocket {
   /// and its conversion to this device's clock.
   Stream<RecordingStartCommand> get recordingStart => _recordingStart.stream;
 
-  /// Emits when recording should stop.
-  Stream<void> get recordingStop => _recordingStop.stream;
+  /// Emits each stop command.
+  Stream<RecordingStopCommand> get recordingStop => _recordingStop.stream;
+
+  /// Emits who dropped out when another camera's app left the screen
+  /// mid-take and its recording stopped.
+  Stream<SessionMember> get cameraDropped => _cameraDropped.stream;
 
   /// Emits when the host ends the session.
   Stream<void> get sessionClosed => _sessionClosed.stream;
@@ -220,7 +243,25 @@ class SyncSocket {
       }
     });
 
-    socket.on(Events.recordingStopped, (_) => _recordingStop.add(null));
+    socket.on(Events.recordingStopped, (data) {
+      int? field(String key) =>
+          data is Map ? (data[key] as num?)?.toInt() : null;
+      final stopAt = field('stopAtEpochMs');
+      final endBeepAt = field('endBeepAtEpochMs');
+      _recordingStop.add(RecordingStopCommand(
+        serverStartAtEpochMs: field('startAtEpochMs'),
+        localStopAtEpochMs: stopAt == null ? null : serverToLocal(stopAt),
+        localEndBeepAtEpochMs:
+            endBeepAt == null ? null : serverToLocal(endBeepAt),
+      ));
+    });
+
+    socket.on(Events.cameraDropped, (data) {
+      final user = data is Map ? data['user'] : null;
+      if (user is Map && user['id'] is num) {
+        _cameraDropped.add(SessionMember.fromJson(user));
+      }
+    });
 
     socket.on(Events.closeSession, (_) => _sessionClosed.add(null));
 
@@ -391,6 +432,10 @@ class SyncSocket {
   Future<String?> requestStop(String sessionId) =>
       _command(Events.stopRecording, {'sessionId': sessionId}, 'stop');
 
+  /// Tells the room this phone's recording stopped because the app left the
+  /// screen mid-take, so whoever runs the session knows to redo it.
+  void reportCameraDropped() => _socket?.emit(Events.cameraDropped);
+
   Future<String?> _command(
       String event, Map<String, dynamic> payload, String verb) {
     final socket = _socket;
@@ -423,6 +468,7 @@ class SyncSocket {
     _members.close();
     _recordingStart.close();
     _recordingStop.close();
+    _cameraDropped.close();
     _sessionClosed.close();
     _errors.close();
     _connection.close();

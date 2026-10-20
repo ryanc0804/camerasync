@@ -9,4 +9,6 @@ export const EVENTS = {
   STOP_RECORDING: "recording:stop",
   RECORDING_STARTED: "recording:started",
   RECORDING_STOPPED: "recording:stopped",
+  // a camera's recording stopped because its app left the screen mid-take
+  CAMERA_DROPPED: "recording:dropped",
 };

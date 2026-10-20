@@ -28,7 +28,7 @@ import { deleteRecordingFiles } from "./file.js";
 import { EVENTS } from "../sockets/events.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
 import { startOffsetMs } from "../recordings/startOffset.js";
-import { startOffsetFromBeep } from "../recordings/syncBeep.js";
+import { startOffsetFromBeep, startOffsetFromEndBeep } from "../recordings/syncBeep.js";
 
 export const recordingsRouter = Router();
 const SOCKET_STATUSES = new Set(['recording', 'stopped']);
@@ -185,6 +185,27 @@ recordingsRouter.delete("/sessions/:id", requireAuth, async (req, res, next) => 
   }
 });
 
+// How much later a camera really started than its take's startedAt, which
+// players shift the angle by, and what that comes from: the start beep when
+// the video heard it, else the end beep (a camera that started too late for
+// the first), else the time the device reported, else nothing.
+function videoStartOffset(row, startedAt) {
+  if (row.beep_at_ms != null) {
+    return { startOffsetMs: startOffsetFromBeep(Number(row.beep_at_ms)), syncedBy: "beep" };
+  }
+  if (row.end_beep_at_ms != null && row.end_beep_epoch_ms != null) {
+    return {
+      startOffsetMs: startOffsetFromEndBeep(
+        Number(row.end_beep_at_ms), Number(row.end_beep_epoch_ms), startedAt),
+      syncedBy: "beep",
+    };
+  }
+  if (row.start_offset_ms != null) {
+    return { startOffsetMs: Number(row.start_offset_ms), syncedBy: "device" };
+  }
+  return { startOffsetMs: null, syncedBy: null };
+}
+
 // Load the session's recordings for members of its group.
 recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next) => {
   try {
@@ -198,7 +219,8 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
     }
     const { rows } = await pool.query(
       `SELECT v.started_at_ms, v.user_id, v.file_id, v.start_offset_ms,
-              v.beep_at_ms, u.display_name, sr.recording_number
+              v.beep_at_ms, v.end_beep_at_ms, sr.end_beep_epoch_ms,
+              u.display_name, sr.recording_number
        FROM recording_session_videos v JOIN users u ON u.user_id = v.user_id
        LEFT JOIN session_recordings sr
          ON sr.session_id = v.session_id AND sr.started_at_ms = v.started_at_ms
@@ -226,14 +248,7 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
         userId: Number(row.user_id),
         name: row.display_name || "Unnamed member",
         url: row.file_id ? `/api/files/get/${row.file_id}` : null,
-        // How much later this camera really started than startedAt; players
-        // shift the angle by it. From the sync beep when this video heard
-        // it, else the time the device reported, else null.
-        startOffsetMs: row.beep_at_ms != null
-          ? startOffsetFromBeep(Number(row.beep_at_ms))
-          : row.start_offset_ms == null ? null : Number(row.start_offset_ms),
-        syncedBy: row.beep_at_ms != null ? "beep"
-          : row.start_offset_ms != null ? "device" : null,
+        ...videoStartOffset(row, startedAt),
       });
     }
     res.json({ session: sessions[0], recordings });

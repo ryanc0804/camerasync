@@ -11,11 +11,15 @@ import { pool } from "../db/pool.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
 import { SYNC_BEEP_DELAY_MS } from "../recordings/syncBeep.js";
 import { EVENTS } from "./events.js";
-import { startDelayMs, trackRoundTrips } from "./startDelay.js";
+import { startDelayMs, stopSchedule, trackRoundTrips } from "./startDelay.js";
 
 const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:5173";
 let io = null;
 const activeRecordings = new Map();
+// When each session's last stopped take really ends (its cameras stop a
+// moment after the stop command, see stopSchedule), so the next take can't
+// start while they are still rolling.
+const stoppingUntil = new Map();
 // Fallback numbering for the legacy /api/recordings/update flow, whose
 // session ids are not recording_sessions rows and so cannot be persisted.
 const recordingNumbers = new Map();
@@ -267,6 +271,22 @@ export async function initSocket(httpServer) {
       }
     );
 
+    // A camera left the app mid-take (its recording stopped there); tell the
+    // rest of the room, so whoever runs the session can redo the take.
+    socket.on(EVENTS.CAMERA_DROPPED, () => {
+      const sessionId = socket.data.sessionId;
+      if (!sessionId || !activeRecordings.has(sessionId)) return;
+      socket
+        .to(roomName(sessionId))
+        .emit(EVENTS.CAMERA_DROPPED, {
+          user: {
+            id: socket.data.user.id,
+            email: socket.data.user.email,
+            name: socket.data.user.name,
+          },
+        });
+    });
+
     socket.on("disconnect", async () => {
       const sessionId = socket.data.sessionId;
       if (sessionId) await sendRoomMembers(sessionId);
@@ -305,7 +325,10 @@ export async function startSessionRecording(sessionId) {
   const bufferMs = startDelayMs(sockets.map((socket) => socket.data.roundTripMs));
 
   const serverSentAtEpochMs = Date.now();
-  const startAtEpochMs = serverSentAtEpochMs + bufferMs;
+  const startAtEpochMs = Math.max(
+    serverSentAtEpochMs + bufferMs,
+    (stoppingUntil.get(sessionId) ?? 0) + 500
+  );
 
   // The number is persisted against the start time so playback shows the
   // same "Recording N" the host saw, even after a server restart.
@@ -336,16 +359,37 @@ export async function startSessionRecording(sessionId) {
 export async function stopSessionRecording(sessionId) {
   const recording = activeRecordings.get(sessionId);
   if (!recording) throw new Error("This session is not recording.");
+  // Taken off at once, so a second Stop while this one is awaited fails.
+  activeRecordings.delete(sessionId);
 
+  const sockets = await getIO().in(roomName(sessionId)).fetchSockets();
+  const { stopAtEpochMs, endBeepAtEpochMs } = stopSchedule(
+    sockets.map((socket) => socket.data.roundTripMs),
+    recording.startAtEpochMs,
+    Date.now()
+  );
   const stoppedRecording = {
     ...recording,
-    stopAtEpochMs: Date.now(),
+    stopAtEpochMs,
+    // The device that asked for the stop plays the end beep at this time.
+    endBeepAtEpochMs,
   };
-
+  stoppingUntil.set(sessionId, stopAtEpochMs);
+  // Sent before saving anything: the stop's delay is for the network.
   getIO()
     .to(roomName(sessionId))
     .emit(EVENTS.RECORDING_STOPPED, stoppedRecording);
-  activeRecordings.delete(sessionId);
+  if (endBeepAtEpochMs != null) {
+    // Kept with the take so uploads can be lined up by it. Legacy session
+    // ids have no row, which is fine: they just go without.
+    await pool
+      .query(
+        `UPDATE session_recordings SET end_beep_epoch_ms = $3
+          WHERE session_id = $1 AND started_at_ms = $2`,
+        [sessionId, recording.startAtEpochMs, endBeepAtEpochMs]
+      )
+      .catch((err) => console.error("Unable to save the end beep time:", err));
+  }
   return stoppedRecording;
 }
 
