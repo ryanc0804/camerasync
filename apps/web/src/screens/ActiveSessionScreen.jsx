@@ -13,13 +13,14 @@ import {
 import { getGroups } from "../api/groups.js";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { LocalMediaPreview } from "../components/LocalMediaPreview.jsx";
+import { useWakeLock } from "../hooks/useWakeLock.js";
 import {
   createLocalRecorder,
   downloadFile,
   recordingBaseName,
   recordingDisplayName,
 } from "../recording/localRecording.js";
-import { playSyncBeep } from "../recording/syncBeep.js";
+import { END_BEEP_TONES_HZ, playSyncBeep } from "../recording/syncBeep.js";
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
 let timesyncPromise = null;
@@ -86,7 +87,17 @@ export function ActiveSessionScreen() {
   const recordingInfoRef = useRef(null);
   // This device pressed Start, so it plays the sync beep for the take.
   const beepRequestedRef = useRef(false);
+  // And pressed Stop, so it plays the end beep.
+  const endBeepRequestedRef = useRef(false);
+  // Waiting out a stop: cameras keep rolling until its time so they all
+  // record the end beep.
+  const stopTimerRef = useRef(null);
+  // A camera that left its app mid-take, for whoever runs the session.
+  const [dropNotice, setDropNotice] = useState("");
   const audioContextRef = useRef(null);
+  // The screen stays on for the whole live session, cameras and controllers
+  // alike: a sleeping computer misses the start or starts late.
+  useWakeLock();
 
   // checks that this user can enter the live session
   useEffect(() => {
@@ -255,12 +266,36 @@ export function ActiveSessionScreen() {
       }, delay);
     };
 
-    // stops this device when the host sends stop
+    // stops this device when the host sends stop: at the stop's time, after
+    // the end beep, which this device plays if it pressed Stop
     const finishRecording = (command) => {
       if (recordingTimerRef.current) {
         window.clearTimeout(recordingTimerRef.current);
         recordingTimerRef.current = null;
       }
+
+      const receivedAtEpochMs = clock.now();
+      if (endBeepRequestedRef.current && command.endBeepAtEpochMs) {
+        const audioContext = audioContextRef.current;
+        if (audioContext) {
+          const wait = Math.max(0, command.endBeepAtEpochMs - receivedAtEpochMs) / 1000;
+          playSyncBeep(audioContext, audioContext.currentTime + wait, END_BEEP_TONES_HZ);
+        }
+      }
+      endBeepRequestedRef.current = false;
+
+      const stopIn = command.stopAtEpochMs
+        ? Math.max(0, command.stopAtEpochMs - receivedAtEpochMs)
+        : 0;
+      window.clearTimeout(stopTimerRef.current);
+      stopTimerRef.current = window.setTimeout(() => {
+        stopTimerRef.current = null;
+        stopNow(command);
+      }, stopIn);
+    };
+
+    const stopNow = (command) => {
+      setDropNotice("");
 
       if (recordingInfoRef.current) {
         recordingInfoRef.current = {
@@ -346,6 +381,10 @@ export function ActiveSessionScreen() {
         socket.on("session:members", setMembers);
         socket.on("recording:started", beginRecording);
         socket.on("recording:stopped", finishRecording);
+        socket.on("recording:dropped", ({ user: dropped } = {}) => {
+          const name = dropped?.name || dropped?.email || "A camera";
+          setDropNotice(`${name} left the app, so their camera stopped recording this take.`);
+        });
         socket.on("session:close", () => {
           navigate("/watch", { replace: true });
         });
@@ -362,6 +401,8 @@ export function ActiveSessionScreen() {
         window.clearTimeout(recordingTimerRef.current);
         recordingTimerRef.current = null;
       }
+      window.clearTimeout(stopTimerRef.current);
+      stopTimerRef.current = null;
       if (
         recorderRef.current &&
         recorderRef.current.state !== "inactive"
@@ -440,10 +481,20 @@ export function ActiveSessionScreen() {
       return;
     }
 
+    // The click lets the end beep play, like the start's.
+    try {
+      audioContextRef.current ??= new AudioContext();
+      audioContextRef.current.resume();
+      endBeepRequestedRef.current = true;
+    } catch {
+      // No Web Audio: cameras that heard the start beep still line up.
+    }
+
     setRecordingStatus("stopping");
-    setRecordingMessage("Sending the stop command...");
+    setRecordingMessage("Stopping with a beep...");
     socket.emit("recording:stop", { sessionId }, (reply) => {
       if (!reply?.ok) {
+        endBeepRequestedRef.current = false;
         setRecordingStatus("recording");
         setRecordingMessage(reply?.error || "Unable to stop recording.");
       }
@@ -623,6 +674,9 @@ export function ActiveSessionScreen() {
                 )}
                 {recordingMessage}
               </p>
+              {canControl && dropNotice && (
+                <p className="session-sync-tip" role="status">{dropNotice}</p>
+              )}
             </section>
           )}
 

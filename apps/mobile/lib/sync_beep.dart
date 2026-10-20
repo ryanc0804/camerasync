@@ -12,13 +12,21 @@ import 'package:audioplayers/audioplayers.dart';
 const kSyncBeepTonesHz = [2800, 4200];
 const kSyncBeepToneMs = 120;
 
+/// The end beep: the same tones the other way round, played by the device
+/// that stops a take just before every camera stops. It lines up a camera
+/// that started too late to hear the first one.
+const kEndBeepTonesHz = [4200, 2800];
+
 /// The beep as a 16-bit mono WAV file.
-Uint8List syncBeepWav({int sampleRate = 44100}) {
+Uint8List syncBeepWav({
+  int sampleRate = 44100,
+  List<int> tones = kSyncBeepTonesHz,
+}) {
   final toneSamples = sampleRate * kSyncBeepToneMs ~/ 1000;
   final ramp = sampleRate * 5 ~/ 1000;
-  final samples = Int16List(toneSamples * kSyncBeepTonesHz.length);
-  for (var t = 0; t < kSyncBeepTonesHz.length; t++) {
-    final hz = kSyncBeepTonesHz[t];
+  final samples = Int16List(toneSamples * tones.length);
+  for (var t = 0; t < tones.length; t++) {
+    final hz = tones[t];
     for (var n = 0; n < toneSamples; n++) {
       // Short ramps so the tones don't click, which would smear their pitch.
       final edge = math.min(n, toneSamples - 1 - n);
@@ -50,11 +58,17 @@ Uint8List syncBeepWav({int sampleRate = 44100}) {
 /// Plays the beep. [prepare] loads it ahead of time so [play] starts as
 /// close to on time as the phone allows.
 class SyncBeep {
+  SyncBeep({this.tones = kSyncBeepTonesHz});
+
+  /// [kSyncBeepTonesHz] for the start beep, [kEndBeepTonesHz] for the end.
+  final List<int> tones;
+
   final AudioPlayer _player = AudioPlayer();
 
   Future<void> prepare() async {
     await _player.setReleaseMode(ReleaseMode.stop);
-    await _player.setSource(BytesSource(syncBeepWav(), mimeType: 'audio/wav'));
+    await _player.setSource(
+        BytesSource(syncBeepWav(tones: tones), mimeType: 'audio/wav'));
   }
 
   Future<void> play() => _player.resume();

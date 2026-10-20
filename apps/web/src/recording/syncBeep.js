@@ -6,11 +6,17 @@
 export const SYNC_BEEP_TONES_HZ = [2800, 4200];
 export const SYNC_BEEP_TONE_MS = 120;
 
-/// Plays the beep through `audioContext` at `whenSeconds` on its clock.
-export function playSyncBeep(audioContext, whenSeconds) {
+// The end beep: the same tones the other way round, played by the device
+// that stops a take just before every camera stops. It lines up a camera
+// that started too late to hear the first one.
+export const END_BEEP_TONES_HZ = [4200, 2800];
+
+/// Plays the beep through `audioContext` at `whenSeconds` on its clock;
+/// `tones` picks the start beep (the default) or END_BEEP_TONES_HZ.
+export function playSyncBeep(audioContext, whenSeconds, tones = SYNC_BEEP_TONES_HZ) {
   const toneSeconds = SYNC_BEEP_TONE_MS / 1000;
   const ramp = 0.005;
-  SYNC_BEEP_TONES_HZ.forEach((hz, index) => {
+  tones.forEach((hz, index) => {
     const start = whenSeconds + index * toneSeconds;
     const end = start + toneSeconds;
     const tone = audioContext.createOscillator();

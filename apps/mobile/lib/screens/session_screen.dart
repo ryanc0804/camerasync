@@ -7,6 +7,7 @@ import 'watch_screen.dart';
 
 import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
+import '../keep_awake.dart';
 import '../socket/sync_socket.dart';
 
 /// Recording view for a session. Requests camera/mic only while mounted and
@@ -57,6 +58,7 @@ class _SessionScreenState extends State<SessionScreen> {
   @override
   void initState() {
     super.initState();
+    KeepAwake.acquire();
     _init();
   }
 
@@ -84,6 +86,16 @@ class _SessionScreenState extends State<SessionScreen> {
     }));
     _subs.add(socket.recordingStop.listen((_) {
       if (mounted) setState(() => _takeRunning = false);
+    }));
+    // Whoever runs the session hears when a camera drops out of a take, so
+    // they can redo it.
+    _subs.add(socket.cameraDropped.listen((member) {
+      if (!mounted || !_canControl) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('${member.displayName} left the app, so their camera '
+            'stopped recording this take.'),
+        duration: const Duration(seconds: 6),
+      ));
     }));
     _subs.add(socket.errors.listen((message) {
       if (mounted) setState(() => _error = message);
@@ -169,6 +181,7 @@ class _SessionScreenState extends State<SessionScreen> {
 
   @override
   void dispose() {
+    KeepAwake.release();
     for (final s in _subs) {
       s.cancel();
     }

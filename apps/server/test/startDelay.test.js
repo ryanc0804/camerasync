@@ -5,7 +5,9 @@ import {
   CAMERA_START_MS,
   MAX_START_DELAY_MS,
   MIN_START_DELAY_MS,
+  END_BEEP_TAIL_MS,
   startDelayMs,
+  stopSchedule,
   trackRoundTrips,
 } from "../src/sockets/startDelay.js";
 
@@ -60,5 +62,34 @@ describe("trackRoundTrips", () => {
     socket.conn.emit("packetCreate", { type: "message" });
     socket.conn.emit("heartbeat");
     expect(socket.data.roundTripMs).toBeUndefined();
+  });
+});
+
+describe("stopSchedule", () => {
+  const START = 1_000_000;
+
+  it("cancels a take that hasn't reached its start", () => {
+    expect(stopSchedule([50], START, START - 400)).toEqual({
+      stopAtEpochMs: START - 400,
+      endBeepAtEpochMs: null,
+    });
+  });
+
+  it("plays the end beep once the slowest device has the stop, then stops", () => {
+    const now = START + 30_000;
+    const { endBeepAtEpochMs, stopAtEpochMs } = stopSchedule([40, 900], START, now);
+    expect(endBeepAtEpochMs).toBe(now + 1200);
+    expect(stopAtEpochMs).toBe(endBeepAtEpochMs + END_BEEP_TAIL_MS);
+  });
+
+  it("waits at least a second, and at most the start delay's cap", () => {
+    const now = START + 30_000;
+    expect(stopSchedule([], START, now).endBeepAtEpochMs).toBe(now + 1000);
+    expect(stopSchedule([60_000], START, now).endBeepAtEpochMs).toBe(now + MAX_START_DELAY_MS);
+  });
+
+  it("keeps the end beep clear of the start beep in a very short take", () => {
+    const { endBeepAtEpochMs } = stopSchedule([], START, START + 100);
+    expect(endBeepAtEpochMs).toBeGreaterThanOrEqual(START + 1500 + 600);
   });
 });

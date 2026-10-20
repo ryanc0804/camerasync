@@ -20,6 +20,13 @@ export const SYNC_BEEP_DELAY_MS = 1500;
 export const SYNC_BEEP_TONES_HZ = [2800, 4200];
 export const SYNC_BEEP_TONE_MS = 120;
 
+/// The end beep: the same tones the other way round, played by the device
+/// that stops a take a moment before every camera stops. A camera that
+/// started too late to hear the start beep (a phone that reconnected
+/// mid-take) is lined up by this one instead. Reversed so neither beep can
+/// be taken for the other in a short take that holds both.
+export const END_BEEP_TONES_HZ = [4200, 2800];
+
 const SAMPLE_RATE = 16000;
 const HOP = 80; // 5 ms
 const WINDOW = 320; // 20 ms
@@ -30,6 +37,9 @@ const MIN_SCORE = 0.3;
 // Only the start of a video is searched: the beep comes 1.5 s after the
 // shared start, and cameras begin within a few seconds of it.
 const SEARCH_SECONDS = 10;
+// And only the end for the end beep: cameras stop under a second after it,
+// or a few seconds on a slow connection.
+const END_SEARCH_SECONDS = 10;
 
 // Share of a window's energy at `freq`, from a Goertzel filter: 1 for a pure
 // tone at that pitch, near 0 for anything else.
@@ -51,16 +61,17 @@ function toneShare(samples, start, freq) {
 }
 
 /// Where the sync beep starts in `samples` (mono, 16 kHz), in ms from the
-/// start, or null when there isn't a clear one.
-export function detectSyncBeep(samples) {
+/// start, or null when there isn't a clear one. `tones` picks the start beep
+/// (the default) or END_BEEP_TONES_HZ.
+export function detectSyncBeep(samples, tones = SYNC_BEEP_TONES_HZ) {
   const frames = Math.floor((samples.length - WINDOW) / HOP) + 1;
   if (frames <= 0) return null;
-  const [lowHz, highHz] = SYNC_BEEP_TONES_HZ;
+  const [firstHz, secondHz] = tones;
   const low = new Float32Array(frames);
   const high = new Float32Array(frames);
   for (let f = 0; f < frames; f += 1) {
-    low[f] = toneShare(samples, f * HOP, lowHz);
-    high[f] = toneShare(samples, f * HOP, highHz);
+    low[f] = toneShare(samples, f * HOP, firstHz);
+    high[f] = toneShare(samples, f * HOP, secondHz);
   }
 
   // Frames whose whole window falls inside one tone.
@@ -119,6 +130,68 @@ export function decodeAudioStart(filePath, { timeoutMs = 15000 } = {}) {
   });
 }
 
+/// The last seconds of a video's audio as mono 16 kHz samples, and where
+/// they begin in the video (ms). The whole track is decoded and only the
+/// tail kept, so the position is exact without trusting a seek. Null like
+/// decodeAudioStart.
+export function decodeAudioEnd(filePath, { seconds = END_SEARCH_SECONDS, timeoutMs = 60000 } = {}) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(
+        "ffmpeg",
+        ["-v", "error", "-i", filePath,
+          "-vn", "-ac", "1", "-ar", String(SAMPLE_RATE), "-f", "f32le", "pipe:1"],
+        { stdio: ["ignore", "pipe", "ignore"] }
+      );
+    } catch {
+      resolve(null);
+      return;
+    }
+    const keepBytes = seconds * SAMPLE_RATE * 4;
+    let chunks = [];
+    let kept = 0;
+    let total = 0;
+    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+    child.stdout.on("data", (chunk) => {
+      chunks.push(chunk);
+      kept += chunk.length;
+      total += chunk.length;
+      // Drop whole chunks that are no longer needed; the tail is cut exactly
+      // at the end.
+      while (chunks.length > 1 && kept - chunks[0].length >= keepBytes) {
+        kept -= chunks[0].length;
+        chunks.shift();
+      }
+    });
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const bytes = Buffer.concat(chunks);
+      chunks = [];
+      if (code !== 0 || bytes.length < 4) {
+        resolve(null);
+        return;
+      }
+      const totalSamples = Math.floor(total / 4);
+      const tailSamples = Math.min(totalSamples, seconds * SAMPLE_RATE);
+      // Samples are counted from the start of the stream, which may sit
+      // mid-chunk here, so cut from the (aligned) end.
+      const end = bytes.length - (total % 4);
+      const tail = bytes.subarray(end - tailSamples * 4, end);
+      const aligned = new Uint8Array(tail.length);
+      aligned.set(tail);
+      resolve({
+        samples: new Float32Array(aligned.buffer),
+        startMs: Math.round(((totalSamples - tailSamples) * 1000) / SAMPLE_RATE),
+      });
+    });
+  });
+}
+
 /// Where the sync beep is in an uploaded video, in ms, or null. Never
 /// throws: an upload must not fail because its audio couldn't be checked.
 export async function findSyncBeep(filePath) {
@@ -130,10 +203,30 @@ export async function findSyncBeep(filePath) {
   }
 }
 
+/// Where the end beep is in an uploaded video, in ms from its start, or
+/// null. Never throws, like findSyncBeep.
+export async function findEndBeep(filePath) {
+  try {
+    const tail = await decodeAudioEnd(filePath);
+    if (!tail) return null;
+    const at = detectSyncBeep(tail.samples, END_BEEP_TONES_HZ);
+    return at == null ? null : tail.startMs + at;
+  } catch {
+    return null;
+  }
+}
+
 /// A video's real start relative to its take's shared start, in ms, from
 /// where the beep landed in it: the beep played SYNC_BEEP_DELAY_MS after the
 /// shared start, so a camera that heard it `beepAtMs` in started that much
 /// earlier than the beep.
 export function startOffsetFromBeep(beepAtMs) {
   return SYNC_BEEP_DELAY_MS - beepAtMs;
+}
+
+/// The same from the end beep: it played at endBeepAtEpochMs (server clock)
+/// and landed `endBeepAtMs` into the video, so the camera started that much
+/// before it.
+export function startOffsetFromEndBeep(endBeepAtMs, endBeepAtEpochMs, startedAtMs) {
+  return endBeepAtEpochMs - endBeepAtMs - startedAtMs;
 }

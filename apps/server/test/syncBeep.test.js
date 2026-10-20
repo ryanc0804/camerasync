@@ -1,12 +1,21 @@
 // Finding the sync beep in a video's audio, on synthetic 16 kHz audio.
 import { describe, expect, it } from "vitest";
 
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import {
+  END_BEEP_TONES_HZ,
   SYNC_BEEP_DELAY_MS,
   SYNC_BEEP_TONES_HZ,
   SYNC_BEEP_TONE_MS,
   detectSyncBeep,
+  findEndBeep,
+  findSyncBeep,
   startOffsetFromBeep,
+  startOffsetFromEndBeep,
 } from "../src/recordings/syncBeep.js";
 
 const RATE = 16000;
@@ -91,3 +100,56 @@ describe("startOffsetFromBeep", () => {
     expect(startOffsetFromBeep(SYNC_BEEP_DELAY_MS)).toBe(0);
   });
 });
+
+describe("the end beep", () => {
+  it("is found by its own tones and not taken for the start beep", () => {
+    const audio = addBeep(addNoise(silence(6), 0.05), 3100, 0.3, END_BEEP_TONES_HZ);
+    expect(Math.abs(detectSyncBeep(audio, END_BEEP_TONES_HZ) - 3100)).toBeLessThanOrEqual(10);
+    expect(detectSyncBeep(audio)).toBeNull();
+  });
+
+  it("keeps the two apart in a short take that holds both", () => {
+    const audio = addBeep(addNoise(silence(5), 0.05), 1500, 0.3);
+    addBeep(audio, 2400, 0.3, END_BEEP_TONES_HZ);
+    expect(Math.abs(detectSyncBeep(audio) - 1500)).toBeLessThanOrEqual(10);
+    expect(Math.abs(detectSyncBeep(audio, END_BEEP_TONES_HZ) - 2400)).toBeLessThanOrEqual(10);
+  });
+
+  it("lines up a camera from where the end beep landed", () => {
+    // The end beep played 20 s after the shared start and landed 18.3 s
+    // into this video, so the camera started 1.7 s late.
+    expect(startOffsetFromEndBeep(18300, 1_000_020_000, 1_000_000_000)).toBe(1700);
+  });
+});
+
+// Through ffmpeg, as an upload is checked: a 25 s "video" whose start beep
+// and end beep sit at known places.
+describe("finding the beeps in a file", () => {
+  let dir;
+  function writeAudio(samples) {
+    dir = mkdtempSync(path.join(tmpdir(), "beep-"));
+    const raw = path.join(dir, "audio.f32");
+    const file = path.join(dir, "take.m4a");
+    writeFileSync(raw, Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength));
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "f32le", "-ar", String(RATE),
+      "-ac", "1", "-i", raw, "-c:a", "aac", file]);
+    return file;
+  }
+
+  it("finds both, at the right places", async () => {
+    let hasFfmpeg = true;
+    try { execFileSync("ffmpeg", ["-version"], { stdio: "ignore" }); } catch { hasFfmpeg = false; }
+    if (!hasFfmpeg) return;
+    const audio = addBeep(addNoise(silence(25), 0.05), 1500, 0.3);
+    addBeep(audio, 23250, 0.3, END_BEEP_TONES_HZ);
+    try {
+      const file = writeAudio(audio);
+      // AAC adds a little priming delay, well under a frame.
+      expect(Math.abs((await findSyncBeep(file)) - 1500)).toBeLessThanOrEqual(30);
+      expect(Math.abs((await findEndBeep(file)) - 23250)).toBeLessThanOrEqual(30);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+

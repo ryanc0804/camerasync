@@ -124,6 +124,26 @@ describe("saving a video's real start", () => {
     expect(take.videos[0]).toMatchObject({ startOffsetMs: 800, syncedBy: "beep" });
   });
 
+  it("falls back to the end beep for a camera that missed the start beep", async () => {
+    const startedAt = Date.now() - 3_000;
+    await save({ startedAt, actualStartedAt: startedAt + 100 });
+    // The end beep played 20 s into the take and landed 18.3 s into this
+    // video: the camera started 1.7 s late.
+    await pool.query(
+      `UPDATE session_recordings SET end_beep_epoch_ms = $3
+        WHERE session_id = $1 AND started_at_ms = $2`,
+      [sessionId, startedAt, startedAt + 20_000]
+    );
+    await pool.query(
+      `UPDATE recording_session_videos SET end_beep_at_ms = 18300
+        WHERE session_id = $1 AND started_at_ms = $2`,
+      [sessionId, startedAt]
+    );
+
+    const take = (await videosOf()).find((r) => r.startedAt === startedAt);
+    expect(take.videos[0]).toMatchObject({ startOffsetMs: 1700, syncedBy: "beep" });
+  });
+
   it("is null for clients that don't report it", async () => {
     const startedAt = Date.now() - 10_000;
     expect((await save({ startedAt })).status).toBe(200);
