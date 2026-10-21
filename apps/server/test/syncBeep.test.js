@@ -13,6 +13,7 @@ import {
   SYNC_BEEP_TONE_MS,
   detectSyncBeep,
   findEndBeep,
+  audioLeadInMs,
   findSyncBeep,
   startOffsetFromBeep,
   startOffsetFromEndBeep,
@@ -153,3 +154,36 @@ describe("finding the beeps in a file", () => {
   });
 });
 
+
+// Like an iPhone file whose sound track starts 60 ms after its picture: the
+// beep is found where it is in the video, not in the sound track alone.
+describe("a sound track that starts after the picture", () => {
+  it("is measured from the start of the video", async () => {
+    let hasFfmpeg = true;
+    try { execFileSync("ffmpeg", ["-version"], { stdio: "ignore" }); } catch { hasFfmpeg = false; }
+    if (!hasFfmpeg) return;
+    const dir = mkdtempSync(path.join(tmpdir(), "leadin-"));
+    try {
+      const raw = path.join(dir, "audio.f32");
+      const sound = path.join(dir, "sound.m4a");
+      const picture = path.join(dir, "picture.mp4");
+      // Matroska keeps a track's start time exactly as given; ffmpeg's MP4
+      // writer evens it out, so the iPhone-style gap is built in an .mkv.
+      const file = path.join(dir, "take.mkv");
+      const audio = addBeep(addNoise(silence(6), 0.05), 1500, 0.3);
+      writeFileSync(raw, Buffer.from(audio.buffer, audio.byteOffset, audio.byteLength));
+      execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "f32le", "-ar", String(RATE),
+        "-ac", "1", "-i", raw, "-c:a", "aac", sound]);
+      execFileSync("ffmpeg", ["-v", "error", "-y", "-f", "lavfi",
+        "-i", "color=c=gray:s=160x120:r=30:d=6.1", "-c:v", "libx264", "-preset", "ultrafast",
+        picture]);
+      execFileSync("ffmpeg", ["-v", "error", "-y", "-i", picture, "-itsoffset", "0.06",
+        "-i", sound, "-map", "0:v", "-map", "1:a", "-c", "copy", file]);
+      expect(Math.abs((await audioLeadInMs(file)) - 60)).toBeLessThanOrEqual(5);
+      // 1500 ms into the sound track is 1560 ms into the video.
+      expect(Math.abs((await findSyncBeep(file)) - 1560)).toBeLessThanOrEqual(30);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
