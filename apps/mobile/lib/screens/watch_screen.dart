@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
 
+import '../playback/angle_sync.dart';
 import '../api/api_client.dart';
 import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
@@ -530,7 +531,7 @@ class _WatchScreenState extends State<WatchScreen> {
     setState(() => _playing = true);
     _keepInLine?.cancel();
     _keepInLine = Timer.periodic(
-        const Duration(milliseconds: 500), (_) => _realign());
+        const Duration(milliseconds: 250), (_) => _realign());
   }
 
   void _pause() {
@@ -544,30 +545,38 @@ class _WatchScreenState extends State<WatchScreen> {
       p.pause();
     }
     setState(() => _playing = false);
-    // Stills catch up to where playback stopped.
+    // Every angle, stills included, is put on the exact moment playback
+    // stopped, so a paused frame compares like with like.
+    unawaited(AngleSync.resetSpeeds(_players.values));
     _seek(_clockAt);
   }
 
-  /// While several angles play (a big screen), moves any that has drifted
-  /// more than 0.15 s from the clock angle back into line, the way the web
-  /// player does. One angle on a phone has nothing to drift from.
+  /// While several angles play (a big screen), keeps every one on the
+  /// clock angle's moment (see AngleSync). One angle on a phone has nothing
+  /// to drift from.
   Timer? _keepInLine;
+  bool _realigning = false;
 
-  void _realign() {
+  Future<void> _realign() async {
     final clockIndex = _clockIndex;
     final clock = _clockPlayer;
-    if (!_playing || clockIndex == null || clock == null || _players.length < 2) {
+    if (_realigning || !_playing || clockIndex == null || clock == null ||
+        _players.length < 2) {
       return;
     }
-    final at = _timelineAt(clockIndex, clock);
-    for (final entry in _players.entries) {
-      if (entry.key == clockIndex || !_liveAngles.contains(entry.key)) continue;
-      final value = entry.value.value;
-      if (!value.isInitialized || value.isBuffering) continue;
-      final target = at + _trimOf(entry.key);
-      if (target >= value.duration) continue;
-      final drift = (value.position - target).inMilliseconds.abs();
-      if (drift > 150) entry.value.seekTo(target);
+    _realigning = true;
+    try {
+      await AngleSync.keepInLine(
+        clock: clock,
+        clockTrim: _trimOf(clockIndex),
+        others: {
+          for (final entry in _players.entries)
+            if (entry.key != clockIndex && _liveAngles.contains(entry.key))
+              entry.value: _trimOf(entry.key),
+        },
+      );
+    } finally {
+      _realigning = false;
     }
   }
 
@@ -582,6 +591,7 @@ class _WatchScreenState extends State<WatchScreen> {
     await Future.wait([
       for (final entry in _players.entries)
         entry.value.seekTo(target + _trimOf(entry.key)),
+      AngleSync.resetSpeeds(_players.values),
     ]);
     if (mounted) setState(() => _position = target);
   }

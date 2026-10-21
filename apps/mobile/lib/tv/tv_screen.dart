@@ -4,6 +4,7 @@ import 'package:external_display/transfer_parameters.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
+import '../playback/angle_sync.dart';
 import '../recordings/angle_layout.dart';
 import '../theme.dart';
 import 'tv_protocol.dart';
@@ -52,6 +53,7 @@ class _TvScreenState extends State<TvScreen> {
   final Map<int, VideoPlayerController> _players = {};
   int _generation = 0;
   bool _playing = false;
+  bool _realigning = false;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   int _page = 0;
@@ -204,9 +206,11 @@ class _TvScreenState extends State<TvScreen> {
       final player = opened[k];
       if (player != null) _players[missing[k]] = player;
     }
+    // Every angle on the exact same moment (a pause, a seek, a new page).
     await Future.wait([
       for (final entry in _players.entries)
         entry.value.seekTo(_position + _angles[entry.key].trim),
+      AngleSync.resetSpeeds(_players.values),
     ]);
     for (final player in _players.values) {
       _playing ? player.play() : player.pause();
@@ -245,12 +249,16 @@ class _TvScreenState extends State<TvScreen> {
       final at = clock.value.position - _angles[live.first].trim;
       if (_playing) {
         _position = at < Duration.zero ? Duration.zero : at;
-        // Pull drifting angles back to the first one.
-        for (final i in live.skip(1)) {
-          final player = _players[i]!;
-          final want = _position + _angles[i].trim;
-          final off = (player.value.position - want).inMilliseconds.abs();
-          if (off > 200) player.seekTo(want);
+        // Keep every angle on the first one's moment (see AngleSync).
+        if (!_realigning && live.length > 1) {
+          _realigning = true;
+          AngleSync.keepInLine(
+            clock: clock,
+            clockTrim: _angles[live.first].trim,
+            others: {
+              for (final i in live.skip(1)) _players[i]!: _angles[i].trim,
+            },
+          ).whenComplete(() => _realigning = false);
         }
         if (_duration > Duration.zero && _position >= _duration) {
           _playing = false;

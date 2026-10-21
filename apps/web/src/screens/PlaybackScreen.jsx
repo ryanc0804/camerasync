@@ -12,6 +12,7 @@ import {
   uploadSessionVideo,
 } from "../api/recordings.js";
 import { anglesPerPage, commonAspect, layoutAngles } from "../recording/angleLayout.js";
+import { JUMP_BEYOND_MS, speedFor } from "../recording/angleSync.js";
 import { angleTrims } from "../recording/angleTrims.js";
 import { useAutoRefresh } from "../hooks/useAutoRefresh.js";
 
@@ -396,10 +397,19 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     }
   };
 
+  // Stops every angle on the exact same moment (the first one's), so a
+  // paused frame compares like with like.
   const pause = () => {
     playRequest.current += 1;
     videoRefs.current.forEach((video) => video?.pause());
     setPlaying(false);
+    const players = onScreenPlayers().filter((video) => Number.isFinite(video.duration));
+    if (players.length < 2) return;
+    const at = players[0].currentTime - trimOf(players[0]);
+    for (const video of players) {
+      video.playbackRate = 1;
+      video.currentTime = Math.min(Math.max(0, at + trimOf(video)), video.duration);
+    }
   };
 
   const play = async () => {
@@ -431,9 +441,10 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     }
   };
 
-  // Keeps the angles together while playing: browsers drift a little, and
-  // an angle that seeks or buffers falls behind. Every half second, any
-  // angle more than 0.1 s off the first one is moved back into line.
+  // Keeps every angle on the first one's moment while playing (see
+  // angleSync.js): four times a second, an angle a little off plays slightly
+  // faster or slower until it's back within half a frame; one far off (it
+  // stalled to load) jumps back.
   useEffect(() => {
     if (!playing) return undefined;
     const timer = setInterval(() => {
@@ -442,14 +453,21 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
       );
       if (players.length < 2) return;
       const [leader, ...others] = players;
+      leader.playbackRate = 1;
       const at = leader.currentTime - trimOf(leader);
       for (const video of others) {
         const target = at + trimOf(video);
-        if (target < video.duration && Math.abs(video.currentTime - target) > 0.1) {
+        if (target < 0 || target >= video.duration || video.seeking) continue;
+        const driftMs = (video.currentTime - target) * 1000;
+        if (Math.abs(driftMs) > JUMP_BEYOND_MS) {
+          video.playbackRate = 1;
           video.currentTime = target;
+        } else {
+          const speed = speedFor(driftMs);
+          if (Math.abs(video.playbackRate - speed) > 0.002) video.playbackRate = speed;
         }
       }
-    }, 500);
+    }, 250);
     return () => clearInterval(timer);
   }, [playing, page, perPage, focusedPanel]);
 
@@ -475,6 +493,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     videoTime.current = nextTime;
     setTime(nextTime);
     players.forEach((video) => {
+      video.playbackRate = 1;
       video.currentTime = Math.min(nextTime + trimOf(video), video.duration);
     });
 
