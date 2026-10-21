@@ -192,25 +192,67 @@ export function decodeAudioEnd(filePath, { seconds = END_SEARCH_SECONDS, timeout
   });
 }
 
-/// Where the sync beep is in an uploaded video, in ms, or null. Never
-/// throws: an upload must not fail because its audio couldn't be checked.
+/// How far into the video its sound track begins, in ms. iPhones often start
+/// the sound 50-70 ms after the picture and say so in the file; players
+/// honor that, but decoding the sound alone drops it, so a beep found in
+/// the decoded sound is this much earlier than where it is in the video.
+/// 0 when the tracks start together or ffprobe can't tell.
+export function audioLeadInMs(filePath, { timeoutMs = 15000 } = {}) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(
+        "ffprobe",
+        ["-v", "error", "-show_entries", "format=start_time:stream=codec_type,start_time",
+          "-of", "json", filePath],
+        { stdio: ["ignore", "pipe", "ignore"] }
+      );
+    } catch {
+      resolve(0);
+      return;
+    }
+    let out = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+    child.stdout.on("data", (chunk) => { out += chunk; });
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve(0);
+    });
+    child.on("close", () => {
+      clearTimeout(timer);
+      try {
+        const info = JSON.parse(out);
+        const audio = info.streams?.find((stream) => stream.codec_type === "audio");
+        const lead = (Number(audio?.start_time) - Number(info.format?.start_time)) * 1000;
+        resolve(Number.isFinite(lead) && lead > 0 ? Math.round(lead) : 0);
+      } catch {
+        resolve(0);
+      }
+    });
+  });
+}
+
+/// Where the sync beep is in an uploaded video, in ms from the start of the
+/// video (not of its sound track), or null. Never throws: an upload must not
+/// fail because its audio couldn't be checked.
 export async function findSyncBeep(filePath) {
   try {
     const samples = await decodeAudioStart(filePath);
-    return samples ? detectSyncBeep(samples) : null;
+    const at = samples ? detectSyncBeep(samples) : null;
+    return at == null ? null : at + (await audioLeadInMs(filePath));
   } catch {
     return null;
   }
 }
 
-/// Where the end beep is in an uploaded video, in ms from its start, or
-/// null. Never throws, like findSyncBeep.
+/// Where the end beep is in an uploaded video, in ms from the start of the
+/// video, or null. Never throws, like findSyncBeep.
 export async function findEndBeep(filePath) {
   try {
     const tail = await decodeAudioEnd(filePath);
     if (!tail) return null;
     const at = detectSyncBeep(tail.samples, END_BEEP_TONES_HZ);
-    return at == null ? null : tail.startMs + at;
+    return at == null ? null : tail.startMs + at + (await audioLeadInMs(filePath));
   } catch {
     return null;
   }
