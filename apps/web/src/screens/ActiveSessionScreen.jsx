@@ -14,6 +14,7 @@ import { getGroups } from "../api/groups.js";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { LocalMediaPreview } from "../components/LocalMediaPreview.jsx";
 import { useWakeLock } from "../hooks/useWakeLock.js";
+import { PlaybackScreen } from "./PlaybackScreen.jsx";
 import {
   createLocalRecorder,
   downloadFile,
@@ -94,6 +95,10 @@ export function ActiveSessionScreen() {
   const stopTimerRef = useRef(null);
   // A camera that left its app mid-take, for whoever runs the session.
   const [dropNotice, setDropNotice] = useState("");
+  // The session's recordings, shown over this page so the session (camera,
+  // connection) stays live underneath. Never during a take: it closes when
+  // one starts, before this camera records, and can't open until it's done.
+  const [watching, setWatching] = useState(false);
   const audioContextRef = useRef(null);
   // The screen stays on for the whole live session, cameras and controllers
   // alike: a sleeping computer misses the start or starts late.
@@ -184,6 +189,7 @@ export function ActiveSessionScreen() {
     const beginRecording = (command) => {
       if (recorderRef.current || recordingTimerRef.current) return;
 
+      setWatching(false);
       const receivedAtEpochMs = clock.now();
       recordingInfoRef.current = {
         sessionId,
@@ -417,6 +423,14 @@ export function ActiveSessionScreen() {
     };
   }, [ready, navigate, session, sessionId, user.id]);
 
+  // Esc closes the recordings and goes back to the session.
+  useEffect(() => {
+    if (!watching) return undefined;
+    const onKey = (event) => { if (event.key === "Escape") setWatching(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [watching]);
+
   // Switching between recording and controlling after joining: join again
   // with the new choice (the server updates who's a camera). Before the
   // socket is up, the first join already carries it.
@@ -548,7 +562,8 @@ export function ActiveSessionScreen() {
   });
 
   return (
-    <div className="active-session-page">
+    <>
+    <div className="active-session-page" inert={watching ? "" : undefined}>
       <style>{activeSessionCss}</style>
 
       <header className="active-session-header">
@@ -560,11 +575,14 @@ export function ActiveSessionScreen() {
 
         {session && (
         <div className="active-session-actions">
-          <a className="active-session-watch" href={`/watch/${sessionId}`}
-            target="_blank" rel="noopener noreferrer"
-            title="Opens in a new tab, so this session keeps running">
-            Watch recordings ↗
-          </a>
+          <button type="button" className="active-session-watch"
+            disabled={recordingStatus !== "idle"}
+            title={recordingStatus === "idle"
+              ? "Watch this session's recordings without leaving it"
+              : "Available once this take has finished"}
+            onClick={() => setWatching(true)}>
+            Watch recordings
+          </button>
           {/* Hosts and admins can run the take without recording here,
               like the camera switch in the phone's session bar. */}
           {mayControl && (
@@ -740,6 +758,13 @@ export function ActiveSessionScreen() {
         Socket.IO: {socketStatus}
       </span>
     </div>
+    {watching && (
+      <div className="session-watch-overlay" role="dialog" aria-modal="true"
+        aria-label="This session's recordings">
+        <PlaybackScreen live={{ sessionId, onClose: () => setWatching(false) }} />
+      </div>
+    )}
+    </>
   );
 }
 
@@ -762,16 +787,27 @@ const activeSessionCss = `
     border-bottom: 1px solid #242424;
   }
   /* Outlined in the team color, like Watch on the Sessions page. */
-  .active-session-watch {
+  .active-session-page .active-session-watch {
     padding: 0.45rem 0.8rem;
     border: 1px solid var(--accent);
     border-radius: 7px;
+    background: transparent;
     color: var(--accent);
     font-weight: 600;
     text-decoration: none;
     white-space: nowrap;
   }
-  .active-session-watch:hover { background: rgba(255,255,255,0.06); }
+  .active-session-page .active-session-watch:not(:disabled):hover { background: rgba(255,255,255,0.06); }
+  /* Playback over the live session, which keeps running underneath. */
+  .session-watch-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    overflow-y: auto;
+    padding: 1.5rem;
+    background: #000;
+  }
+  @media (max-width: 640px) { .session-watch-overlay { padding: 1rem; } }
   .active-session-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; justify-content: flex-end; }
   .session-device-mode { display: inline-flex; align-items: center; gap: 0; }
   .session-device-mode > span { margin-right: 0.6rem; }

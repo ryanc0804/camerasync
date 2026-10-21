@@ -15,8 +15,13 @@ import { anglesPerPage, commonAspect, layoutAngles } from "../recording/angleLay
 import { angleTrims } from "../recording/angleTrims.js";
 import { useAutoRefresh } from "../hooks/useAutoRefresh.js";
 
-export function PlaybackScreen() {
-  const { sessionId } = useParams();
+// The page at /watch/:sessionId, or (with `live`) the same view shown over
+// a live session's page so watching doesn't leave the session: `live` is
+// { sessionId, onClose }, and the chosen recording is kept here instead of
+// in the URL, which belongs to the session page.
+export function PlaybackScreen({ live = null } = {}) {
+  const params = useParams();
+  const sessionId = live?.sessionId ?? params.sessionId;
   const { user } = useAuth();
   const [session, setSession] = useState(null);
   const [recordings, setRecordings] = useState([]);
@@ -48,7 +53,8 @@ export function PlaybackScreen() {
   // A session opens on its list of recordings (takes); ?recording=N plays
   // one. A session with a single recording goes straight to it.
   const [searchParams] = useSearchParams();
-  const chosen = Number(searchParams.get("recording"));
+  const [liveChoice, setLiveChoice] = useState(0);
+  const chosen = live ? liveChoice : Number(searchParams.get("recording"));
   const chosenIndex = chosen
     ? recordings.findIndex((recording, index) => (recording.number ?? index + 1) === chosen)
     : -1;
@@ -81,8 +87,16 @@ export function PlaybackScreen() {
       <style>{css}</style>
       <div className="playback-title">
         {recordings.length > 1 && recording ? (
-          <Link to={`/watch/${sessionId}`} className="playback-back"
-            aria-label={`Back to ${session?.name ?? "the session"}'s recordings`}>←</Link>
+          live ? (
+            <button type="button" className="playback-back" onClick={() => setLiveChoice(0)}
+              aria-label={`Back to ${session?.name ?? "the session"}'s recordings`}>←</button>
+          ) : (
+            <Link to={`/watch/${sessionId}`} className="playback-back"
+              aria-label={`Back to ${session?.name ?? "the session"}'s recordings`}>←</Link>
+          )
+        ) : live ? (
+          <button type="button" className="playback-back" onClick={live.onClose}
+            aria-label="Back to the live session">←</button>
         ) : (
           <Link to="/watch" className="playback-back" aria-label="Back to sessions">←</Link>
         )}
@@ -115,7 +129,8 @@ export function PlaybackScreen() {
             {recordings.length === 0 ? (
               <p>No videos have been uploaded for this session yet.</p>
             ) : showingList ? (
-              <RecordingList sessionId={sessionId} recordings={recordings} />
+              <RecordingList sessionId={sessionId} recordings={recordings}
+                onChoose={live ? setLiveChoice : null} />
             ) : (
               <>
                 <SessionPlayer key={`${sessionId}-${recordingIndex}`} recordings={recordings}
@@ -142,7 +157,7 @@ function takeName(recording, index) {
 
 // The session's recordings (takes) as cards: a still from the first angle,
 // the take's name, when it started and how many angles it has.
-function RecordingList({ sessionId, recordings }) {
+function RecordingList({ sessionId, recordings, onChoose }) {
   return (
     <ul className="recording-list">
       {recordings.map((recording, index) => {
@@ -151,7 +166,8 @@ function RecordingList({ sessionId, recordings }) {
         const started = new Date(recording.startedAt);
         return (
           <li key={recording.startedAt}>
-            <Link to={`/watch/${sessionId}?recording=${number}`}>
+            <Link to={`/watch/${sessionId}?recording=${number}`}
+              onClick={onChoose ? (event) => { event.preventDefault(); onChoose(number); } : undefined}>
               <span className="recording-still">
                 {angles[0] ? (
                   <video src={`${angles[0].url}#t=1`} preload="metadata" muted playsInline
@@ -929,6 +945,7 @@ function formatTime(ms) {
 const css = `
   .playback-page { max-width: 1600px; }
   .playback-page .playback-back { flex: 0 0 auto; color: var(--accent); font-size: 1.5rem; line-height: 1; text-decoration: none; }
+  .playback-page button.playback-back { background: none; border: 0; padding: 0; cursor: pointer; font-family: inherit; }
   .playback-page h1 { flex: 1; min-width: 0; font-size: 1.4rem; margin: 0; overflow-wrap: anywhere; }
   .playback-title { display: flex; align-items: center; gap: 12px; margin-bottom: 0.75rem; }
   .playback-page .playback-download {
