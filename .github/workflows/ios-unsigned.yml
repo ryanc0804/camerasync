@@ -1,0 +1,50 @@
+# Builds the iPhone app on a GitHub-hosted Mac, unsigned, as an .ipa to
+# download from the run's Artifacts. Install it from any computer with a
+# sideloading tool that signs with your own Apple ID (Sideloader on Linux,
+# Sideloadly on Windows). Free Apple IDs: installs last 7 days.
+#
+# Runs on pushes that touch the phone app, or by hand from the Actions tab.
+name: iOS build (unsigned)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "apps/mobile/**"
+      - ".github/workflows/ios-unsigned.yml"
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - run: flutter build ios --release --no-codesign
+
+      # An .ipa is the app bundle in a Payload folder, zipped.
+      - name: Package .ipa
+        run: |
+          mkdir -p Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qry "8kount-${GITHUB_SHA::7}-unsigned.ipa" Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 8kount-ios-unsigned
+          path: apps/mobile/8kount-*-unsigned.ipa
+          retention-days: 14
