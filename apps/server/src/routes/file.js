@@ -283,16 +283,18 @@ fileRouter.post(
         });
       }
 
-      // Listen for the sync beep while the file is still on local disk.
+      // Index at the front and seekable, so playback starts quickly. Keeps
+      // the original if it can't (no re-encode either way).
+      await remuxForStreaming(tempPath, path.extname(fileId));
+      // Listen for the sync beep while the file is still on local disk, in
+      // the file as stored: playback lines angles up in that file, and an
+      // iPhone's sound can sit ~50 ms differently in the original.
       // findSyncBeep never throws; null just means playback falls back to
       // the start time the device reported.
       const beepAtMs = await findSyncBeep(tempPath);
       // And for the end beep, which lines up an angle that started too late
       // to hear the first.
       const endBeepAtMs = await findEndBeep(tempPath);
-      // Index at the front and seekable, so playback starts quickly. Keeps
-      // the original if it can't (no re-encode either way).
-      await remuxForStreaming(tempPath, path.extname(fileId));
 
       // Store first, then record the row. The other way round, a failed
       // store would leave a row pointing at nothing, and the client's retry
