@@ -5,7 +5,7 @@ abstract final class TvAction {
   // Phone → TV.
 
   /// Shows one recording: `{session, recording, cookie, angles: [{name,
-  /// url, trimMs}], atMs, playing}`.
+  /// url, previewUrl?, trimMs}], atMs, playing}`.
   static const load = 'load';
 
   /// Back to the idle screen.

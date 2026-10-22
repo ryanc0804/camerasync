@@ -68,12 +68,17 @@ class AngleVideo {
     required this.userId,
     required this.name,
     this.url,
+    this.previewUrl,
     this.startOffsetMs,
   });
 
   final int userId;
   final String name;
   final String? url;
+
+  /// A smaller copy (720p at most) for when the angle is drawn small; null
+  /// until the server has made it.
+  final String? previewUrl;
 
   /// How much later this camera really began than the take's shared start,
   /// or null if the device didn't report it (treated as on time).
@@ -83,6 +88,7 @@ class AngleVideo {
         userId: (json['userId'] as num).toInt(),
         name: (json['name'] ?? 'Unnamed member').toString(),
         url: json['url'] as String?,
+        previewUrl: json['previewUrl'] as String?,
         startOffsetMs: (json['startOffsetMs'] as num?)?.toInt(),
       );
 }
