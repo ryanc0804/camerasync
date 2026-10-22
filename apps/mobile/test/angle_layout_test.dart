@@ -52,4 +52,23 @@ void main() {
       }
     }
   });
+
+  group('usePreviews', () {
+    // A 1080p TV as Android often reports it: 640 x 360 points at 3x.
+    const tv = Size(640, 360);
+
+    test('plays one angle on its own at full quality', () {
+      expect(usePreviews(tv, 1, 3), isFalse);
+    });
+
+    test('plays previews once the tiles are small', () {
+      expect(usePreviews(tv, 6, 3), isTrue);
+      expect(usePreviews(tv, 4, 3), isTrue);
+    });
+
+    test('keeps the originals while two angles are each big on a 4K TV', () {
+      // 3840 x 2160 at 2x: two side by side are ~1900 px wide each.
+      expect(usePreviews(const Size(1920, 1080), 2, 2), isFalse);
+    });
+  });
 }

@@ -17,6 +17,7 @@ import { ensureRecordingNumber } from "../recordings/numbering.js";
 import { startOffsetMs } from "../recordings/startOffset.js";
 import { findEndBeep, findSyncBeep } from "../recordings/syncBeep.js";
 import { remuxForStreaming } from "../recordings/remux.js";
+import { queuePreview } from "../recordings/previews.js";
 
 export const fileRouter = Router();
 
@@ -166,7 +167,9 @@ fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
       `SELECT EXISTS (
          SELECT 1 FROM recording_sessions rs
          WHERE rs.id = v.session_id AND ${sessionVisibleSql("rs", "$2")}
-       ) AS allowed FROM recording_session_videos v WHERE v.file_id = $1`,
+       ) AS allowed FROM recording_session_videos v
+        WHERE v.file_id = $1 OR v.preview_file_id = $1
+        LIMIT 1`,
       [fileId, req.user.id]
     );
     // A file is only reachable through the session it was recorded for.
@@ -336,6 +339,9 @@ fileRouter.post(
         return res.json({ ok: true });
       }
 
+      // The smaller copy for the angle grid, made in the background.
+      queuePreview(fileId);
+
       res.status(201).json({
         file: {
           id: fileId,
@@ -353,6 +359,17 @@ fileRouter.post(
     }
   }
 );
+
+// Every stored file behind these video rows: the originals and their
+// previews, once each.
+export function storedFileIds(rows) {
+  const ids = new Set();
+  for (const row of rows) {
+    if (row.file_id) ids.add(row.file_id);
+    if (row.preview_file_id) ids.add(row.preview_file_id);
+  }
+  return [...ids];
+}
 
 // Remove the stored files when their session is deleted.
 export async function deleteRecordingFiles(fileIds) {

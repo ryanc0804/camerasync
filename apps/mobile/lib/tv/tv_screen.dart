@@ -31,10 +31,14 @@ class TvApp extends StatelessWidget {
 }
 
 class _TvAngle {
-  const _TvAngle(this.name, this.url, this.trim);
+  const _TvAngle(this.name, this.url, this.trim, [this.previewUrl]);
   final String name;
   final String url;
   final Duration trim;
+
+  /// The smaller copy, for when the angle is drawn small; null until the
+  /// server has made it.
+  final String? previewUrl;
 }
 
 class TvScreen extends StatefulWidget {
@@ -110,6 +114,25 @@ class _TvScreenState extends State<TvScreen> {
     final live = _liveAngles;
     if (live.contains(_sound)) return _sound;
     return live.isEmpty ? null : live.first;
+  }
+
+  /// Which copy each open player is playing (see [_urlFor]).
+  final Map<int, String> _playerUrls = {};
+
+  /// The copy angle [i] plays: its preview while the grid draws it small
+  /// (the phone decodes every angle, and full-HD originals are too many for
+  /// it), the original when it's on its own or the tiles are big.
+  String _urlFor(int i) {
+    final angle = _angles[i];
+    final preview = angle.previewUrl;
+    if (preview == null || i == _focused) return angle.url;
+    final screen = MediaQuery.of(context);
+    final area = Size(screen.size.width - 2 * _margin,
+        screen.size.height - 2 * _margin);
+    return usePreviews(area, _liveAngles.length, screen.devicePixelRatio,
+            gap: _gap)
+        ? preview
+        : angle.url;
   }
 
   void _applySound() {
@@ -189,6 +212,7 @@ class _TvScreenState extends State<TvScreen> {
             (a['name'] ?? '').toString(),
             a['url'].toString(),
             Duration(milliseconds: (a['trimMs'] as num?)?.toInt() ?? 0),
+            a['previewUrl'] as String?,
           ),
     ];
     setState(() {
@@ -214,6 +238,7 @@ class _TvScreenState extends State<TvScreen> {
       player.dispose();
     }
     _players.clear();
+    _playerUrls.clear();
   }
 
   /// Opens the angles on screen and closes the rest, then puts them all at
@@ -222,7 +247,12 @@ class _TvScreenState extends State<TvScreen> {
     final generation = ++_generation;
     final live = _liveAngles.toSet();
     for (final i in _players.keys.toList()) {
-      if (!live.contains(i)) await _players.remove(i)!.dispose();
+      // Closed when it's off screen, or to switch between its preview and
+      // the original.
+      if (!live.contains(i) || _playerUrls[i] != _urlFor(i)) {
+        _playerUrls.remove(i);
+        await _players.remove(i)!.dispose();
+      }
     }
     final missing = live.where((i) => !_players.containsKey(i)).toList();
     final opened = await Future.wait(missing.map(_open));
@@ -234,7 +264,10 @@ class _TvScreenState extends State<TvScreen> {
     }
     for (var k = 0; k < missing.length; k++) {
       final player = opened[k];
-      if (player != null) _players[missing[k]] = player;
+      if (player != null) {
+        _players[missing[k]] = player;
+        _playerUrls[missing[k]] = _urlFor(missing[k]);
+      }
     }
     // Every angle on the exact same moment (a pause, a seek, a new page).
     await Future.wait([
@@ -260,7 +293,7 @@ class _TvScreenState extends State<TvScreen> {
   Future<VideoPlayerController?> _open(int i) async {
     final cookie = _cookie;
     final player = VideoPlayerController.networkUrl(
-      Uri.parse(_angles[i].url),
+      Uri.parse(_urlFor(i)),
       httpHeaders: {if (cookie != null) 'Cookie': cookie},
     );
     try {

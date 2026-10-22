@@ -59,6 +59,9 @@ class _WatchScreenState extends State<WatchScreen> {
   /// the selected angle is open; on a big screen every uploaded one is.
   final Map<int, VideoPlayerController> _players = {};
 
+  /// Which copy each open player is playing (see [_urlFor]).
+  final Map<int, String> _playerUrls = {};
+
   /// How far into each angle the shared timeline starts, so every angle
   /// shows the same moment. [_position], [_duration] and comment times are
   /// all on that shared timeline.
@@ -203,6 +206,9 @@ class _WatchScreenState extends State<WatchScreen> {
           {
             'name': recording.videos[i].name,
             'url': _recordings.absoluteUrl(recording.videos[i].url!),
+            if (recording.videos[i].previewUrl != null)
+              'previewUrl':
+                  _recordings.absoluteUrl(recording.videos[i].previewUrl!),
             'trimMs': _trimOf(i).inMilliseconds,
           }
       ],
@@ -361,8 +367,11 @@ class _WatchScreenState extends State<WatchScreen> {
 
     _position = _clockAt;
     for (final i in _players.keys.toList()) {
-      if (!wanted.contains(i)) {
+      // Closed when it's no longer shown, or to switch between its preview
+      // and the original (the grid grew or shrank around it).
+      if (!wanted.contains(i) || _playerUrls[i] != _urlFor(recording, i)) {
         final player = _players.remove(i)!;
+        _playerUrls.remove(i);
         if (player == _clockPlayer) _setClock(null);
         await player.dispose();
       }
@@ -382,6 +391,7 @@ class _WatchScreenState extends State<WatchScreen> {
       final player = opened[k];
       if (player == null) continue;
       _players[missing[k]] = player;
+      _playerUrls[missing[k]] = _urlFor(recording, missing[k])!;
       await player.seekTo(_position + _trimOf(missing[k]));
     }
 
@@ -412,15 +422,32 @@ class _WatchScreenState extends State<WatchScreen> {
     });
   }
 
+  /// The copy angle [i] plays, as an absolute URL: its preview while the
+  /// grid draws it small, so many can play at once; the original when it's
+  /// expanded, or the one big angle upright.
+  String? _urlFor(SessionRecording recording, int i) {
+    final video = recording.videos[i];
+    final preview = video.previewUrl;
+    var url = video.url;
+    if (preview != null && _gridMode && i != _focused) {
+      final screen = MediaQuery.of(context);
+      if (usePreviews(
+          screen.size, _pageAngles.length, screen.devicePixelRatio)) {
+        url = preview;
+      }
+    }
+    return url == null ? null : _recordings.absoluteUrl(url);
+  }
+
   /// One angle's player, or null if it fails to load (the tile then shows
   /// "Not uploaded" rather than blocking the other angles).
   Future<VideoPlayerController?> _openPlayer(
       SessionRecording recording, int i) async {
-    final url = recording.videos[i].url;
+    final url = _urlFor(recording, i);
     if (url == null) return null;
     final cookie = widget.auth.api.cookie;
     final player = VideoPlayerController.networkUrl(
-      Uri.parse(_recordings.absoluteUrl(url)),
+      Uri.parse(url),
       httpHeaders: {if (cookie != null) 'Cookie': cookie},
     );
     try {
@@ -486,6 +513,10 @@ class _WatchScreenState extends State<WatchScreen> {
       _focused = i;
       if (i != null) _selected = i;
     });
+    // The expanded angle switches to its original, and back to its preview
+    // when it rejoins the grid.
+    await _syncPlayers();
+    if (!mounted) return;
     await _seek(at);
     if (!mounted) return;
     final live = _liveAngles;
@@ -517,6 +548,7 @@ class _WatchScreenState extends State<WatchScreen> {
     _setClock(null);
     final old = _players.values.toList();
     _players.clear();
+    _playerUrls.clear();
     for (final p in old) {
       await p.dispose();
     }
