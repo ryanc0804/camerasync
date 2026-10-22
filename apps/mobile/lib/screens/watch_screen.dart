@@ -73,6 +73,9 @@ class _WatchScreenState extends State<WatchScreen> {
   int _tvPage = 0;
   int _tvPageCount = 0;
   int? _tvFocused;
+
+  /// The angle heard on the TV, or null when muted.
+  int? _tvSound = 0;
   int? _tvCommentId;
 
   /// Where angle [i]'s player is on the shared timeline.
@@ -215,6 +218,7 @@ class _WatchScreenState extends State<WatchScreen> {
       _tvPage = state.page;
       _tvPageCount = state.pageCount;
       _tvFocused = state.focused;
+      _tvSound = state.sound;
       _ready = true;
     });
     // The comment at this moment, up on the TV too.
@@ -778,7 +782,9 @@ class _WatchScreenState extends State<WatchScreen> {
                                       fontSize: 17,
                                       fontWeight: FontWeight.w700)),
                               SizedBox(height: 2),
-                              Text('Tap an angle to show it on its own.',
+                              Text(
+                                  'Tap an angle to show it on its own, or its '
+                                  'speaker to hear it.',
                                   style: TextStyle(color: kMuted)),
                             ],
                           ),
@@ -833,6 +839,21 @@ class _WatchScreenState extends State<WatchScreen> {
                           ? const Text('On its own. Tap for every angle.',
                               style: TextStyle(color: kMuted))
                           : null,
+                      // One angle's sound plays on the TV; tap another to
+                      // switch, or the playing one to mute.
+                      trailing: IconButton(
+                        onPressed: () => TvLink.instance.send(TvAction.sound,
+                            {'angle': _tvSound == k ? -1 : k}),
+                        tooltip: _tvSound == k
+                            ? 'Mute'
+                            : 'Hear this angle on the TV',
+                        icon: Icon(
+                          _tvSound == k
+                              ? Icons.volume_up
+                              : Icons.volume_off_outlined,
+                          color: _tvSound == k ? team.accent : kMuted,
+                        ),
+                      ),
                       onTap: () => TvLink.instance.send(
                           TvAction.focus, {'angle': _tvFocused == k ? -1 : k}),
                     ),
