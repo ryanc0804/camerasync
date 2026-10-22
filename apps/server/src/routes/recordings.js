@@ -24,7 +24,7 @@ import {
   stopSessionRecording,
   closeSessionSocket,
 } from "../sockets/websocket.js";
-import { deleteRecordingFiles } from "./file.js";
+import { deleteRecordingFiles, storedFileIds } from "./file.js";
 import { EVENTS } from "../sockets/events.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
 import { startOffsetMs } from "../recordings/startOffset.js";
@@ -170,10 +170,11 @@ recordingsRouter.delete("/sessions/:id", requireAuth, async (req, res, next) => 
       return res.status(409).json({ error: "End this session before deleting it." });
     }
     const { rows: videos } = await client.query(
-      "SELECT file_id FROM recording_session_videos WHERE session_id = $1 FOR UPDATE",
+      `SELECT file_id, preview_file_id FROM recording_session_videos
+        WHERE session_id = $1 FOR UPDATE`,
       [req.params.id]
     );
-    await deleteRecordingFiles(videos.filter((video) => video.file_id).map((video) => video.file_id));
+    await deleteRecordingFiles(storedFileIds(videos));
     await client.query("DELETE FROM recording_sessions WHERE id = $1", [req.params.id]);
     await client.query("COMMIT");
     res.json({ ok: true });
@@ -218,7 +219,7 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
       return res.status(404).json({ error: "Session not found." });
     }
     const { rows } = await pool.query(
-      `SELECT v.started_at_ms, v.user_id, v.file_id, v.start_offset_ms,
+      `SELECT v.started_at_ms, v.user_id, v.file_id, v.preview_file_id, v.start_offset_ms,
               v.beep_at_ms, v.end_beep_at_ms, sr.end_beep_epoch_ms,
               u.display_name, sr.recording_number
        FROM recording_session_videos v JOIN users u ON u.user_id = v.user_id
@@ -248,6 +249,11 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
         userId: Number(row.user_id),
         name: row.display_name || "Unnamed member",
         url: row.file_id ? `/api/files/get/${row.file_id}` : null,
+        // A smaller copy for when the angle is shown small; null until it's
+        // made (see ../recordings/previews.js).
+        previewUrl: row.file_id && row.preview_file_id
+          ? `/api/files/get/${row.preview_file_id}`
+          : null,
         ...videoStartOffset(row, startedAt),
       });
     }
