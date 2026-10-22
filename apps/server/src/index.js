@@ -7,6 +7,7 @@ import timesyncServer from "timesync/server/index.js";
 
 import { healthRouter } from "./routes/health.js";
 import { initSocket } from "./sockets/websocket.js";
+import { startIdleSessionChecks } from "./sessions/idleSessions.js";
 import { authRouter } from "./routes/auth.js";
 import { groupRouter } from "./routes/groups.js";
 import { postRouter } from "./routes/posts.js";
@@ -44,6 +45,7 @@ const server = http.createServer(app);
 
 // Create web socket
 initSocket(server);
+startIdleSessionChecks();
 
 server.listen(PORT, () => {
   console.log(`[camerasync] server listening on http://localhost:${PORT}`);
