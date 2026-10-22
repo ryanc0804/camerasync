@@ -78,3 +78,21 @@ List<Rect> gridLayout(Size size, int count, double aspect, {double gap = 8}) {
       }(),
   ];
 }
+
+/// Below this many physical pixels on an angle's shorter side, its 720p
+/// preview (see the server's src/recordings/previews.js) looks the same as
+/// the original.
+const previewUpToPixels = 900.0;
+
+/// Whether each angle of a [count]-angle grid filling [area] is drawn small
+/// enough to play its preview: much less for the phone to download and
+/// decode, so many angles can play at once. One angle on its own always
+/// plays the original.
+bool usePreviews(Size area, int count, double devicePixelRatio,
+    {double aspect = 16 / 9, double gap = 8}) {
+  if (count <= 1 || area.isEmpty) return false;
+  final grid = bestGrid(area, count, aspect, gap: gap);
+  final shorter =
+      grid.tileWidth < grid.tileHeight ? grid.tileWidth : grid.tileHeight;
+  return shorter * devicePixelRatio <= previewUpToPixels;
+}

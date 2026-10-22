@@ -326,3 +326,17 @@ ALTER TABLE session_recordings ADD COLUMN IF NOT EXISTS end_beep_epoch_ms BIGINT
 -- an angle that started too late to hear the start beep. NULL when it
 -- wasn't heard.
 ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS end_beep_at_ms INTEGER;
+
+-- When a device last joined or left this live session's room. A live
+-- session nobody has been connected to for a while is ended automatically
+-- (see src/sessions/idleSessions.js). NULL until the first join after this
+-- column was added; created_at stands in.
+ALTER TABLE recording_sessions ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ;
+
+-- A smaller copy of the video for the multi-angle grid (see
+-- src/recordings/previews.js): its own file, or the same file_id when the
+-- original is already small. NULL until it's made; preview_failed when it
+-- couldn't be, so it isn't retried on every start.
+ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS preview_file_id TEXT;
+ALTER TABLE recording_session_videos
+    ADD COLUMN IF NOT EXISTS preview_failed BOOLEAN NOT NULL DEFAULT FALSE;

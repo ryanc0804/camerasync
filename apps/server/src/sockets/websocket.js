@@ -62,7 +62,12 @@ export function roomMembersFrom(sockets) {
   return Array.from(members.values());
 }
 
+// Called whenever a device joins or leaves, so it also notes the session's
+// last activity (see ../sessions/idleSessions.js).
 async function sendRoomMembers(sessionId) {
+  pool
+    .query("UPDATE recording_sessions SET last_active_at = NOW() WHERE id = $1", [sessionId])
+    .catch((err) => console.error("Could not note session activity:", err));
   const members = await getRoomMembers(sessionId);
   getIO().to(roomName(sessionId)).emit(EVENTS.SESSION_MEMBERS, members);
   return members;
@@ -391,6 +396,13 @@ export async function stopSessionRecording(sessionId) {
       .catch((err) => console.error("Unable to save the end beep time:", err));
   }
   return stoppedRecording;
+}
+
+// Whether any device is in the session right now, or a take is running.
+export async function sessionInUse(sessionId) {
+  if (activeRecordings.has(sessionId)) return true;
+  const sockets = await getIO().in(roomName(sessionId)).fetchSockets();
+  return sockets.length > 0;
 }
 
 export async function closeSessionSocket(sessionId) {

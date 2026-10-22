@@ -20,4 +20,42 @@ void main() {
       expect(AngleSync.speedFor(-390), 1.05);
     });
   });
+
+  group('JumpAim', () {
+    final start = DateTime(2026, 10, 22, 12);
+    DateTime at(int ms) => start.add(Duration(milliseconds: ms));
+
+    test('jumps an angle that is far off, but not one a little off', () {
+      final aim = JumpAim();
+      expect(aim.shouldJump(-300, at(0)), isFalse);
+      expect(aim.shouldJump(-900, at(0)), isTrue);
+    });
+
+    test('learns from a landing behind to aim further ahead', () {
+      final aim = JumpAim();
+      aim.jumped(at(0));
+      // Landed 700 ms behind the others.
+      expect(aim.shouldJump(-700, at(600)), isFalse); // too soon to jump again
+      expect(aim.lead, const Duration(milliseconds: 700));
+      // Still behind after the cool-down: jump again, now aimed ahead.
+      expect(aim.shouldJump(-650, at(1600)), isTrue);
+    });
+
+    test('aims less far after overshooting, never behind', () {
+      final aim = JumpAim()..lead = const Duration(milliseconds: 400);
+      aim.jumped(at(0));
+      aim.shouldJump(250, at(600)); // landed 250 ms ahead
+      expect(aim.lead, const Duration(milliseconds: 150));
+      aim.jumped(at(2000));
+      aim.shouldJump(500, at(2600));
+      expect(aim.lead, Duration.zero);
+    });
+
+    test('waits for a jump to settle before judging where it landed', () {
+      final aim = JumpAim();
+      aim.jumped(at(0));
+      aim.shouldJump(-2000, at(200)); // still loading the jump
+      expect(aim.lead, Duration.zero);
+    });
+  });
 }

@@ -10,12 +10,14 @@ void main() {
       page: 1,
       pageCount: 2,
       focused: 3,
+      sound: 2,
     );
     final back = TvState.fromMap(state.toMap())!;
     expect(back.position, state.position);
     expect(back.duration, state.duration);
     expect(back.playing, isTrue);
     expect([back.page, back.pageCount, back.focused], [1, 2, 3]);
+    expect(back.sound, 2);
   });
 
   test('no angle expanded comes back as null', () {
@@ -28,6 +30,8 @@ void main() {
       focused: null,
     );
     expect(TvState.fromMap(state.toMap())!.focused, isNull);
+    // Muted.
+    expect(TvState.fromMap(state.toMap())!.sound, isNull);
     expect(TvState.fromMap('not a map'), isNull);
   });
 }
