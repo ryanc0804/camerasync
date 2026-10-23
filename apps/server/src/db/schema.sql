@@ -340,3 +340,9 @@ ALTER TABLE recording_sessions ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMP
 ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS preview_file_id TEXT;
 ALTER TABLE recording_session_videos
     ADD COLUMN IF NOT EXISTS preview_failed BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- What start_offset_ms was measured from: 'frame' when the device reported
+-- the moment its camera captured the first frame (exact), 'call' when it's
+-- when the app asked the camera to start (up to a second early on some
+-- phones). NULL for uploads from before this was recorded.
+ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS start_offset_source TEXT;

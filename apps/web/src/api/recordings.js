@@ -79,10 +79,12 @@ export async function cancelSession(id) {
 // startedAt is the take's shared start; actualStartedAt (optional) is when
 // this device's camera really began, both on the server clock. Playback
 // shifts the angle by the difference to line it up with the others.
-export async function saveRecordingDetails(id, startedAt, actualStartedAt) {
+// startClock says what actualStartedAt is: "frame" for the first frame's
+// capture time, "call" for when the recorder said it started.
+export async function saveRecordingDetails(id, startedAt, actualStartedAt, startClock) {
   await request(`/api/recordings/sessions/${encodeURIComponent(id)}/videos`, {
     method: "POST",
-    body: JSON.stringify({ startedAt, actualStartedAt }),
+    body: JSON.stringify({ startedAt, actualStartedAt, startClock }),
   });
 }
 
@@ -103,13 +105,15 @@ export function sessionDownloadUrl(id) {
   return `${SERVER_URL}/api/recordings/sessions/${encodeURIComponent(id)}/download`;
 }
 
-export async function uploadSessionVideo(id, startedAt, video, filename, actualStartedAt) {
+export async function uploadSessionVideo(
+  id, startedAt, video, filename, actualStartedAt, startClock
+) {
   const body = new FormData();
   // Multipart uploads need the plain media type, without recorder codec details.
   const upload = new Blob([video], { type: video.type.split(";")[0] });
   body.append("file", upload, filename);
   const actual = Number.isFinite(actualStartedAt)
-    ? `&actualStartedAt=${Math.round(actualStartedAt)}`
+    ? `&actualStartedAt=${Math.round(actualStartedAt)}${startClock ? `&startClock=${startClock}` : ""}`
     : "";
   const response = await fetch(
     `${SERVER_URL}/api/files/upload?sessionId=${encodeURIComponent(id)}&startedAt=${startedAt}${actual}`,

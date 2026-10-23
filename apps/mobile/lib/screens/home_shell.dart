@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../auth/auth_service.dart';
@@ -6,6 +7,8 @@ import '../theme.dart';
 import '../notifications/phone_alerts.dart';
 import '../sessions/new_session.dart';
 import '../tv/tv_link.dart';
+import '../api/recordings_api.dart';
+import '../outbox/upload_queue.dart';
 import 'calendar_tab.dart';
 import 'groups_screen.dart';
 import 'home_tab.dart';
@@ -46,6 +49,9 @@ class _HomeShellState extends State<HomeShell> {
   void initState() {
     super.initState();
     _alerts.start().catchError((_) {});
+    // Takes still waiting from last time carry on uploading.
+    final queue = UploadQueue.instance ??= UploadQueue(RecordingsApi(widget.auth.api));
+    unawaited(queue.start());
     // TV mode: a TV plugged in gets the app's TV screen (see TvLink).
     TvLink.instance.start();
   }

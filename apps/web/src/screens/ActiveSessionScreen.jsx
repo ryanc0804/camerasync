@@ -14,6 +14,7 @@ import { getGroups } from "../api/groups.js";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { LocalMediaPreview } from "../components/LocalMediaPreview.jsx";
 import { useWakeLock } from "../hooks/useWakeLock.js";
+import { createFrameWatcher } from "../recording/firstFrame.js";
 import { PlaybackScreen } from "./PlaybackScreen.jsx";
 import {
   createLocalRecorder,
@@ -82,6 +83,8 @@ export function ActiveSessionScreen() {
   const socketRef = useRef(null);
   const clockRef = useRef(null);
   const mediaStreamRef = useRef(null);
+  // Reports camera frames' capture times (see firstFrame.js).
+  const frameWatcherRef = useRef(null);
   const recorderRef = useRef(null);
   const recordingTimerRef = useRef(null);
   const recordingChunksRef = useRef([]);
@@ -172,9 +175,11 @@ export function ActiveSessionScreen() {
       const actualStartedAt = info.actualStartAtEpochMs
         ? Math.round(info.actualStartAtEpochMs)
         : undefined;
-      saveRecordingDetails(sessionId, info.plannedStartAtEpochMs, actualStartedAt)
+      const startClock = info.startClock ?? "call";
+      saveRecordingDetails(sessionId, info.plannedStartAtEpochMs, actualStartedAt, startClock)
         .then(() => uploadSessionVideo(
-          sessionId, info.plannedStartAtEpochMs, video, videoFileName, actualStartedAt
+          sessionId, info.plannedStartAtEpochMs, video, videoFileName, actualStartedAt,
+          startClock
         ))
         .then(() => setRecordingMessage("Uploaded for playback"))
         .catch((err) => {
@@ -241,7 +246,11 @@ export function ActiveSessionScreen() {
             if (event.data.size > 0) recordingChunksRef.current.push(event.data);
           };
           recorder.onstart = () => {
-            const actualStartAtEpochMs = clock.now();
+            // Unless the first frame's capture time already came in, which is
+            // more exact (see below).
+            const actualStartAtEpochMs = recordingInfoRef.current?.startClock === "frame"
+              ? recordingInfoRef.current.actualStartAtEpochMs
+              : clock.now();
             recordingInfoRef.current = {
               ...recordingInfoRef.current,
               actualStartAtEpochMs,
@@ -255,6 +264,15 @@ export function ActiveSessionScreen() {
             );
           };
           recorder.onstop = () => saveRecording(recorder, extension);
+          // The first frame the recorder takes is the next one the camera
+          // sends; its capture time, on the synced clock, is when this angle
+          // really started.
+          frameWatcherRef.current?.nextFrameCaptureTime().then((captured) => {
+            const info = recordingInfoRef.current;
+            if (captured == null || !info || recorderRef.current !== recorder) return;
+            info.actualStartAtEpochMs = clock.now() - (performance.now() - captured);
+            info.startClock = "frame";
+          });
           recorder.onerror = () => {
             recorderRef.current = null;
             recordingInfoRef.current = null;
@@ -423,6 +441,9 @@ export function ActiveSessionScreen() {
     };
   }, [ready, navigate, session, sessionId, user.id]);
 
+  // The hidden camera-frame watcher goes with the page.
+  useEffect(() => () => frameWatcherRef.current?.stop(), []);
+
   // Esc closes the recordings and goes back to the session.
   useEffect(() => {
     if (!watching) return undefined;
@@ -452,6 +473,8 @@ export function ActiveSessionScreen() {
 
   const handleMediaReady = (stream) => {
     mediaStreamRef.current = stream;
+    frameWatcherRef.current?.stop();
+    frameWatcherRef.current = createFrameWatcher(stream);
     setMediaReady(true);
   };
 

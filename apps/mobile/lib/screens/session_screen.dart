@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -9,6 +10,7 @@ import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
 import '../keep_awake.dart';
 import '../socket/sync_socket.dart';
+import '../outbox/upload_queue.dart';
 
 /// Recording view for a session. Requests camera/mic only while mounted and
 /// releases them on dispose (per the MVP permissions rule — no background
@@ -53,6 +55,7 @@ class _SessionScreenState extends State<SessionScreen> {
 
   /// A take is scheduled or running; the camera can't be switched mid-take.
   bool _takeRunning = false;
+  Timer? _resumeUploads;
   bool _switching = false;
 
   @override
@@ -73,6 +76,9 @@ class _SessionScreenState extends State<SessionScreen> {
 
     _subs.add(socket.members.listen((m) => setState(() => _members = m)));
     _subs.add(socket.recordingStart.listen((_) {
+      // No uploads start while a take runs: on a slow network they'd hold
+      // up the start and stop messages (see UploadQueue).
+      UploadQueue.instance?.pause('take');
       if (!mounted) return;
       setState(() => _takeRunning = true);
       // Watching when the next take starts: back to the camera, which is
@@ -84,7 +90,15 @@ class _SessionScreenState extends State<SessionScreen> {
             const SnackBar(content: Text('A new take started.')));
       }
     }));
-    _subs.add(socket.recordingStop.listen((_) {
+    _subs.add(socket.recordingStop.listen((command) {
+      // Uploads go again once every camera has really stopped.
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final stopAt = command.localStopAtEpochMs ?? now;
+      _resumeUploads?.cancel();
+      _resumeUploads = Timer(
+        Duration(milliseconds: math.max(0, stopAt - now) + 1500),
+        () => UploadQueue.instance?.resume('take'),
+      );
       if (mounted) setState(() => _takeRunning = false);
     }));
     // Whoever runs the session hears when a camera drops out of a take, so
@@ -182,6 +196,8 @@ class _SessionScreenState extends State<SessionScreen> {
   @override
   void dispose() {
     KeepAwake.release();
+    _resumeUploads?.cancel();
+    UploadQueue.instance?.resume('take');
     for (final s in _subs) {
       s.cancel();
     }
