@@ -10,5 +10,8 @@ Upstream plugin, unchanged except:
   first video sample (next to `startSession(atSourceTime:)`).
 - `CameraPlugin.register(with:)`: sets up that channel.
 
+- Removed (not needed to build): pigeons/ (code-generator inputs; the output
+  is in lib/), changelog and README.
+
 To update the plugin, copy the new upstream version over this folder and
 reapply those changes.

@@ -9,5 +9,9 @@ Upstream plugin, unchanged except:
   `FirstFrameClock` before the plugin's own listener.
 - `CameraAndroidCameraxPlugin.onAttachedToEngine`: sets up that channel.
 
+- Removed (not needed to build): upstream unit tests, pigeons/ (code-generator
+  inputs; the output is in lib/), changelog, contributing guide, README, lint
+  baseline and the test-only parts of android/build.gradle.
+
 To update the plugin, copy the new upstream version over this folder and
 reapply those three changes.
