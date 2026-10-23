@@ -18,6 +18,7 @@ import { START_OFFSET_UPSERT_SQL, startClock, startOffsetMs } from "../recording
 import { findEndBeep, findSyncBeep } from "../recordings/syncBeep.js";
 import { remuxForStreaming } from "../recordings/remux.js";
 import { queuePreview } from "../recordings/previews.js";
+import { queueThumbnail } from "../recordings/thumbnails.js";
 
 export const fileRouter = Router();
 
@@ -192,7 +193,9 @@ fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
   }
 
   const ext = path.extname(fileId);
-  const mediaType = MEDIA_TYPES[ext];
+  // Thumbnails (see ../recordings/thumbnails.js) are served too, though
+  // never accepted as uploads.
+  const mediaType = ext === ".jpg" ? { mime: "image/jpeg" } : MEDIA_TYPES[ext];
   if (!mediaType) {
     return res.status(400).json({ error: "File ID is invalid." });
   }
@@ -203,7 +206,7 @@ fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
          SELECT 1 FROM recording_sessions rs
          WHERE rs.id = v.session_id AND ${sessionVisibleSql("rs", "$2")}
        ) AS allowed FROM recording_session_videos v
-        WHERE v.file_id = $1 OR v.preview_file_id = $1
+        WHERE v.file_id = $1 OR v.preview_file_id = $1 OR v.thumbnail_file_id = $1
         LIMIT 1`,
       [fileId, req.user.id]
     );
@@ -395,6 +398,8 @@ fileRouter.post(
       }
       // The smaller copy for the angle grid, made in the background.
       queuePreview(fileId);
+      // And a still for the session lists.
+      queueThumbnail(fileId);
 
       res.status(201).json({
         file: {
@@ -421,6 +426,7 @@ export function storedFileIds(rows) {
   for (const row of rows) {
     if (row.file_id) ids.add(row.file_id);
     if (row.preview_file_id) ids.add(row.preview_file_id);
+    if (row.thumbnail_file_id) ids.add(row.thumbnail_file_id);
   }
   return [...ids];
 }

@@ -273,14 +273,14 @@ export function SessionScheduler({
       ? "No group"
       : groups.find((group) => group.id === groupId)?.name || groupId;
 
-  // opens joining fifteen minutes before the scheduled time
+  // open from the scheduled time until 15 minutes after (the server's rule)
   const canJoin = (session) => {
     if (session.status === "active") return true;
     if (session.status !== "scheduled") return false;
 
     const scheduledTime = new Date(session.scheduledAt).getTime();
     return (
-      currentTime >= scheduledTime - 15 * 60 * 1000 &&
+      currentTime >= scheduledTime &&
       currentTime <= scheduledTime + 15 * 60 * 1000
     );
   };

@@ -1,3 +1,4 @@
+import 'package:flutter/widgets.dart';
 import 'api_client.dart';
 
 /// A recording session, as shaped by the server's `publicSession`
@@ -15,6 +16,7 @@ class RecordingSession {
     this.totalRecordings,
     this.recordingCount,
     this.createdBy,
+    this.thumbnailUrl,
   });
 
   final String id;
@@ -38,6 +40,10 @@ class RecordingSession {
   /// group's admins and owner.
   final int? createdBy;
 
+  /// A still from the session's first take (server-relative, needs the
+  /// session cookie; see [RecordingsApi.thumbnailOf]). Null until made.
+  final String? thumbnailUrl;
+
   bool get isActive => status == 'active';
   bool get isScheduled => status == 'scheduled';
   bool get isComplete => status == 'complete';
@@ -58,6 +64,7 @@ class RecordingSession {
         totalRecordings: (json['totalRecordings'] as num?)?.toInt(),
         recordingCount: (json['recordingCount'] as num?)?.toInt(),
         createdBy: (json['createdBy'] as num?)?.toInt(),
+        thumbnailUrl: json['thumbnailUrl'] as String?,
       );
 }
 
@@ -332,6 +339,16 @@ class RecordingsApi {
 
   Future<void> deleteSessionNote(String id, int noteId) async {
     await _api.delete('/api/recordings/sessions/$id/notes/$noteId');
+  }
+
+  /// The picture for a session's tile in the lists, or null when the server
+  /// hasn't made one.
+  ImageProvider? thumbnailOf(RecordingSession session) {
+    final path = session.thumbnailUrl;
+    if (path == null) return null;
+    final cookie = _api.cookie;
+    return NetworkImage(absoluteUrl(path),
+        headers: {if (cookie != null) 'Cookie': cookie});
   }
 
   /// Turns a server-relative path like `/api/files/get/x.mp4` into a full URL.

@@ -32,7 +32,7 @@ const SMALL_ENOUGH_BITRATE = 4_000_000;
 const TIMEOUT_MS = 30 * 60 * 1000;
 
 // Runs a tool and collects its output. `missing` when it isn't installed.
-function run(command, args, { timeoutMs = TIMEOUT_MS } = {}) {
+export function run(command, args, { timeoutMs = TIMEOUT_MS } = {}) {
   return new Promise((resolve) => {
     let child;
     // Low priority on Linux, so the API stays quick while a preview is made.

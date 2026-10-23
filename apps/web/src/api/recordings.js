@@ -24,6 +24,9 @@ export async function getMyVideoCount() {
 // loads sessions visible to the current user
 export async function getSessions() {
   const data = await request("/api/recordings/sessions");
+  for (const session of data.sessions) {
+    if (session.thumbnailUrl) session.thumbnailUrl = `${SERVER_URL}${session.thumbnailUrl}`;
+  }
   return data.sessions;
 }
 

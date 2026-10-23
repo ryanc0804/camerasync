@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
@@ -27,6 +29,19 @@ const _monthNames = [
   'December',
 ];
 
+/// Over: finished, or its hour has passed. The calendar fades these so the
+/// color lands on what's ahead.
+bool isPastSession(RecordingSession s) {
+  if (s.isActive) return false;
+  if (s.isComplete) return true;
+  final at = s.scheduledAt;
+  return at != null &&
+      at.add(const Duration(hours: 1)).isBefore(DateTime.now());
+}
+
+bool _sameDay(DateTime a, DateTime b) =>
+    a.year == b.year && a.month == b.month && a.day == b.day;
+
 String _formatWhen(DateTime? at) {
   if (at == null) return '';
   final time = TimeOfDay.fromDateTime(at);
@@ -55,9 +70,13 @@ List<RecordingSession> _sorted(List<RecordingSession> sessions) {
 /// host and the group's admins can end or cancel it. Starting, scheduling
 /// and joining by code are on the + button.
 class JoinScreen extends StatefulWidget {
-  const JoinScreen({super.key, required this.auth, this.refresh});
+  const JoinScreen({super.key, required this.auth, this.refresh, this.day});
 
   final AuthService auth;
+
+  /// Only the sessions on this day, past ones included (the calendar's day
+  /// page). Null: everything live and upcoming.
+  final DateTime? day;
 
   /// Fires when a session was started or scheduled elsewhere (the + menu).
   final Listenable? refresh;
@@ -119,11 +138,18 @@ class _JoinScreenState extends State<JoinScreen> {
       ]);
       if (!mounted) return;
       setState(() {
-        // Finished and cancelled sessions are under Past.
-        _sessions = _sorted([
-          for (final s in results[0] as List<RecordingSession>)
-            if (s.isActive || s.isScheduled) s
-        ]);
+        // Finished and cancelled sessions are under Past, except on a
+        // calendar day, which shows the whole day.
+        final day = widget.day;
+        _sessions = day != null
+            ? ([
+                for (final s in results[0] as List<RecordingSession>)
+                  if (s.scheduledAt != null && _sameDay(s.scheduledAt!, day)) s
+              ]..sort((a, b) => a.scheduledAt!.compareTo(b.scheduledAt!)))
+            : _sorted([
+                for (final s in results[0] as List<RecordingSession>)
+                  if (s.isActive || s.isScheduled) s
+              ]);
         _groups = results[1] as List<Group>;
         _loading = false;
       });
@@ -152,6 +178,11 @@ class _JoinScreenState extends State<JoinScreen> {
     );
     if (mounted) _load();
   }
+
+  void _watch(RecordingSession session) => Navigator.of(context).push(
+        MaterialPageRoute(
+            builder: (_) => WatchScreen(auth: widget.auth, session: session)),
+      );
 
   Future<void> _join(RecordingSession session) async {
     setState(() => _busyId = session.id);
@@ -209,8 +240,32 @@ class _JoinScreenState extends State<JoinScreen> {
     }
   }
 
+  /// What tapping a session does: into it while it's open, its takes once
+  /// it's over. Null when there's nothing to do (or something's loading).
+  VoidCallback? _open(RecordingSession s) {
+    if (_busyId != null || s.isCancelled) return null;
+    if (s.isComplete) return () => _watch(s);
+    if (!_canJoin(s)) return null;
+    return () => s.isJoined && s.isActive ? _openSession(s) : _join(s);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final day = widget.day;
+    if (day != null && !_loading && _error == null) {
+      return _DayTimeline(
+        day: day,
+        sessions: _sessions,
+        colorOf: (s) =>
+            parseHexColor(_groupOf(s)?.primaryColor) ??
+            TeamAccent.of(context).fill,
+        groupNameOf: (s) =>
+            s.groupId == null ? 'No group' : _groupOf(s)?.name ?? '',
+        busyId: _busyId,
+        onOpen: _open,
+        onRefresh: _load,
+      );
+    }
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
@@ -228,6 +283,11 @@ class _JoinScreenState extends State<JoinScreen> {
               message: _error!,
               actionLabel: 'Retry',
               onAction: _load,
+            )
+          else if (_sessions.isEmpty && widget.day != null)
+            const EmptyState(
+              title: 'Nothing this day',
+              message: 'Tap + to schedule a session.',
             )
           else if (_sessions.isEmpty)
             const EmptyState(
@@ -252,11 +312,10 @@ class _JoinScreenState extends State<JoinScreen> {
                     : null,
                 onEnd: () => _end(s),
                 onCancel: () => _cancel(s),
-                onWatch: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                      builder: (_) =>
-                          WatchScreen(auth: widget.auth, session: s)),
-                ),
+                // Tapping the card itself does what it's there for: into
+                // the session when it's open, its takes once it's over.
+                onTap: _open(s),
+                onWatch: () => _watch(s),
               ),
         ],
       ),
@@ -275,9 +334,11 @@ class _SessionCard extends StatelessWidget {
     required this.onEnd,
     required this.onCancel,
     required this.onWatch,
+    this.onTap,
   });
 
   final RecordingSession session;
+  final VoidCallback? onTap;
   final String groupName;
   final bool busy;
   final bool canManage;
@@ -342,76 +403,330 @@ class _SessionCard extends StatelessWidget {
 
     return Opacity(
       opacity: s.isCancelled ? 0.5 : 1,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
-        decoration: BoxDecoration(
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Material(
           color: const Color(0xFF1C1C1C),
-          borderRadius: BorderRadius.circular(14),
-          border:
-              s.isActive ? Border.all(color: team.accent, width: 1.5) : null,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Column(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+            side: s.isActive
+                ? BorderSide(color: team.accent, width: 1.5)
+                : BorderSide.none,
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: busy ? null : onTap,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(s.name,
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700)),
-                      if (groupName.isNotEmpty)
-                        Text(groupName,
-                            style:
-                                const TextStyle(color: kMuted, fontSize: 13)),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(s.name,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700)),
+                            if (groupName.isNotEmpty)
+                              Text(groupName,
+                                  style: const TextStyle(
+                                      color: kMuted, fontSize: 13)),
+                          ],
+                        ),
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            _status,
+                            style: TextStyle(
+                              color: s.isActive ? team.accent : kMuted,
+                              fontWeight: s.isActive
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                            ),
+                          ),
+                          Text(s.id,
+                              style: TextStyle(
+                                  color: team.accent,
+                                  fontFamily: 'monospace',
+                                  fontSize: 12)),
+                        ],
+                      ),
                     ],
                   ),
-                ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      _status,
-                      style: TextStyle(
-                        color: s.isActive ? team.accent : kMuted,
-                        fontWeight:
-                            s.isActive ? FontWeight.w700 : FontWeight.w500,
-                      ),
+                  const SizedBox(height: 6),
+                  Text(
+                    [
+                      _formatWhen(s.scheduledAt),
+                      if (open)
+                        '$count ${s.isActive ? 'in session' : 'joined'}',
+                    ].where((part) => part.isNotEmpty).join(' · '),
+                    style: const TextStyle(color: kMuted, fontSize: 13),
+                  ),
+                  if (actions.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      alignment: WrapAlignment.end,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: actions,
                     ),
-                    Text(s.id,
-                        style: TextStyle(
-                            color: team.accent,
-                            fontFamily: 'monospace',
-                            fontSize: 12)),
                   ],
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              [
-                _formatWhen(s.scheduledAt),
-                if (open) '$count ${s.isActive ? 'in session' : 'joined'}',
-              ].where((part) => part.isNotEmpty).join(' · '),
-              style: const TextStyle(color: kMuted, fontSize: 13),
-            ),
-            if (actions.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Wrap(
-                alignment: WrapAlignment.end,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                spacing: 8,
-                runSpacing: 4,
-                children: actions,
+                ],
               ),
-            ],
-          ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One day as hours down the screen, each session a block at its time in
+/// its group's color, like Google Calendar's day view. Sessions have no set
+/// end, so each fills an hour; ones that overlap share the width.
+class _DayTimeline extends StatefulWidget {
+  const _DayTimeline({
+    required this.day,
+    required this.sessions,
+    required this.colorOf,
+    required this.groupNameOf,
+    required this.busyId,
+    required this.onOpen,
+    required this.onRefresh,
+  });
+
+  final DateTime day;
+  final List<RecordingSession> sessions;
+  final Color Function(RecordingSession) colorOf;
+  final String Function(RecordingSession) groupNameOf;
+  final String? busyId;
+  final VoidCallback? Function(RecordingSession) onOpen;
+  final Future<void> Function() onRefresh;
+
+  @override
+  State<_DayTimeline> createState() => _DayTimelineState();
+}
+
+class _DayTimelineState extends State<_DayTimeline> {
+  static const _hourHeight = 60.0;
+  static const _sessionMinutes = 60;
+  static const _gutter = 56.0;
+
+  late final ScrollController _scroll = ScrollController(
+    // Opens on the first session (or now, or 8 AM), a little above it.
+    initialScrollOffset: math.max(
+        0,
+        ((widget.sessions.isNotEmpty
+                        ? _minutes(widget.sessions.first.scheduledAt!)
+                        : _sameDay(widget.day, DateTime.now())
+                            ? _minutes(DateTime.now())
+                            : 8 * 60) /
+                    60 -
+                1) *
+            _hourHeight),
+  );
+
+  static int _minutes(DateTime at) => at.hour * 60 + at.minute;
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  String _hourLabel(int hour) {
+    final h = hour % 12 == 0 ? 12 : hour % 12;
+    return '$h ${hour < 12 ? 'AM' : 'PM'}';
+  }
+
+  String _timeLabel(DateTime at) {
+    final time = TimeOfDay.fromDateTime(at);
+    final hour = time.hourOfPeriod == 0 ? 12 : time.hourOfPeriod;
+    return '$hour:${time.minute.toString().padLeft(2, '0')} '
+        '${time.period == DayPeriod.am ? 'AM' : 'PM'}';
+  }
+
+  /// (session, column, columns) for each session: overlapping ones get
+  /// their own column and split the width.
+  List<(RecordingSession, int, int)> _layout() {
+    final items = [
+      for (final s in widget.sessions)
+        (
+          s,
+          _minutes(s.scheduledAt!),
+          _minutes(s.scheduledAt!) + _sessionMinutes
+        )
+    ]..sort((a, b) => a.$2.compareTo(b.$2));
+    final out = <(RecordingSession, int, int)>[];
+    var run =
+        <(RecordingSession, int, int, int)>[]; // session, start, end, column
+    var runEnd = -1;
+    void finish() {
+      final columns = run.fold(1, (m, item) => math.max(m, item.$4 + 1));
+      out.addAll([for (final item in run) (item.$1, item.$4, columns)]);
+      run = [];
+    }
+
+    for (final (s, start, end) in items) {
+      if (start >= runEnd) {
+        finish();
+        runEnd = -1;
+      }
+      final taken = {
+        for (final o in run)
+          if (o.$3 > start) o.$4
+      };
+      var column = 0;
+      while (taken.contains(column)) {
+        column++;
+      }
+      run.add((s, start, end, column));
+      runEnd = math.max(runEnd, end);
+    }
+    finish();
+    return out;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final today = _sameDay(widget.day, now);
+    final layout = _layout();
+    return RefreshIndicator(
+      onRefresh: widget.onRefresh,
+      child: SingleChildScrollView(
+        controller: _scroll,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(8, 12, 12, 110),
+        child: SizedBox(
+          height: 24 * _hourHeight,
+          child: LayoutBuilder(builder: (context, constraints) {
+            final width = constraints.maxWidth - _gutter;
+            return Stack(
+              clipBehavior: Clip.none,
+              children: [
+                for (var hour = 0; hour < 24; hour++)
+                  Positioned(
+                    top: hour * _hourHeight,
+                    left: 0,
+                    right: 0,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          width: _gutter - 8,
+                          child: Transform.translate(
+                            offset: const Offset(0, -7),
+                            child: Text(
+                              hour == 0 ? '' : _hourLabel(hour),
+                              textAlign: TextAlign.right,
+                              style:
+                                  const TextStyle(color: kMuted, fontSize: 11),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                            child:
+                                Divider(height: 1, color: Color(0xFF242424))),
+                      ],
+                    ),
+                  ),
+                for (final (s, column, columns) in layout)
+                  Positioned(
+                    top: _minutes(s.scheduledAt!) / 60 * _hourHeight + 1,
+                    height: _sessionMinutes / 60 * _hourHeight - 3,
+                    left: _gutter + width * column / columns + 1,
+                    width: width / columns - 3,
+                    child: _block(s),
+                  ),
+                if (today)
+                  Positioned(
+                    top: _minutes(now) / 60 * _hourHeight - 1,
+                    left: _gutter - 5,
+                    right: 0,
+                    child: IgnorePointer(
+                      child: Row(children: [
+                        Container(
+                          width: 10,
+                          height: 10,
+                          decoration: const BoxDecoration(
+                              color: kLiveRed, shape: BoxShape.circle),
+                        ),
+                        Expanded(child: Container(height: 2, color: kLiveRed)),
+                      ]),
+                    ),
+                  ),
+              ],
+            );
+          }),
+        ),
+      ),
+    );
+  }
+
+  Widget _block(RecordingSession s) {
+    final color = widget.colorOf(s);
+    final ink = inkOn(color);
+    final status = switch (s.status) {
+      'active' => 'Live now',
+      'complete' => 'Watch',
+      'cancelled' => 'Cancelled',
+      _ => null,
+    };
+    return Opacity(
+      opacity: s.isCancelled || isPastSession(s) ? 0.5 : 1,
+      child: Material(
+        color: color,
+        borderRadius: BorderRadius.circular(6),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: widget.onOpen(s),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 5, 6, 4),
+            child: widget.busyId == s.id
+                ? Center(
+                    child: SizedBox.square(
+                      dimension: 18,
+                      child:
+                          CircularProgressIndicator(strokeWidth: 2, color: ink),
+                    ),
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        s.isActive ? '● ${s.name}' : s.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: ink,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700),
+                      ),
+                      Text(
+                        [
+                          _timeLabel(s.scheduledAt!),
+                          widget.groupNameOf(s),
+                          if (status != null) status,
+                        ].where((p) => p.isNotEmpty).join(' · '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: ink.withValues(alpha: 0.85), fontSize: 12),
+                      ),
+                    ],
+                  ),
+          ),
         ),
       ),
     );
