@@ -1650,7 +1650,7 @@ class _AngleTile extends StatelessWidget {
                       ),
                     ),
                     if (video.previewOnly)
-                      const Text('Preview · full quality uploading',
+                      const Text('Preview',
                           style: TextStyle(
                               color: Color(0xFFFFCC66), fontSize: 10)),
                   ],

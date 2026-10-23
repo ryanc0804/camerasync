@@ -842,7 +842,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                 </div>
               )}
               {video && <figcaption><span>{video.name}</span>
-                {video.previewOnly && <span className="playback-preview-note">Preview · full quality uploading</span>}
+                {video.previewOnly && <span className="playback-preview-note" title="Full quality is still uploading">Preview</span>}
               </figcaption>}
             </figure>
             );
