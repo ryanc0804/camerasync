@@ -144,6 +144,21 @@ describe("saving a video's real start", () => {
     expect(take.videos[0]).toMatchObject({ startOffsetMs: 1700, syncedBy: "beep" });
   });
 
+  it("takes a first-frame time over a rougher one, and keeps it", async () => {
+    const startedAt = Date.now() - 2_000;
+    await save({ startedAt, actualStartedAt: startedAt + 100, startClock: "call" });
+    await save({ startedAt, actualStartedAt: startedAt + 640, startClock: "frame" });
+    // A later, rougher save can't replace it.
+    await save({ startedAt, actualStartedAt: startedAt + 90, startClock: "call" });
+
+    const take = (await videosOf()).find((r) => r.startedAt === startedAt);
+    expect(take.videos[0]).toMatchObject({
+      startOffsetMs: 640,
+      syncedBy: "clock",
+      clockStartOffsetMs: 640,
+    });
+  });
+
   it("is null for clients that don't report it", async () => {
     const startedAt = Date.now() - 10_000;
     expect((await save({ startedAt })).status).toBe(200);

@@ -51,6 +51,25 @@ async function getRoomMembers(sessionId) {
 /// One entry per person in the room. camera: false marks someone only
 /// starting and stopping the others; with a camera on any of their devices
 /// they count as recording.
+// The account's other connections in a room, apart from [socket] itself:
+// on other devices (which keep it out), and this same device's older ones
+// (a reconnect, which it replaces). Devices that don't send an id (older
+// app versions) can't be told apart, so between two of those nothing is
+// blocked, as before.
+export function otherDevicesOf(sockets, socket) {
+  const userId = Number(socket.data.user?.id);
+  const mine = socket.data.deviceId ?? null;
+  const elsewhere = [];
+  const staleHere = [];
+  for (const other of sockets) {
+    if (other.id === socket.id || Number(other.data.user?.id) !== userId) continue;
+    const theirs = other.data.deviceId ?? null;
+    if (mine !== null && theirs === mine) staleHere.push(other);
+    else if (mine !== null || theirs !== null) elsewhere.push(other);
+  }
+  return { elsewhere, staleHere };
+}
+
 export function roomMembersFrom(sockets) {
   const members = new Map();
   for (const socket of sockets) {
@@ -151,7 +170,7 @@ export async function initSocket(httpServer) {
   io.on("connection", (socket) => {
     trackRoundTrips(socket);
 
-    socket.on(EVENTS.JOIN_SESSION, async ({ sessionId, camera } = {}, ack) => {
+    socket.on(EVENTS.JOIN_SESSION, async ({ sessionId, camera, deviceId } = {}, ack) => {
       if (typeof ack !== "function") return;
       if (!sessionId) {
         return ack({ ok: false, error: "Session ID is required." });
@@ -194,6 +213,21 @@ export async function initSocket(httpServer) {
             error: "Viewers can watch recordings but can't join and record.",
           });
         }
+
+        // One device per account in a session: the server keeps one video
+        // per account per take, so a second device's would be lost.
+        socket.data.deviceId = typeof deviceId === "string" ? deviceId.slice(0, 64) : null;
+        const { elsewhere, staleHere } = otherDevicesOf(
+          await getIO().in(roomName(sessionId)).fetchSockets(), socket);
+        if (elsewhere.length > 0) {
+          return ack({
+            ok: false,
+            error: "This account is already in this session on another device. " +
+              "Leave it there first, or sign in with a different account.",
+          });
+        }
+        // This device's own older connection (it dropped and came back).
+        for (const old of staleHere) old.leave(roomName(sessionId));
 
         const previousSessionId = socket.data.sessionId;
         if (previousSessionId && previousSessionId !== sessionId) {

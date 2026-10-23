@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/db/pool.js", () => ({ pool: { query: vi.fn() } }));
 
-const { canControlRecording, roomMembersFrom } = await import("../src/sockets/websocket.js");
+const { canControlRecording, otherDevicesOf, roomMembersFrom } = await import("../src/sockets/websocket.js");
 
 describe("canControlRecording", () => {
   const session = { created_by: 1, owner_id: 2 };
@@ -35,5 +35,37 @@ describe("roomMembersFrom", () => {
   it("lists someone once, as recording if any of their devices is", () => {
     const members = roomMembersFrom([socket(1, false), socket(1, true), { data: {} }]);
     expect(members).toEqual([{ id: 1, name: "User 1", camera: true }]);
+  });
+});
+
+describe("otherDevicesOf", () => {
+  const sock = (id, userId, deviceId) => ({ id, data: { user: { id: userId }, deviceId } });
+
+  it("keeps a second device on the same account out", () => {
+    const me = sock("new", 7, "phone-b");
+    const { elsewhere } = otherDevicesOf([sock("old", 7, "phone-a"), me], me);
+    expect(elsewhere.map((s) => s.id)).toEqual(["old"]);
+  });
+
+  it("lets the same device back in, replacing its old connection", () => {
+    const me = sock("new", 7, "phone-a");
+    const result = otherDevicesOf([sock("old", 7, "phone-a"), me], me);
+    expect(result.elsewhere).toEqual([]);
+    expect(result.staleHere.map((s) => s.id)).toEqual(["old"]);
+  });
+
+  it("ignores other accounts", () => {
+    const me = sock("new", 7, "phone-a");
+    expect(otherDevicesOf([sock("x", 8, "phone-z"), me], me).elsewhere).toEqual([]);
+  });
+
+  it("doesn't block between two older apps that send no id", () => {
+    const me = sock("new", 7, null);
+    expect(otherDevicesOf([sock("old", 7, undefined), me], me).elsewhere).toEqual([]);
+  });
+
+  it("blocks an older app joining where a newer one already is", () => {
+    const me = sock("new", 7, null);
+    expect(otherDevicesOf([sock("old", 7, "phone-a"), me], me).elsewhere).toHaveLength(1);
   });
 });

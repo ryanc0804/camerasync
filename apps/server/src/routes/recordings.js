@@ -27,7 +27,7 @@ import {
 import { deleteRecordingFiles, storedFileIds } from "./file.js";
 import { EVENTS } from "../sockets/events.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
-import { startOffsetMs } from "../recordings/startOffset.js";
+import { START_OFFSET_UPSERT_SQL, startClock, startOffsetMs } from "../recordings/startOffset.js";
 import { startOffsetFromBeep, startOffsetFromEndBeep } from "../recordings/syncBeep.js";
 
 export const recordingsRouter = Router();
@@ -189,8 +189,17 @@ recordingsRouter.delete("/sessions/:id", requireAuth, async (req, res, next) => 
 // How much later a camera really started than its take's startedAt, which
 // players shift the angle by, and what that comes from: the start beep when
 // the video heard it, else the end beep (a camera that started too late for
-// the first), else the time the device reported, else nothing.
+// the first), else the time the device reported ('clock' when that's its
+// first frame's capture time), else nothing. The first-frame time is also
+// returned on its own, to compare the two while it's new.
 function videoStartOffset(row, startedAt) {
+  const clock = row.start_offset_source === "frame" && row.start_offset_ms != null
+    ? { clockStartOffsetMs: Number(row.start_offset_ms) }
+    : {};
+  return { ...syncOffset(row, startedAt), ...clock };
+}
+
+function syncOffset(row, startedAt) {
   if (row.beep_at_ms != null) {
     return { startOffsetMs: startOffsetFromBeep(Number(row.beep_at_ms)), syncedBy: "beep" };
   }
@@ -202,7 +211,10 @@ function videoStartOffset(row, startedAt) {
     };
   }
   if (row.start_offset_ms != null) {
-    return { startOffsetMs: Number(row.start_offset_ms), syncedBy: "device" };
+    return {
+      startOffsetMs: Number(row.start_offset_ms),
+      syncedBy: row.start_offset_source === "frame" ? "clock" : "device",
+    };
   }
   return { startOffsetMs: null, syncedBy: null };
 }
@@ -220,6 +232,7 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
     }
     const { rows } = await pool.query(
       `SELECT v.started_at_ms, v.user_id, v.file_id, v.preview_file_id, v.start_offset_ms,
+              v.start_offset_source,
               v.beep_at_ms, v.end_beep_at_ms, sr.end_beep_epoch_ms,
               u.display_name, sr.recording_number
        FROM recording_session_videos v JOIN users u ON u.user_id = v.user_id
@@ -286,13 +299,12 @@ recordingsRouter.post("/sessions/:id/videos", requireAuth, async (req, res, next
     const number = await ensureRecordingNumber(req.params.id, startedAt);
     await pool.query(
       `INSERT INTO recording_session_videos
-         (session_id, user_id, started_at_ms, start_offset_ms)
-       VALUES ($1, $2, $3, $4)
+         (session_id, user_id, started_at_ms, start_offset_ms, start_offset_source)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (session_id, user_id, started_at_ms) DO UPDATE
-         SET start_offset_ms = COALESCE(recording_session_videos.start_offset_ms,
-                                        EXCLUDED.start_offset_ms)`,
+         SET ${START_OFFSET_UPSERT_SQL}`,
       [req.params.id, req.user.id, startedAt,
-        startOffsetMs(req.body?.actualStartedAt, startedAt)]
+        startOffsetMs(req.body?.actualStartedAt, startedAt), startClock(req.body?.startClock)]
     );
     res.json({ ok: true, recording: { startedAt, number } });
   } catch (err) {
