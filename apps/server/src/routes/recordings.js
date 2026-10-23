@@ -23,6 +23,7 @@ import {
   startSessionRecording,
   stopSessionRecording,
   closeSessionSocket,
+  leaveSessionRoom,
 } from "../sockets/websocket.js";
 import { deleteRecordingFiles, storedFileIds } from "./file.js";
 import { EVENTS } from "../sockets/events.js";
@@ -865,6 +866,8 @@ recordingsRouter.delete(
             AND user_id = $2`,
         [id, req.user.id]
       );
+      await leaveSessionRoom(id, req.user.id).catch((err) =>
+        console.error("Could not update the session's devices:", err));
 
       res.json({ ok: true });
     } catch (err) {

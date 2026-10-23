@@ -89,11 +89,15 @@ class JoinResult {
     this.error,
     this.sessionName,
     this.canControl = false,
+    this.createdBy,
   });
 
   final bool ok;
   final String? error;
   final String? sessionName;
+
+  /// The user who started the session (its host).
+  final int? createdBy;
 
   /// This user may start and stop takes for everyone: the session's creator,
   /// or an admin or the owner of its group.
@@ -425,6 +429,8 @@ class SyncSocket {
           sessionName:
               session is Map ? session['name']?.toString() : null,
           canControl: session is Map && session['canControl'] == true,
+          createdBy:
+              session is Map ? (session['createdBy'] as num?)?.toInt() : null,
         ));
       },
     );

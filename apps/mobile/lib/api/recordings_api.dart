@@ -270,6 +270,11 @@ class RecordingsApi {
         Map<String, dynamic>.from((data as Map)['session'] as Map));
   }
 
+  /// Leave a live session someone else is hosting.
+  Future<void> leaveSession(String id) async {
+    await _api.delete('/api/recordings/sessions/$id/join');
+  }
+
   /// End a live session for everyone (its host, or a group admin).
   Future<void> endSession(String id) async {
     await _api.patch('/api/recordings/sessions/$id/end', const {});
