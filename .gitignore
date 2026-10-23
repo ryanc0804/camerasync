@@ -40,5 +40,8 @@ uploads/
 deploy/prod.env
 deploy/backups/
 
+# CA Certificates
+*.crt
+
 # Claude Code personal settings
 .claude/settings.local.json

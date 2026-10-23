@@ -58,6 +58,14 @@ planned fix for that.
 To exercise the S3 driver locally, point the server at any S3-compatible
 store with `S3_ENDPOINT` (see `apps/server/.env.example`).
 
+## CA certificates
+
+The server image installs `ca-certificates` and sets `NODE_EXTRA_CA_CERTS`, so
+outbound TLS (S3, SMTP) is verified against the system trust store. To trust a
+private CA, put its PEM certificate in `apps/server/certs/` as `*.crt` and
+rebuild (see `apps/server/certs/README.md`). The Caddy image already ships with
+a CA bundle for Let's Encrypt, so it needs nothing extra.
+
 ## Redeploy after merging to main
 
 ```bash
