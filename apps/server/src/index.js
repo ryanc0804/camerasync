@@ -9,6 +9,7 @@ import { healthRouter } from "./routes/health.js";
 import { initSocket } from "./sockets/websocket.js";
 import { startIdleSessionChecks } from "./sessions/idleSessions.js";
 import { startPreviewBackfill } from "./recordings/previews.js";
+import { startThumbnailBackfill } from "./recordings/thumbnails.js";
 import { authRouter } from "./routes/auth.js";
 import { groupRouter } from "./routes/groups.js";
 import { postRouter } from "./routes/posts.js";
@@ -48,6 +49,7 @@ const server = http.createServer(app);
 initSocket(server);
 startIdleSessionChecks();
 startPreviewBackfill();
+startThumbnailBackfill();
 
 server.listen(PORT, () => {
   console.log(`[camerasync] server listening on http://localhost:${PORT}`);

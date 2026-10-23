@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../auth/auth_service.dart';
@@ -31,7 +32,7 @@ class HomeShell extends StatefulWidget {
 }
 
 /// Bar slots. The middle one is the + button, not a tab.
-const _home = 0, _groups = 1, _plus = 2, _sessions = 3;
+const _home = 0, _groups = 1, _plus = 2, _sessions = 3, _calendar = 4;
 
 class _HomeShellState extends State<HomeShell> {
   int _index = _home;
@@ -50,7 +51,8 @@ class _HomeShellState extends State<HomeShell> {
     super.initState();
     _alerts.start().catchError((_) {});
     // Takes still waiting from last time carry on uploading.
-    final queue = UploadQueue.instance ??= UploadQueue(RecordingsApi(widget.auth.api));
+    final queue =
+        UploadQueue.instance ??= UploadQueue(RecordingsApi(widget.auth.api));
     unawaited(queue.start());
     // TV mode: a TV plugged in gets the app's TV screen (see TvLink).
     TvLink.instance.start();
@@ -104,6 +106,7 @@ class _HomeShellState extends State<HomeShell> {
         onOpenSessions: _openSessions,
         onOpenSettings: _openSettings,
         onOpenGroups: () => setState(() => _index = _groups),
+        onOpenCalendar: () => setState(() => _index = _calendar),
       ),
       GroupsScreen(auth: widget.auth),
       const SizedBox.shrink(), // the + button's slot
@@ -179,85 +182,89 @@ class _PillNavBar extends StatelessWidget {
         fill == kGold ? kGoldActive : Color.lerp(fill, shade, 0.22)!;
     final edge = Color.lerp(fill, Colors.white, 0.35)!;
 
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-        child: Container(
-          height: _height,
-          decoration: BoxDecoration(
-            color: fill,
-            borderRadius: _radius,
-            border: Border.all(color: edge, width: 1.5),
-          ),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              // Tabs are inset from the ends just enough that the capsule,
-              // 20% wider than a tab, stays centered on every icon including
-              // the first and last.
-              final slotWidth =
-                  (constraints.maxWidth - 2 * _inset) / (_items.length + 0.2);
-              final sidePadding = _inset + 0.1 * slotWidth;
-              final capsuleWidth = slotWidth * 1.2;
-              final left = sidePadding + index * slotWidth - 0.1 * slotWidth;
+    // On iPhones the bar sits down in the home-indicator area, 20 pt off the
+    // bottom like the system's own floating tab bars, clear of the swipe-up
+    // handle; elsewhere it stays above the system's gesture area.
+    final systemBottom = MediaQuery.viewPaddingOf(context).bottom;
+    final ios = Theme.of(context).platform == TargetPlatform.iOS;
+    final bottom = ios && systemBottom > 0
+        ? math.max(systemBottom - 14, 14.0)
+        : systemBottom + 14;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16, 0, 16, bottom),
+      child: Container(
+        height: _height,
+        decoration: BoxDecoration(
+          color: fill,
+          borderRadius: _radius,
+          border: Border.all(color: edge, width: 1.5),
+        ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // Tabs are inset from the ends just enough that the capsule,
+            // 20% wider than a tab, stays centered on every icon including
+            // the first and last.
+            final slotWidth =
+                (constraints.maxWidth - 2 * _inset) / (_items.length + 0.2);
+            final sidePadding = _inset + 0.1 * slotWidth;
+            final capsuleWidth = slotWidth * 1.2;
+            final left = sidePadding + index * slotWidth - 0.1 * slotWidth;
 
-              return Stack(
-                children: [
-                  AnimatedPositioned(
-                    duration: const Duration(milliseconds: 300),
-                    curve: Curves.easeOutCubic,
-                    left: left,
-                    top: _inset,
-                    bottom: _inset,
-                    width: capsuleWidth,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: capsule,
-                        borderRadius: _radius,
-                      ),
+            return Stack(
+              children: [
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeOutCubic,
+                  left: left,
+                  top: _inset,
+                  bottom: _inset,
+                  width: capsuleWidth,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: capsule,
+                      borderRadius: _radius,
                     ),
                   ),
-                  Padding(
-                    padding: EdgeInsets.symmetric(horizontal: sidePadding),
-                    child: Row(
-                      children: List.generate(_items.length, (i) {
-                        final selected = i == index;
-                        return Expanded(
-                          child: Semantics(
-                            label: _labels[i],
-                            selected: selected,
-                            button: true,
-                            excludeSemantics: true,
-                            // No ripple: the sliding capsule is the feedback.
-                            child: GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onTap: () => onChanged(i),
-                              child: Center(
-                                // + is a button, not a tab: a filled circle.
-                                child: i == _plus
-                                    ? Container(
-                                        width: 44,
-                                        height: 44,
-                                        decoration: BoxDecoration(
-                                          color: team.ink,
-                                          shape: BoxShape.circle,
-                                        ),
-                                        child: Icon(Icons.add,
-                                            size: 30, color: fill),
-                                      )
-                                    : Icon(_items[i],
-                                        size: 28, color: team.ink),
-                              ),
+                ),
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: sidePadding),
+                  child: Row(
+                    children: List.generate(_items.length, (i) {
+                      final selected = i == index;
+                      return Expanded(
+                        child: Semantics(
+                          label: _labels[i],
+                          selected: selected,
+                          button: true,
+                          excludeSemantics: true,
+                          // No ripple: the sliding capsule is the feedback.
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () => onChanged(i),
+                            child: Center(
+                              // + is a button, not a tab: a filled circle.
+                              child: i == _plus
+                                  ? Container(
+                                      width: 44,
+                                      height: 44,
+                                      decoration: BoxDecoration(
+                                        color: team.ink,
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Icon(Icons.add,
+                                          size: 30, color: fill),
+                                    )
+                                  : Icon(_items[i], size: 28, color: team.ink),
                             ),
                           ),
-                        );
-                      }),
-                    ),
+                        ),
+                      );
+                    }),
                   ),
-                ],
-              );
-            },
-          ),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );

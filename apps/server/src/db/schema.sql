@@ -346,3 +346,10 @@ ALTER TABLE recording_session_videos
 -- when the app asked the camera to start (up to a second early on some
 -- phones). NULL for uploads from before this was recorded.
 ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS start_offset_source TEXT;
+
+-- A still from the video for the session lists (see
+-- src/recordings/thumbnails.js). NULL until it's made; thumbnail_failed
+-- when it couldn't be, so it isn't retried on every start.
+ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS thumbnail_file_id TEXT;
+ALTER TABLE recording_session_videos
+    ADD COLUMN IF NOT EXISTS thumbnail_failed BOOLEAN NOT NULL DEFAULT FALSE;

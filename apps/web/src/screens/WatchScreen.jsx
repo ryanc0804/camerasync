@@ -131,10 +131,15 @@ export function WatchScreen() {
                   type="button"
                   onClick={() => navigate(`/watch/${session.id}`)}
                 >
-                  <strong>{sessionLabel(session)}</strong>
-                  <span className="watch-metadata">
-                    <span>Members in Session: {session.memberCount ?? "—"}</span>
-                    <span>Recordings: {session.recordingCount ?? "—"}</span>
+                  <span className="watch-thumb" aria-hidden="true">
+                    {session.thumbnailUrl && <img src={session.thumbnailUrl} alt="" loading="lazy" />}
+                  </span>
+                  <span className="watch-session-text">
+                    <strong>{sessionLabel(session)}</strong>
+                    <span className="watch-metadata">
+                      <span>Members in Session: {session.memberCount ?? "—"}</span>
+                      <span>Recordings: {session.recordingCount ?? "—"}</span>
+                    </span>
                   </span>
                 </button>
                 {/* Admins and the owner (who keeps an admin role) can delete. */}
@@ -236,6 +241,18 @@ const css = `
   .watch-session button:hover { background: #262626; }
   .watch-session button[aria-expanded="true"] { background: #262626; }
   .watch-session strong { overflow-wrap: anywhere; }
+  .watch-session > button:first-child {
+    flex-wrap: nowrap; justify-content: flex-start; align-items: center; gap: 14px;
+    padding: 12px 16px 12px 12px;
+  }
+  .watch-session .watch-thumb {
+    flex: 0 0 auto; width: 96px; height: 54px; border-radius: 6px;
+    background: #0a0b0d; overflow: hidden;
+  }
+  .watch-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .watch-session-text {
+    display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0;
+  }
   .watch-session time { color: #999; font-size: 0.9rem; }
   .watch-session p { margin: 0; padding: 16px; }
 `;

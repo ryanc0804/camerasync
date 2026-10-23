@@ -74,6 +74,8 @@ function publicSession(row) {
     recordingCount: row.recording_count == null ? null : Number(row.recording_count),
     activeMemberCount: Number(row.active_member_count ?? 0),
     isJoined: Boolean(row.is_joined),
+    // A still from the session's first take, for the session lists.
+    thumbnailUrl: row.thumbnail_file_id ? `/api/files/get/${row.thumbnail_file_id}` : null,
   };
 }
 
@@ -125,7 +127,10 @@ recordingsRouter.get("/sessions", requireAuth, async (req, res, next) => {
                   FROM recording_session_members rsm
                  WHERE rsm.session_id = rs.id
                    AND rsm.user_id = $1
-              ) AS is_joined
+              ) AS is_joined,
+              (SELECT v.thumbnail_file_id FROM recording_session_videos v
+                WHERE v.session_id = rs.id AND v.thumbnail_file_id IS NOT NULL
+                ORDER BY v.started_at_ms, v.user_id LIMIT 1) AS thumbnail_file_id
         FROM recording_sessions rs
         WHERE ${sessionVisibleSql("rs", "$1")}
         ORDER BY
@@ -171,7 +176,7 @@ recordingsRouter.delete("/sessions/:id", requireAuth, async (req, res, next) => 
       return res.status(409).json({ error: "End this session before deleting it." });
     }
     const { rows: videos } = await client.query(
-      `SELECT file_id, preview_file_id FROM recording_session_videos
+      `SELECT file_id, preview_file_id, thumbnail_file_id FROM recording_session_videos
         WHERE session_id = $1 FOR UPDATE`,
       [req.params.id]
     );
@@ -758,15 +763,16 @@ recordingsRouter.post(
         });
       }
 
-      const joinOpensAt =
-        new Date(session.scheduled_at).getTime() - 15 * 60 * 1000;
+      // Opens at its start time (not before), and closes if nobody has
+      // joined 15 minutes after.
+      const joinOpensAt = new Date(session.scheduled_at).getTime();
       const joinClosesAt =
         new Date(session.scheduled_at).getTime() + 15 * 60 * 1000;
 
       if (session.status === "scheduled" && !session.has_members) {
         if (Date.now() < joinOpensAt) {
           return res.status(409).json({
-            error: "Scheduled sessions open 15 minutes before they start.",
+            error: "This session opens at its start time.",
           });
         }
         if (Date.now() > joinClosesAt) {

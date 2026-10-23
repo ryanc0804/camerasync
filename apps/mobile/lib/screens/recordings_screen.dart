@@ -179,6 +179,7 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
                     RecordingCard(
                       session: s,
                       groupName: _groupNames[s.groupId],
+                      thumbnail: _recordings.thumbnailOf(s),
                       onTap: () => _open(s),
                       onDelete: _adminGroups.contains(s.groupId)
                           ? () => _delete(s)
@@ -207,8 +208,8 @@ class _RecordingsScreenState extends State<RecordingsScreen> {
   }
 }
 
-/// One session in the list. The design shows a plain grey block for each
-/// recording; the block becomes the poster frame once thumbnails exist.
+/// One session in the list: a still from its first take behind its name
+/// (a plain grey block until the server has made one).
 class RecordingCard extends StatelessWidget {
   const RecordingCard({
     super.key,
@@ -216,10 +217,12 @@ class RecordingCard extends StatelessWidget {
     required this.onTap,
     this.groupName,
     this.onDelete,
+    this.thumbnail,
   });
 
   final RecordingSession session;
   final String? groupName;
+  final ImageProvider? thumbnail;
   final VoidCallback onTap;
 
   /// Shown as a delete button for group admins and the owner.
@@ -243,6 +246,7 @@ class RecordingCard extends StatelessWidget {
       child: Material(
         color: _panel,
         borderRadius: BorderRadius.circular(6),
+        clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(6),
@@ -250,6 +254,27 @@ class RecordingCard extends StatelessWidget {
             height: 120,
             child: Stack(
               children: [
+                if (thumbnail != null) ...[
+                  Positioned.fill(
+                    child: Image(
+                      image: thumbnail!,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => const SizedBox(),
+                    ),
+                  ),
+                  // Darker toward the bottom, so the name reads on any picture.
+                  const Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Color(0x00000000), Color(0xCC000000)],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
                 if (onDelete != null)
                   Positioned(
                     top: 4,
