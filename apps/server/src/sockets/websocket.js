@@ -448,6 +448,21 @@ export async function closeSessionSocket(sessionId) {
   getIO().in(room).socketsLeave(room);
 }
 
+// Someone left a session (its leave route): take their devices out of the
+// live room and tell everyone still in it, so device counts update even if
+// the phone's own leave message never got through.
+export async function leaveSessionRoom(sessionId, userId) {
+  const room = roomName(sessionId);
+  const sockets = await getIO().in(room).fetchSockets();
+  for (const socket of sockets) {
+    if (Number(socket.data.user?.id) === Number(userId)) {
+      socket.leave(room);
+      socket.data.sessionId = null;
+    }
+  }
+  await sendRoomMembers(sessionId);
+}
+
 // Stop sending session events to someone removed from the group.
 export async function removeMemberFromGroupSessions(groupId, userId) {
   const { rows: hostedSessions } = await pool.query(
