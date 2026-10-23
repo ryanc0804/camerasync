@@ -117,8 +117,8 @@ void main() {
   }
 
   Future<void> openComments(WidgetTester tester) async {
-    final auth =
-        AuthService(ApiClient('http://${server.address.address}:${server.port}'));
+    final auth = AuthService(
+        ApiClient('http://${server.address.address}:${server.port}'));
     const session = RecordingSession(
       id: 'abc123',
       name: 'Stunt practice',
@@ -133,8 +133,15 @@ void main() {
     });
     await settle(tester);
     await settle(tester);
-    await tester.tap(find.byIcon(Icons.add_comment_outlined));
+    await tester.tap(find.byIcon(Icons.comment_outlined));
     // Let the sheet finish sliding up before tapping inside it.
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+  }
+
+  Future<void> openAddComment(WidgetTester tester) async {
+    await openComments(tester);
+    await tester.tap(find.byTooltip('Add a comment'));
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
   }
@@ -142,7 +149,7 @@ void main() {
   Finder post() => find.widgetWithText(FilledButton, 'Post');
 
   testWidgets('posts a comment stamped at the paused moment', (tester) async {
-    await openComments(tester);
+    await openAddComment(tester);
     expect(find.text('Comment at 00:00'), findsOneWidget);
 
     await tester.enterText(find.byType(TextField), '  Great catch  ');
@@ -154,15 +161,17 @@ void main() {
     // The sheet closes, and the new comment is live at the playhead.
     await tester.pump(const Duration(seconds: 1));
     expect(find.byType(TextField), findsNothing);
-    expect(find.textContaining('Great catch', findRichText: true), findsOneWidget);
+    expect(
+        find.textContaining('Great catch', findRichText: true), findsOneWidget);
   });
 
   testWidgets('a comment pops up at its moment, with delete only when allowed',
       (tester) async {
-    await openComments(tester);
+    await openAddComment(tester);
     // Coach's comment is at 0:05, not at the playhead (0:00), so it isn't
     // showing, and there is no list of comments.
-    expect(find.textContaining('Watch the left side', findRichText: true), findsNothing);
+    expect(find.textContaining('Watch the left side', findRichText: true),
+        findsNothing);
     expect(find.byTooltip('Delete comment'), findsNothing);
 
     await tester.enterText(find.byType(TextField), 'Mine');
@@ -176,10 +185,11 @@ void main() {
     expect(notes.map((n) => n['id']), [1]);
   });
 
-  testWidgets("shows the server's message and keeps the text when posting fails",
+  testWidgets(
+      "shows the server's message and keeps the text when posting fails",
       (tester) async {
     viewer = true;
-    await openComments(tester);
+    await openAddComment(tester);
 
     await tester.enterText(find.byType(TextField), 'Can I comment?');
     await tapAndWait(tester, post());
@@ -188,6 +198,38 @@ void main() {
     expect(
       tester.widget<TextField>(find.byType(TextField)).controller!.text,
       'Can I comment?',
+    );
+  });
+
+  testWidgets('comment icon lists comments by video timestamp', (tester) async {
+    notes = [
+      {
+        'id': 1,
+        'body': 'Later comment',
+        'videoTimeMs': 5000,
+        'author': 'Coach',
+        'canDelete': false,
+      },
+      {
+        'id': 3,
+        'body': 'Earlier comment',
+        'videoTimeMs': 2000,
+        'author': 'Alex',
+        'canDelete': false,
+      },
+    ];
+
+    await openComments(tester);
+    expect(find.text('Comments (2)'), findsOneWidget);
+    expect(find.text('Alex'), findsOneWidget);
+    expect(find.text('Earlier comment'), findsOneWidget);
+    expect(find.text('00:02'), findsOneWidget);
+    expect(find.text('Coach'), findsOneWidget);
+    expect(find.text('Later comment'), findsOneWidget);
+    expect(find.text('00:05'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('Earlier comment')).dy,
+      lessThan(tester.getTopLeft(find.text('Later comment')).dy),
     );
   });
 }
