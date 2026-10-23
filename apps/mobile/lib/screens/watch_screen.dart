@@ -469,10 +469,25 @@ class _WatchScreenState extends State<WatchScreen> {
 
   /// One angle's player, or null if it fails to load (the tile then shows
   /// "Not uploaded" rather than blocking the other angles).
+  ///
+  /// If the video won't play here (a laptop's VP9 on an iPhone), its
+  /// preview is tried instead: the server always makes that an H.264 copy
+  /// every phone can play.
   Future<VideoPlayerController?> _openPlayer(
       SessionRecording recording, int i) async {
     final url = _urlFor(recording, i);
     if (url == null) return null;
+    final preview = recording.videos[i].previewUrl;
+    final fallback =
+        preview == null ? null : _recordings.absoluteUrl(preview);
+    for (final candidate in {url, if (fallback != null) fallback}) {
+      final player = await _tryPlayer(candidate);
+      if (player != null) return player;
+    }
+    return null;
+  }
+
+  Future<VideoPlayerController?> _tryPlayer(String url) async {
     final cookie = widget.auth.api.cookie;
     final player = VideoPlayerController.networkUrl(
       Uri.parse(url),

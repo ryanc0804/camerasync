@@ -44,6 +44,11 @@ describe("isSmallEnough", () => {
     expect(isSmallEnough({ width: 1280, height: 720, bitRate: 12_000_000, fps: 30 })).toBe(false);
   });
 
+  it("makes an H.264 one of a small VP9 video (a laptop's), which iPhones can't play", () => {
+    expect(isSmallEnough({ width: 640, height: 480, bitRate: 1_300_000, fps: 30, codec: "vp9" })).toBe(false);
+    expect(isSmallEnough({ width: 640, height: 480, bitRate: 1_300_000, fps: 30, codec: "h264" })).toBe(true);
+  });
+
   it("makes a 30 fps one of a small 60 fps video: half the frames to decode", () => {
     expect(isSmallEnough({ width: 1280, height: 720, bitRate: 2_500_000, fps: 60 })).toBe(false);
   });
