@@ -25,6 +25,22 @@ import {
 import { END_BEEP_TONES_HZ, playSyncBeep } from "../recording/syncBeep.js";
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
+
+// This tab's device id: the server allows one device per account in a
+// session and tells a reconnect from a second device by it. Per tab (it
+// survives a reload), so a second tab counts as another device.
+function tabDeviceId() {
+  try {
+    let id = sessionStorage.getItem("8kount.deviceId");
+    if (!id) {
+      id = crypto.randomUUID();
+      sessionStorage.setItem("8kount.deviceId", id);
+    }
+    return id;
+  } catch {
+    return null;
+  }
+}
 let timesyncPromise = null;
 
 // loads the timesync browser file once
@@ -373,7 +389,7 @@ export function ActiveSessionScreen() {
         clock.on("error", () => setSyncStatus("Retrying"));
 
         socket.on("connect", () => {
-          socket.emit("session:join", { sessionId, camera: !controllerOnlyRef.current }, (reply) => {
+          socket.emit("session:join", { sessionId, camera: !controllerOnlyRef.current, deviceId: tabDeviceId() }, (reply) => {
             if (!reply?.ok) {
               setSocketStatus("Disconnected");
               setError(reply?.error || "Unable to join the live session.");
@@ -463,7 +479,7 @@ export function ActiveSessionScreen() {
     }
     const socket = socketRef.current;
     if (!socket?.connected) return;
-    socket.emit("session:join", { sessionId, camera: !controllerOnly }, (reply) => {
+    socket.emit("session:join", { sessionId, camera: !controllerOnly, deviceId: tabDeviceId() }, (reply) => {
       if (reply?.ok) setMembers(reply.members);
     });
   }, [controllerOnly, sessionId]);
