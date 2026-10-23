@@ -64,10 +64,12 @@ export function PlaybackScreen({ live = null } = {}) {
   const startedAt = recording?.startedAt;
   const showingList = recordings.length > 1 && recordingIndex === null;
 
-  // A live session's takes show up as their uploads finish. Only while the
-  // list is up, so a recording being watched is never swapped underneath.
+  // A live session's takes show up as their uploads finish. While a take is
+  // being watched, only when one of its angles is still on its way (missing,
+  // or just the preview so far), so it fills in without a refresh.
   useAutoRefresh(() => {
-    if (recordingIndex !== null && recordings.length > 0) return;
+    if (recording && !recording.videos.some((video) => stillUploading(video, recording.startedAt)
+      || video.previewOnly)) return;
     getSessionVideos(sessionId)
       .then((data) => setRecordings(data.recordings))
       .catch(() => {});
@@ -189,6 +191,14 @@ function RecordingList({ sessionId, recordings, onChoose }) {
       })}
     </ul>
   );
+}
+
+// A camera's take that hasn't arrived yet is shown as on its way for this
+// long after the take; after that it's probably not coming.
+const UPLOAD_WAIT_MS = 30 * 60 * 1000;
+
+function stillUploading(video, startedAt) {
+  return !video.url && Date.now() - startedAt < UPLOAD_WAIT_MS;
 }
 
 function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, seek,
@@ -786,7 +796,11 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                   pause();
                   setError("A video could not load. Try refreshing the page.");
                 }}
-              /> : <div className="playback-missing" />}
+              /> : <div className="playback-missing">
+                {video && choosingPanel !== panelIndex && (stillUploading(video, recordings[recordingIndex].startedAt)
+                  ? <><span className="playback-spinner" aria-hidden="true" />Uploading…</>
+                  : "Not uploaded")}
+              </div>}
               {/* Clicking an angle plays it on its own (click again for the
                   grid). An empty panel opens the camera list instead. */}
               <button type="button" className="playback-add-video" disabled={uploading}
@@ -802,7 +816,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                   setChoosingPanel(null);
                   if (panels.length > 1) toggleFocus(panelIndex);
                 }}>
-                {!video?.url && choosingPanel !== pageIndex * perPage + index && "+"}
+                {!video && choosingPanel !== panelIndex && "+"}
               </button>
               {choosingPanel === pageIndex * perPage + index && (
                 <div className="playback-panel-picker" role="group"
@@ -813,7 +827,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                     <button type="button" key={option.userId} autoFocus={optionIndex === 0}
                       disabled={uploading} aria-pressed={panels[pageIndex * perPage + index] === option.userId}
                       onClick={() => chooseVideo(pageIndex * perPage + index, option.userId)}>
-                      {option.name}{option.url ? "" : " (not uploaded)"}
+                      {option.name}{option.url ? "" : stillUploading(option, recordings[recordingIndex].startedAt) ? " (uploading)" : " (not uploaded)"}
                     </button>
                   ))}
                   <button type="button" disabled={uploading}
@@ -827,7 +841,9 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                   )}
                 </div>
               )}
-              {video?.url && <figcaption><span>{video.name}</span></figcaption>}
+              {video && <figcaption><span>{video.name}</span>
+                {video.previewOnly && <span className="playback-preview-note">Preview · full quality uploading</span>}
+              </figcaption>}
             </figure>
             );
           })}
@@ -1029,7 +1045,11 @@ const css = `
   .playback-box .playback-audio button { display: flex; align-items: center; justify-content: center; flex: 0 0 28px; width: 28px; height: 28px; padding: 0; border-radius: 50%; }
   .playback-audio input { width: 100px; min-width: 0; margin: 0; accent-color: var(--accent); }
   .playback-grid video { display: block; width: 100%; flex: 1; min-height: 0; object-fit: contain; }
-  .playback-missing { flex: 1; min-height: 0; }
+  .playback-missing { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #999; font-size: 0.8rem; }
+  .playback-spinner { width: 28px; height: 28px; border: 3px solid #444; border-top-color: var(--accent); border-radius: 50%; animation: playback-spin 0.9s linear infinite; }
+  @keyframes playback-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .playback-spinner { animation-duration: 3s; } }
+  .playback-grid figcaption .playback-preview-note { flex-shrink: 0; color: #fc6; }
   .playback-grid figcaption { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 8px; background: rgba(0,0,0,0.55); color: #ddd; font-size: 0.7rem; pointer-events: none; }
   .playback-grid figcaption span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .playback-panel-picker { z-index: 2; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 220px; max-width: calc(100% - 24px); max-height: calc(100% - 16px); overflow: auto; padding: 4px; border: 1px solid #555; border-radius: 6px; background: #222; box-sizing: border-box; }

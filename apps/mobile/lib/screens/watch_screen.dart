@@ -273,11 +273,15 @@ class _WatchScreenState extends State<WatchScreen> {
 
   /// Picks up a live session's takes as their uploads finish: while the
   /// list is showing, while there's nothing to show yet, or while the open
-  /// recording has no angle uploaded. Never under a recording that plays.
+  /// recording has no angle uploaded. A recording being watched fills in
+  /// angles still on their way (and swaps previews for full videos) in
+  /// place, each joining at the current moment.
   Future<void> _refreshList() async {
     if (_loading) return;
     final waiting = _recording == null || _uploadedAngles.isEmpty;
-    if (!_picking && !waiting) return;
+    final filling = !waiting &&
+        _recording!.videos.any((v) => v.stillUploading || v.previewOnly);
+    if (!_picking && !waiting && !filling) return;
     try {
       final videos = await _recordings.getSessionVideos(widget.session.id);
       if (!mounted || _loading) return;
@@ -286,6 +290,10 @@ class _WatchScreenState extends State<WatchScreen> {
         return;
       }
       if (videos.recordings.isEmpty) return;
+      if (filling) {
+        await _fillIn(videos);
+        return;
+      }
       final hadNone = _recording == null;
       _videos = videos;
       if (hadNone && videos.recordings.length > 1) {
@@ -295,6 +303,26 @@ class _WatchScreenState extends State<WatchScreen> {
         if (_uploadedAngles.isNotEmpty || hadNone) await _openRecording();
       }
     } catch (_) {}
+  }
+
+  /// Takes the open recording's newly arrived angles from [videos] without
+  /// stopping playback. Skipped if its cameras changed, since players are
+  /// kept by position in the list.
+  Future<void> _fillIn(SessionVideos videos) async {
+    final current = _recording!;
+    final index = videos.recordings
+        .indexWhere((r) => r.startedAtMs == current.startedAtMs);
+    if (index < 0) return;
+    final fresh = videos.recordings[index];
+    String cameras(SessionRecording r) =>
+        r.videos.map((v) => v.userId).join(',');
+    if (cameras(fresh) != cameras(current)) return;
+    setState(() {
+      _videos = videos;
+      _index = index;
+      _trims = angleTrims(fresh.videos);
+    });
+    await _syncPlayers();
   }
 
   Future<void> _load() async {
@@ -1579,6 +1607,23 @@ class _AngleTile extends StatelessWidget {
                   child: VideoPlayer(p),
                 ),
               )
+            else if (video.stillUploading)
+              const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox.square(
+                      dimension: 22,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2.5, color: Color(0xFFCFCBD6)),
+                    ),
+                    SizedBox(height: 8),
+                    Text('Uploading…',
+                        style:
+                            TextStyle(color: Color(0xFFCFCBD6), fontSize: 12)),
+                  ],
+                ),
+              )
             else
               Center(
                 child: Text(
@@ -1593,11 +1638,22 @@ class _AngleTile extends StatelessWidget {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 color: Colors.black45,
-                child: Text(
-                  video.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white, fontSize: 11),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        video.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 11),
+                      ),
+                    ),
+                    if (video.previewOnly)
+                      const Text('Preview · full quality uploading',
+                          style: TextStyle(
+                              color: Color(0xFFFFCC66), fontSize: 10)),
+                  ],
                 ),
               ),
             ),

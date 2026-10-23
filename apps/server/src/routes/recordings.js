@@ -278,12 +278,15 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
       recording.videos.push({
         userId: Number(row.user_id),
         name: row.display_name || "Unnamed member",
-        url: row.file_id ? `/api/files/get/${row.file_id}` : null,
+        // The full video; until it arrives, the phone's preview stands in
+        // (previewOnly), so a take can be watched while it uploads.
+        url: row.file_id
+          ? `/api/files/get/${row.file_id}`
+          : row.preview_file_id ? `/api/files/get/${row.preview_file_id}` : null,
+        previewOnly: !row.file_id && Boolean(row.preview_file_id),
         // A smaller copy for when the angle is shown small; null until it's
         // made (see ../recordings/previews.js).
-        previewUrl: row.file_id && row.preview_file_id
-          ? `/api/files/get/${row.preview_file_id}`
-          : null,
+        previewUrl: row.preview_file_id ? `/api/files/get/${row.preview_file_id}` : null,
         ...videoStartOffset(row, startedAt),
       });
     }
