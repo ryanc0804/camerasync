@@ -219,6 +219,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [commentText, setCommentText] = useState("");
+  const [commentsOpen, setCommentsOpen] = useState(false);
   // Waiting for every angle to have enough loaded to play together.
   const [buffering, setBuffering] = useState(false);
   const [posting, setPosting] = useState(false);
@@ -363,6 +364,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     const at = note.videoTimeMs / 1000;
     return at <= time && time < at + 3;
   }).at(-1);
+  const orderedNotes = [...notes].sort((a, b) => a.videoTimeMs - b.videoTimeMs);
 
   const getPanelAudio = (panelIndex) => audioSettings[recordingIndex]?.[panelIndex] || {
     volume: 1,
@@ -932,15 +934,57 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
       {pages > 1 && focusedPanel === null && (
         <span className="playback-pages" aria-live="polite">Page {page + 1} of {pages}</span>
       )}
-      <form className="playback-comment" onSubmit={postComment}>
-        <input value={commentText} maxLength={500}
-          placeholder={`Comment at ${formatTime(time * 1000)}`}
-          aria-label="New comment"
-          onChange={(event) => setCommentText(event.target.value)} />
-        <button type="submit" disabled={posting || !commentText.trim()}>
-          {posting ? "Posting..." : "Post"}
-        </button>
-      </form>
+      <div className="playback-comment-tools">
+        <form className="playback-comment" onSubmit={postComment}>
+          <input value={commentText} maxLength={500}
+            placeholder={`Comment at ${formatTime(time * 1000)}`}
+            aria-label="New comment"
+            onChange={(event) => setCommentText(event.target.value)} />
+          <button type="submit" disabled={posting || !commentText.trim()}>
+            {posting ? "Posting..." : "Post"}
+          </button>
+        </form>
+        <div className="playback-comments-anchor">
+          <button type="button" className="playback-comments-toggle"
+            aria-expanded={commentsOpen}
+            aria-controls="playback-comments-panel"
+            onClick={() => setCommentsOpen((open) => !open)}>
+            Comments ({notes.length})
+          </button>
+          <section id="playback-comments-panel"
+            className={`playback-comments-panel${commentsOpen ? " is-open" : ""}`}
+            aria-label="Comments in this recording"
+            aria-hidden={!commentsOpen}>
+            <div className="playback-comments-heading">
+              <strong>Comments</strong>
+              <button type="button" className="playback-comments-close"
+                aria-label="Close comments"
+                onClick={() => setCommentsOpen(false)}>×</button>
+            </div>
+            {orderedNotes.length === 0 ? (
+              <p className="playback-comments-empty">No comments on this recording yet.</p>
+            ) : (
+              <ol className="playback-comments-list">
+                {orderedNotes.map((note) => (
+                  <li key={note.id}>
+                    <button type="button" className="playback-comments-item"
+                      onClick={() => {
+                        seekTo(note.videoTimeMs / 1000);
+                        setCommentsOpen(false);
+                      }}>
+                      <span className="playback-comments-meta">
+                        <strong>{note.author}</strong>
+                        <time>{formatTime(note.videoTimeMs)}</time>
+                      </span>
+                      <span className="playback-comments-body">{note.body}</span>
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
+        </div>
+      </div>
       </div>
       {notesError && <p className="playback-comment-error" role="alert">{notesError}</p>}
     </section>
@@ -1092,11 +1136,32 @@ const css = `
     margin-left: 8px; padding: 0 6px; border: none; background: transparent;
     color: #ff6b6b; font-size: 1rem; line-height: 1;
   }
-  .playback-comment { display: flex; gap: 8px; flex: 0 1 360px; min-width: 200px; margin: 0 0 0 auto; }
+  .playback-comment-tools { position: relative; display: flex; align-items: center; gap: 6px; flex: 0 1 480px; min-width: 0; margin: 0 0 0 auto; }
+  .playback-comment { display: flex; gap: 6px; flex: 1 1 auto; min-width: 200px; margin: 0; }
   .playback-comment input {
     flex: 1; min-width: 0; padding: 0.45rem 0.6rem; border: 1px solid #555; border-radius: 6px;
     background: #292929; color: #f0f0f0; font: inherit; font-size: 0.9rem;
   }
+  .playback-box .playback-comments-toggle { flex: 0 0 auto; padding: 0.45rem 0.6rem; white-space: nowrap; font-size: 0.85rem; }
+  .playback-comments-anchor { position: relative; }
+  .playback-comments-panel {
+    position: absolute; z-index: 6; right: 0; bottom: calc(100% + 8px);
+    width: min(380px, calc(100vw - 32px)); max-height: min(55vh, 420px);
+    overflow-y: auto; padding: 12px; border: 1px solid #444; border-radius: 10px;
+    background: #171717; box-shadow: 0 10px 32px rgba(0, 0, 0, 0.55);
+    opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(8px);
+    transition: opacity 0.16s ease, transform 0.16s ease, visibility 0s linear 0.16s;
+  }
+  .playback-comments-panel.is-open { opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0); transition-delay: 0s; }
+  .playback-comments-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #f0f0f0; }
+  .playback-box .playback-comments-close { width: 30px; height: 30px; padding: 0; border: none; background: transparent; color: #aaa; font-size: 1.35rem; line-height: 1; }
+  .playback-comments-list { display: grid; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
+  .playback-box .playback-comments-item { display: flex; flex-direction: column; align-items: stretch; gap: 4px; width: 100%; padding: 8px; border: none; border-radius: 6px; background: transparent; text-align: left; white-space: normal; }
+  .playback-box .playback-comments-item:hover { background: #292929; }
+  .playback-comments-meta { display: flex; justify-content: space-between; gap: 8px; color: var(--accent); font-size: 0.8rem; }
+  .playback-comments-meta time { flex: 0 0 auto; color: #aaa; font-variant-numeric: tabular-nums; }
+  .playback-comments-body { color: #eee; font-size: 0.9rem; overflow-wrap: anywhere; }
+  .playback-comments-empty { margin: 10px 0 2px; color: #aaa; font-size: 0.88rem; }
   .playback-comment-error { margin: 0.5rem 0 0; text-align: center; color: #ff8a80; font-size: 0.85rem; }
   .playback-seek input:disabled { opacity: 0.4; cursor: default; }
   .playback-controls .playback-toggle, .playback-controls .playback-skip { display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; padding: 0; border-radius: 50%; }
