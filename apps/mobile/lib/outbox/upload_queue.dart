@@ -5,6 +5,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:video_compress/video_compress.dart';
 
 import '../api/api_client.dart';
 import '../api/recordings_api.dart';
@@ -20,6 +21,8 @@ class QueuedTake {
     this.actualStartedAtMs,
     this.startClock,
     this.attempts = 0,
+    this.preview = PreviewState.none,
+    this.previewPath,
   });
 
   final String id;
@@ -37,6 +40,10 @@ class QueuedTake {
   final String filename;
   int attempts;
 
+  /// The small copy sent ahead of the full video (see [UploadQueue]).
+  PreviewState preview;
+  String? previewPath;
+
   /// When the next try may start, after a failed one.
   DateTime? retryAt;
   String? lastError;
@@ -50,6 +57,8 @@ class QueuedTake {
         'path': path,
         'filename': filename,
         'attempts': attempts,
+        'preview': preview.name,
+        'previewPath': previewPath,
       };
 
   static QueuedTake fromJson(Map<String, dynamic> json) => QueuedTake(
@@ -61,7 +70,27 @@ class QueuedTake {
         path: json['path'] as String,
         filename: json['filename'] as String,
         attempts: (json['attempts'] as num?)?.toInt() ?? 0,
+        preview: PreviewState.values.asNameMap()[json['preview']] ??
+            PreviewState.none,
+        previewPath: json['previewPath'] as String?,
       );
+}
+
+/// Where a take's preview is: still to be made, made and waiting to send,
+/// or nothing left to do (sent, not needed, or couldn't be made).
+enum PreviewState { toMake, toSend, none }
+
+/// Makes a small copy of the video at [path] and returns where it is, or
+/// null if it couldn't be made.
+typedef PreviewMaker = Future<String?> Function(String path);
+
+/// A 480p copy made with the phone's hardware encoder, about 1 Mbps.
+Future<String?> makeVideoPreview(String path) async {
+  final info = await VideoCompress.compressVideo(path,
+      quality: VideoQuality.Res640x480Quality, includeAudio: true);
+  // A cancelled one comes back (on iPhones) as the original video.
+  if (info == null || info.isCancel == true || info.path == path) return null;
+  return info.path;
 }
 
 /// What the queue last did with a take, for the status shown on the camera.
@@ -72,23 +101,32 @@ enum UploadEvent { uploaded, unrecorded, rejected }
 /// bad connection, a new take, leaving the camera or closing the app: the
 /// list is saved and picked up again the next time the app opens.
 ///
+/// A take big enough to take a while gets a small preview (480p, about a
+/// fifth of the size) made and sent first, so the coach can watch it within
+/// seconds on a slow connection; every waiting take's preview goes before
+/// any full video. The server plays the preview until the full one lands.
+///
 /// Takes go one at a time, and a failed one is tried again after a growing
 /// wait (5 s, 15 s, 30 s, 1 min, 2 min, then every 5 min) until it gets
 /// through. No upload starts while a take is starting or running ([pause]),
 /// so the start and stop messages aren't stuck behind video on a slow
 /// network; one already sending is let finish.
 class UploadQueue extends ChangeNotifier {
-  UploadQueue(this._api);
+  UploadQueue(this._api, {PreviewMaker? makePreview, Directory? dir})
+      : _makePreview = makePreview ?? makeVideoPreview,
+        _dir = dir;
 
   /// The app's queue, made when the user is signed in (see HomeShell).
   static UploadQueue? instance;
 
   final RecordingsApi _api;
+  final PreviewMaker _makePreview;
   final List<QueuedTake> _items = [];
   final Set<String> _pausedFor = {};
   Directory? _dir;
   bool _loaded = false;
   bool _running = false;
+  bool _makingPreview = false;
   Timer? _wake;
   late final AppLifecycleListener _lifecycle =
       AppLifecycleListener(onResume: kick);
@@ -119,6 +157,10 @@ class UploadQueue extends ChangeNotifier {
   /// would only reject them.
   static const minVideoBytes = 4096;
 
+  /// Takes at least this big get a preview: about 10 s of 1080p. Smaller
+  /// ones upload quickly enough as they are.
+  static const previewFromBytes = 10 * 1024 * 1024;
+
   static const _retryDelays = [5, 15, 30, 60, 120, 300];
 
   Future<void> start() async {
@@ -132,7 +174,13 @@ class UploadQueue extends ChangeNotifier {
         final list = jsonDecode(await file.readAsString()) as List;
         for (final json in list) {
           final item = QueuedTake.fromJson(Map<String, dynamic>.from(json as Map));
-          if (await File(item.path).exists()) _items.add(item);
+          if (!await File(item.path).exists()) continue;
+          final previewPath = item.previewPath;
+          if (item.preview == PreviewState.toSend &&
+              (previewPath == null || !await File(previewPath).exists())) {
+            item.preview = PreviewState.toMake;
+          }
+          _items.add(item);
         }
       }
     } catch (e) {
@@ -178,6 +226,8 @@ class UploadQueue extends ChangeNotifier {
       startClock: startClock,
       path: dest,
       filename: filename,
+      preview:
+          size >= previewFromBytes ? PreviewState.toMake : PreviewState.none,
     ));
     await _save();
     notifyListeners();
@@ -187,7 +237,10 @@ class UploadQueue extends ChangeNotifier {
   /// Holds new uploads back while [reason] lasts (a take starting or
   /// running); [resume] with the same reason lets them go again.
   void pause(String reason) {
-    if (_pausedFor.add(reason)) notifyListeners();
+    if (!_pausedFor.add(reason)) return;
+    // Making a preview uses the video encoder the camera is about to need.
+    if (_makingPreview) unawaited(VideoCompress.cancelCompression());
+    notifyListeners();
   }
 
   void resume(String reason) {
@@ -223,7 +276,7 @@ class UploadQueue extends ChangeNotifier {
             .where((item) => item.retryAt == null || !item.retryAt!.isAfter(now))
             .firstOrNull;
         if (next == null) break;
-        await _send(next);
+        await _step(next);
       }
     } finally {
       _running = false;
@@ -233,7 +286,57 @@ class UploadQueue extends ChangeNotifier {
     }
   }
 
-  Future<void> _send(QueuedTake item) async {
+  /// The next thing to do for [item]: a preview to make or send comes
+  /// first, for any waiting take, before a full video.
+  Future<void> _step(QueuedTake item) async {
+    final previews = _items.where((i) => i.preview != PreviewState.none &&
+        (i.retryAt == null || !i.retryAt!.isAfter(DateTime.now())));
+    final take = previews.firstOrNull ?? item;
+    switch (take.preview) {
+      case PreviewState.toMake:
+        await _makePreviewFor(take);
+      case PreviewState.toSend:
+        await _send(take, preview: true);
+      case PreviewState.none:
+        await _send(take);
+    }
+  }
+
+  Future<void> _makePreviewFor(QueuedTake item) async {
+    sending = item;
+    notifyListeners();
+    _makingPreview = true;
+    String? made;
+    try {
+      made = await _makePreview(item.path);
+    } catch (e) {
+      debugPrint('Preview could not be made: $e');
+    } finally {
+      _makingPreview = false;
+    }
+    // Stopped for a take: make it again afterwards.
+    if (paused) {
+      if (made != null) await File(made).delete().catchError((_) => File(made!));
+      return;
+    }
+    final size = made == null ? 0 : await File(made).length().catchError((_) => 0);
+    if (made == null || size < minVideoBytes) {
+      item.preview = PreviewState.none;
+    } else {
+      final dest = '${(await _storage()).path}/${item.id}-preview.mp4';
+      try {
+        await File(made).rename(dest);
+      } on FileSystemException {
+        await File(made).copy(dest);
+        await File(made).delete().catchError((_) => File(made!));
+      }
+      item.previewPath = dest;
+      item.preview = PreviewState.toSend;
+    }
+    await _save();
+  }
+
+  Future<void> _send(QueuedTake item, {bool preview = false}) async {
     sending = item;
     notifyListeners();
     try {
@@ -242,14 +345,20 @@ class UploadQueue extends ChangeNotifier {
       await _api.uploadSessionVideo(
         item.sessionId,
         item.startedAtMs,
-        item.path,
-        filename: item.filename,
+        preview ? item.previewPath! : item.path,
+        filename: preview ? 'preview.mp4' : item.filename,
         actualStartedAtMs: item.actualStartedAtMs,
         startClock: item.startClock,
+        preview: preview,
         timeout: const Duration(minutes: 30),
       );
-      await _remove(item);
-      _event(UploadEvent.uploaded);
+      item.attempts = 0;
+      if (preview) {
+        await _dropPreview(item);
+      } else {
+        await _remove(item);
+        _event(UploadEvent.uploaded);
+      }
     } on ApiException catch (e) {
       // The server looked at it and said no (not a video, session gone):
       // trying again won't change that. Anything else (no connection, the
@@ -257,7 +366,11 @@ class UploadQueue extends ChangeNotifier {
       final permanent = e.statusCode >= 400 &&
           e.statusCode < 500 &&
           !const {401, 403, 408, 429}.contains(e.statusCode);
-      if (permanent) {
+      if (permanent && preview) {
+        // Only the preview: the full video still goes.
+        debugPrint('Preview rejected (${e.statusCode}): ${e.message}');
+        await _dropPreview(item);
+      } else if (permanent) {
         debugPrint('Upload rejected (${e.statusCode}): ${e.message}');
         await _remove(item);
         _event(UploadEvent.rejected);
@@ -282,6 +395,15 @@ class UploadQueue extends ChangeNotifier {
   Future<void> _remove(QueuedTake item) async {
     _items.remove(item);
     await File(item.path).delete().catchError((_) => File(item.path));
+    await _dropPreview(item);
+  }
+
+  /// Done with the preview: sent, refused, or the take is gone.
+  Future<void> _dropPreview(QueuedTake item) async {
+    final path = item.previewPath;
+    item.preview = PreviewState.none;
+    item.previewPath = null;
+    if (path != null) await File(path).delete().catchError((_) => File(path));
     await _save();
   }
 

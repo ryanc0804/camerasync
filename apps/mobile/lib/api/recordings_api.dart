@@ -69,27 +69,56 @@ class AngleVideo {
     required this.name,
     this.url,
     this.previewUrl,
+    this.previewOnly = false,
     this.startOffsetMs,
+    this.takeStartedAtMs,
   });
 
   final int userId;
   final String name;
+
+  /// What to play: the full video, or its preview while the full one is
+  /// still uploading ([previewOnly]). Null until either has arrived.
   final String? url;
 
   /// A smaller copy (720p at most) for when the angle is drawn small; null
   /// until the server has made it.
   final String? previewUrl;
 
+  /// [url] is the phone's small preview; the full video is still uploading.
+  final bool previewOnly;
+
+  /// When the take began, for telling a video still on its way from one
+  /// that's not coming.
+  final int? takeStartedAtMs;
+
+  /// Shown as on its way for this long after the take.
+  static const uploadWait = Duration(minutes: 30);
+
+  /// Not here yet, but the take is recent enough that it's probably still
+  /// uploading.
+  bool get stillUploading {
+    final started = takeStartedAtMs;
+    return url == null &&
+        started != null &&
+        DateTime.now().millisecondsSinceEpoch - started <
+            uploadWait.inMilliseconds;
+  }
+
   /// How much later this camera really began than the take's shared start,
   /// or null if the device didn't report it (treated as on time).
   final int? startOffsetMs;
 
-  factory AngleVideo.fromJson(Map<String, dynamic> json) => AngleVideo(
+  factory AngleVideo.fromJson(Map<String, dynamic> json,
+          {int? takeStartedAtMs}) =>
+      AngleVideo(
         userId: (json['userId'] as num).toInt(),
         name: (json['name'] ?? 'Unnamed member').toString(),
         url: json['url'] as String?,
         previewUrl: json['previewUrl'] as String?,
+        previewOnly: json['previewOnly'] == true,
         startOffsetMs: (json['startOffsetMs'] as num?)?.toInt(),
+        takeStartedAtMs: takeStartedAtMs,
       );
 }
 
@@ -124,14 +153,17 @@ class SessionRecording {
   final int number;
   final List<AngleVideo> videos;
 
-  factory SessionRecording.fromJson(Map<String, dynamic> json) =>
-      SessionRecording(
-        startedAtMs: (json['startedAt'] as num).toInt(),
-        number: (json['number'] as num?)?.toInt() ?? 0,
-        videos: ((json['videos'] as List?) ?? const [])
-            .map((v) => AngleVideo.fromJson(Map<String, dynamic>.from(v)))
-            .toList(),
-      );
+  factory SessionRecording.fromJson(Map<String, dynamic> json) {
+    final startedAtMs = (json['startedAt'] as num).toInt();
+    return SessionRecording(
+      startedAtMs: startedAtMs,
+      number: (json['number'] as num?)?.toInt() ?? 0,
+      videos: ((json['videos'] as List?) ?? const [])
+          .map((v) => AngleVideo.fromJson(Map<String, dynamic>.from(v),
+              takeStartedAtMs: startedAtMs))
+          .toList(),
+    );
+  }
 }
 
 /// The recordings of one session, as returned by GET /sessions/:id/videos.
@@ -322,7 +354,8 @@ class RecordingsApi {
   ///
   /// [startedAtMs] must be the server-clock start the whole session shared
   /// (see `RecordingStartCommand.serverStartAtEpochMs`); the server lines this
-  /// angle up with every other device's by that value.
+  /// angle up with every other device's by that value. A [preview] is a
+  /// small copy sent first, played until the full video arrives.
   Future<void> uploadSessionVideo(
     String id,
     int startedAtMs,
@@ -330,13 +363,15 @@ class RecordingsApi {
     String? filename,
     int? actualStartedAtMs,
     String? startClock,
+    bool preview = false,
     Duration timeout = const Duration(minutes: 10),
   }) =>
       _api.postFile(
         '/api/files/upload'
         '?sessionId=${Uri.encodeQueryComponent(id)}&startedAt=$startedAtMs'
         '${actualStartedAtMs == null ? '' : '&actualStartedAt=$actualStartedAtMs'}'
-        '${startClock == null ? '' : '&startClock=$startClock'}',
+        '${startClock == null ? '' : '&startClock=$startClock'}'
+        '${preview ? '&kind=preview' : ''}',
         filePath: filePath,
         filename: filename,
         timeout: timeout,
