@@ -495,6 +495,14 @@ class _WatchScreenState extends State<WatchScreen> {
     );
     try {
       await player.initialize();
+      // An iPhone opens a laptop's VP9 video without complaint but has no
+      // picture for it (size zero): count that as not playable, so the
+      // H.264 preview is tried instead.
+      final size = player.value.size;
+      if (size.width == 0 || size.height == 0) {
+        await player.dispose();
+        return null;
+      }
       return player;
     } catch (_) {
       await player.dispose();
