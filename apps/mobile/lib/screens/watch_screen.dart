@@ -930,10 +930,10 @@ class _WatchScreenState extends State<WatchScreen> {
             ),
           if (_recording != null && !_picking)
             IconButton(
-              onPressed: _showAddComment,
-              tooltip: 'Add a comment',
+              onPressed: _showComments,
+              tooltip: 'Show comments',
               color: Colors.white,
-              icon: const Icon(Icons.add_comment_outlined, size: 24),
+              icon: const Icon(Icons.comment_outlined, size: 24),
             ),
         ],
       ),
@@ -1298,10 +1298,10 @@ class _WatchScreenState extends State<WatchScreen> {
                   ),
                   if (recording != null)
                     IconButton(
-                      onPressed: _showAddComment,
-                      tooltip: 'Add a comment',
+                      onPressed: _showComments,
+                      tooltip: 'Show comments',
                       color: Colors.white,
-                      icon: const Icon(Icons.add_comment_outlined),
+                      icon: const Icon(Icons.comment_outlined),
                     ),
                 ],
               ),
@@ -1454,6 +1454,43 @@ class _WatchScreenState extends State<WatchScreen> {
     );
   }
 
+  void _showComments() {
+    final recording = _recording;
+    if (recording == null) return;
+    final notes = [..._notes]
+      ..sort((a, b) => a.videoTimeMs.compareTo(b.videoTimeMs));
+    SessionNote? selected;
+    var addingComment = false;
+    final team = TeamAccent.of(context);
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: team.fillLight,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => _CommentsSheet(
+        notes: notes,
+        onSelect: (note) {
+          selected = note;
+          Navigator.of(sheetContext).pop();
+        },
+        onAdd: () {
+          addingComment = true;
+          Navigator.of(sheetContext).pop();
+        },
+      ),
+    ).whenComplete(() {
+      if (!mounted) return;
+      if (selected != null) {
+        unawaited(_seek(Duration(milliseconds: selected!.videoTimeMs)));
+      } else if (addingComment) {
+        _showAddComment();
+      }
+    });
+  }
+
   Future<List<SessionNote>> _addNote(
     SessionRecording recording,
     String body,
@@ -1484,6 +1521,119 @@ class _WatchScreenState extends State<WatchScreen> {
     ];
     if (mounted && _recording == recording) setState(() => _notes = notes);
     return notes;
+  }
+}
+
+class _CommentsSheet extends StatelessWidget {
+  const _CommentsSheet({
+    required this.notes,
+    required this.onSelect,
+    required this.onAdd,
+  });
+
+  final List<SessionNote> notes;
+  final ValueChanged<SessionNote> onSelect;
+  final VoidCallback onAdd;
+
+  @override
+  Widget build(BuildContext context) {
+    final sheet = TeamAccent.of(context).fillLight;
+    final ink = inkOn(sheet);
+    return SafeArea(
+      child: FractionallySizedBox(
+        heightFactor: 0.72,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+          child: Column(
+            children: [
+              Container(
+                width: 36,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(
+                  color: ink.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Comments (${notes.length})',
+                      style: TextStyle(
+                        color: ink,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: onAdd,
+                    tooltip: 'Add a comment',
+                    icon: Icon(Icons.add_comment_outlined, color: ink),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    tooltip: 'Close comments',
+                    icon: Icon(Icons.close, color: ink),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: notes.isEmpty
+                    ? Center(
+                        child: Text(
+                          'No comments on this recording yet.',
+                          style: TextStyle(color: ink.withValues(alpha: 0.7)),
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: notes.length,
+                        separatorBuilder: (_, __) =>
+                            Divider(color: ink.withValues(alpha: 0.12)),
+                        itemBuilder: (context, index) {
+                          final note = notes[index];
+                          return ListTile(
+                            contentPadding:
+                                const EdgeInsets.symmetric(horizontal: 4),
+                            title: Text(
+                              note.authorName,
+                              style: TextStyle(
+                                color: ink,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            subtitle: Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                note.body,
+                                style: TextStyle(
+                                  color: ink.withValues(alpha: 0.85),
+                                ),
+                              ),
+                            ),
+                            trailing: Text(
+                              formatClock(
+                                Duration(milliseconds: note.videoTimeMs),
+                              ),
+                              style: TextStyle(
+                                color: ink.withValues(alpha: 0.7),
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                              ),
+                            ),
+                            onTap: () => onSelect(note),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
