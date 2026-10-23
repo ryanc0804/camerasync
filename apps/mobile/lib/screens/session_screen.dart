@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -9,6 +10,7 @@ import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
 import '../keep_awake.dart';
 import '../socket/sync_socket.dart';
+import '../outbox/upload_queue.dart';
 
 /// Recording view for a session. Requests camera/mic only while mounted and
 /// releases them on dispose (per the MVP permissions rule — no background
@@ -48,11 +50,19 @@ class _SessionScreenState extends State<SessionScreen> {
   List<SessionMember> _members = [];
   bool _canControl = false;
 
+  /// This user started the session: leaving ends it for everyone.
+  bool _isHost = false;
+
+  /// Leaving (or ending) after the back arrow, so the session closing
+  /// isn't reported back to this phone as someone else's doing.
+  bool _leaving = false;
+
   /// Running the session without recording on this phone.
   bool _controllerOnly = false;
 
   /// A take is scheduled or running; the camera can't be switched mid-take.
   bool _takeRunning = false;
+  Timer? _resumeUploads;
   bool _switching = false;
 
   @override
@@ -73,6 +83,9 @@ class _SessionScreenState extends State<SessionScreen> {
 
     _subs.add(socket.members.listen((m) => setState(() => _members = m)));
     _subs.add(socket.recordingStart.listen((_) {
+      // No uploads start while a take runs: on a slow network they'd hold
+      // up the start and stop messages (see UploadQueue).
+      UploadQueue.instance?.pause('take');
       if (!mounted) return;
       setState(() => _takeRunning = true);
       // Watching when the next take starts: back to the camera, which is
@@ -84,7 +97,15 @@ class _SessionScreenState extends State<SessionScreen> {
             const SnackBar(content: Text('A new take started.')));
       }
     }));
-    _subs.add(socket.recordingStop.listen((_) {
+    _subs.add(socket.recordingStop.listen((command) {
+      // Uploads go again once every camera has really stopped.
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final stopAt = command.localStopAtEpochMs ?? now;
+      _resumeUploads?.cancel();
+      _resumeUploads = Timer(
+        Duration(milliseconds: math.max(0, stopAt - now) + 1500),
+        () => UploadQueue.instance?.resume('take'),
+      );
       if (mounted) setState(() => _takeRunning = false);
     }));
     // Whoever runs the session hears when a camera drops out of a take, so
@@ -104,7 +125,7 @@ class _SessionScreenState extends State<SessionScreen> {
       if (mounted) setState(() => _reconnecting = !connected);
     }));
     _subs.add(socket.sessionClosed.listen((_) {
-      if (!mounted) return;
+      if (!mounted || _leaving) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('The host ended the session.')),
       );
@@ -118,6 +139,8 @@ class _SessionScreenState extends State<SessionScreen> {
       setState(() {
         _initialized = true;
         _canControl = result.canControl;
+        _isHost = result.createdBy != null &&
+            result.createdBy == widget.auth.user?.id;
         if (!result.ok) _error = result.error;
       });
     } on SyncSocketException catch (e) {
@@ -172,6 +195,63 @@ class _SessionScreenState extends State<SessionScreen> {
     if (mounted) setState(() => _watching = false);
   }
 
+  /// The back arrow leaves the session, after asking: the host's leaving
+  /// ends it for everyone, anyone else just drops out (and the device
+  /// count updates on every phone).
+  Future<void> _confirmLeave() async {
+    if (_leaving) return;
+    final host = _isHost;
+    final midTake = _takeRunning;
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(host ? 'End the session?' : 'Leave the session?'),
+        content: Text([
+          if (host)
+            "You're the host, so leaving closes the session for everyone. "
+                "Every camera stops and they can't record more takes."
+          else
+            "You'll stop being a camera in this session. You can join "
+                "again with its code.",
+          if (midTake) 'A take is recording; it stops on this phone now.',
+        ].join('\n\n')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Stay'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+            child: Text(host ? 'End for everyone' : 'Leave'),
+          ),
+        ],
+      ),
+    );
+    if (leave != true || !mounted) return;
+    setState(() => _leaving = true);
+    final api = RecordingsApi(widget.auth.api);
+    try {
+      if (host) {
+        await api.endSession(widget.sessionId);
+      } else {
+        await api.leaveSession(widget.sessionId);
+      }
+    } catch (e) {
+      if (host && mounted) {
+        // Not ended: say so and stay, rather than leave everyone in a
+        // session with no host.
+        setState(() => _leaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text("Couldn't end the session. Check the connection "
+                'and try again.')));
+        return;
+      }
+      // Leaving still drops this phone out of the live room (dispose).
+    }
+    if (mounted) Navigator.of(context).pop();
+  }
+
   Future<void> _requestPermissions() async {
     final statuses = await [Permission.camera, Permission.microphone].request();
     setState(() {
@@ -182,6 +262,8 @@ class _SessionScreenState extends State<SessionScreen> {
   @override
   void dispose() {
     KeepAwake.release();
+    _resumeUploads?.cancel();
+    UploadQueue.instance?.resume('take');
     for (final s in _subs) {
       s.cancel();
     }
@@ -193,6 +275,18 @@ class _SessionScreenState extends State<SessionScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final joined = _initialized && _error == null;
+    return PopScope(
+      // Not in the session (still joining, or couldn't): just go back.
+      canPop: !joined || _leaving,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _confirmLeave();
+      },
+      child: _buildScreen(context),
+    );
+  }
+
+  Widget _buildScreen(BuildContext context) {
     if (!_initialized) {
       return const Scaffold(
         backgroundColor: Colors.black,

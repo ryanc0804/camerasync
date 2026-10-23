@@ -14,6 +14,7 @@ import { getGroups } from "../api/groups.js";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { LocalMediaPreview } from "../components/LocalMediaPreview.jsx";
 import { useWakeLock } from "../hooks/useWakeLock.js";
+import { createFrameWatcher } from "../recording/firstFrame.js";
 import { PlaybackScreen } from "./PlaybackScreen.jsx";
 import {
   createLocalRecorder,
@@ -24,6 +25,22 @@ import {
 import { END_BEEP_TONES_HZ, playSyncBeep } from "../recording/syncBeep.js";
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
+
+// This tab's device id: the server allows one device per account in a
+// session and tells a reconnect from a second device by it. Per tab (it
+// survives a reload), so a second tab counts as another device.
+function tabDeviceId() {
+  try {
+    let id = sessionStorage.getItem("8kount.deviceId");
+    if (!id) {
+      id = crypto.randomUUID();
+      sessionStorage.setItem("8kount.deviceId", id);
+    }
+    return id;
+  } catch {
+    return null;
+  }
+}
 let timesyncPromise = null;
 
 // loads the timesync browser file once
@@ -67,7 +84,8 @@ export function ActiveSessionScreen() {
   const [syncStatus, setSyncStatus] = useState("Syncing");
   const [syncedTime, setSyncedTime] = useState(Date.now());
   const [clockOffset, setClockOffset] = useState(0);
-  const [confirmingEnd, setConfirmingEnd] = useState(false);
+  // Asking before leaving (or, for the host, ending it for everyone).
+  const [confirmingLeave, setConfirmingLeave] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [error, setError] = useState("");
   // How far ahead the shared start is set. It has to cover the start
@@ -82,6 +100,8 @@ export function ActiveSessionScreen() {
   const socketRef = useRef(null);
   const clockRef = useRef(null);
   const mediaStreamRef = useRef(null);
+  // Reports camera frames' capture times (see firstFrame.js).
+  const frameWatcherRef = useRef(null);
   const recorderRef = useRef(null);
   const recordingTimerRef = useRef(null);
   const recordingChunksRef = useRef([]);
@@ -172,9 +192,11 @@ export function ActiveSessionScreen() {
       const actualStartedAt = info.actualStartAtEpochMs
         ? Math.round(info.actualStartAtEpochMs)
         : undefined;
-      saveRecordingDetails(sessionId, info.plannedStartAtEpochMs, actualStartedAt)
+      const startClock = info.startClock ?? "call";
+      saveRecordingDetails(sessionId, info.plannedStartAtEpochMs, actualStartedAt, startClock)
         .then(() => uploadSessionVideo(
-          sessionId, info.plannedStartAtEpochMs, video, videoFileName, actualStartedAt
+          sessionId, info.plannedStartAtEpochMs, video, videoFileName, actualStartedAt,
+          startClock
         ))
         .then(() => setRecordingMessage("Uploaded for playback"))
         .catch((err) => {
@@ -241,7 +263,11 @@ export function ActiveSessionScreen() {
             if (event.data.size > 0) recordingChunksRef.current.push(event.data);
           };
           recorder.onstart = () => {
-            const actualStartAtEpochMs = clock.now();
+            // Unless the first frame's capture time already came in, which is
+            // more exact (see below).
+            const actualStartAtEpochMs = recordingInfoRef.current?.startClock === "frame"
+              ? recordingInfoRef.current.actualStartAtEpochMs
+              : clock.now();
             recordingInfoRef.current = {
               ...recordingInfoRef.current,
               actualStartAtEpochMs,
@@ -255,6 +281,15 @@ export function ActiveSessionScreen() {
             );
           };
           recorder.onstop = () => saveRecording(recorder, extension);
+          // The first frame the recorder takes is the next one the camera
+          // sends; its capture time, on the synced clock, is when this angle
+          // really started.
+          frameWatcherRef.current?.nextFrameCaptureTime().then((captured) => {
+            const info = recordingInfoRef.current;
+            if (captured == null || !info || recorderRef.current !== recorder) return;
+            info.actualStartAtEpochMs = clock.now() - (performance.now() - captured);
+            info.startClock = "frame";
+          });
           recorder.onerror = () => {
             recorderRef.current = null;
             recordingInfoRef.current = null;
@@ -355,7 +390,7 @@ export function ActiveSessionScreen() {
         clock.on("error", () => setSyncStatus("Retrying"));
 
         socket.on("connect", () => {
-          socket.emit("session:join", { sessionId, camera: !controllerOnlyRef.current }, (reply) => {
+          socket.emit("session:join", { sessionId, camera: !controllerOnlyRef.current, deviceId: tabDeviceId() }, (reply) => {
             if (!reply?.ok) {
               setSocketStatus("Disconnected");
               setError(reply?.error || "Unable to join the live session.");
@@ -423,6 +458,35 @@ export function ActiveSessionScreen() {
     };
   }, [ready, navigate, session, sessionId, user.id]);
 
+  // The browser's back button asks first, like the phone's: an extra
+  // history entry catches it, and is put back if they stay.
+  const leavingRef = useRef(false);
+  leavingRef.current = leaving;
+  useEffect(() => {
+    window.history.pushState({ sessionGuard: true }, "", window.location.href);
+    const onPop = () => {
+      if (leavingRef.current) return;
+      window.history.pushState({ sessionGuard: true }, "", window.location.href);
+      setWatching(false);
+      setConfirmingLeave(true);
+    };
+    // Closing or reloading the tab gets the browser's own "Leave site?".
+    const onUnload = (event) => {
+      if (leavingRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("popstate", onPop);
+    window.addEventListener("beforeunload", onUnload);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      window.removeEventListener("beforeunload", onUnload);
+    };
+  }, []);
+
+  // The hidden camera-frame watcher goes with the page.
+  useEffect(() => () => frameWatcherRef.current?.stop(), []);
+
   // Esc closes the recordings and goes back to the session.
   useEffect(() => {
     if (!watching) return undefined;
@@ -442,7 +506,7 @@ export function ActiveSessionScreen() {
     }
     const socket = socketRef.current;
     if (!socket?.connected) return;
-    socket.emit("session:join", { sessionId, camera: !controllerOnly }, (reply) => {
+    socket.emit("session:join", { sessionId, camera: !controllerOnly, deviceId: tabDeviceId() }, (reply) => {
       if (reply?.ok) setMembers(reply.members);
     });
   }, [controllerOnly, sessionId]);
@@ -452,6 +516,8 @@ export function ActiveSessionScreen() {
 
   const handleMediaReady = (stream) => {
     mediaStreamRef.current = stream;
+    frameWatcherRef.current?.stop();
+    frameWatcherRef.current = createFrameWatcher(stream);
     setMediaReady(true);
   };
 
@@ -566,8 +632,43 @@ export function ActiveSessionScreen() {
     <div className="active-session-page" inert={watching ? "" : undefined}>
       <style>{activeSessionCss}</style>
 
+      {confirmingLeave && (
+        <div className="active-session-leave-backdrop"
+          onClick={(event) => { if (event.target === event.currentTarget && !leaving) setConfirmingLeave(false); }}
+          onKeyDown={(event) => { if (event.key === "Escape" && !leaving) setConfirmingLeave(false); }}>
+          <div className="active-session-leave" role="alertdialog" aria-modal="true"
+            aria-labelledby="leave-title">
+            <h2 id="leave-title">{isCreator ? "End the session?" : "Leave the session?"}</h2>
+            <p>
+              {isCreator
+                ? "You're the host, so leaving closes the session for everyone. Every camera stops and no more takes can be recorded."
+                : "You'll stop being a camera in this session. You can join again with its code."}
+            </p>
+            {recordingStatus !== "idle" && <p>A take is recording; it stops here now.</p>}
+            <div>
+              <button type="button" autoFocus disabled={leaving}
+                onClick={() => setConfirmingLeave(false)}>Stay</button>
+              <button className="active-session-danger" type="button" disabled={leaving}
+                onClick={isCreator ? endAndLeave : leave}>
+                {leaving
+                  ? (isCreator ? "Ending..." : "Leaving...")
+                  : (isCreator ? "End for everyone" : "Leave")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <header className="active-session-header">
-        <div>
+        <button type="button" className="active-session-back"
+          aria-label={isCreator ? "End session" : "Leave session"}
+          title={isCreator ? "End session" : "Leave session"}
+          disabled={leaving} onClick={() => setConfirmingLeave(true)}>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          </svg>
+        </button>
+        <div className="active-session-title">
           <span>Live session</span>
           <h1>{session?.name || "Loading session..."}</h1>
           {session && <code>{session.id}</code>}
@@ -596,40 +697,10 @@ export function ActiveSessionScreen() {
                 onClick={() => setControllerOnly(true)}>Controlling</button>
             </div>
           )}
-          {isCreator ? (
-            confirmingEnd ? (
-              <div className="active-session-confirm">
-                <span>End this session for everyone?</span>
-                <button
-                  type="button"
-                  onClick={() => setConfirmingEnd(false)}
-                  disabled={leaving}
-                >
-                  Keep Session
-                </button>
-                <button
-                  className="active-session-danger"
-                  type="button"
-                  onClick={endAndLeave}
-                  disabled={leaving}
-                >
-                  {leaving ? "Ending..." : "Confirm End"}
-                </button>
-              </div>
-            ) : (
-              <button
-                className="active-session-danger"
-                type="button"
-                onClick={() => setConfirmingEnd(true)}
-              >
-                End and Leave
-              </button>
-            )
-          ) : (
-            <button type="button" onClick={leave} disabled={leaving}>
-              {leaving ? "Leaving..." : "Leave"}
-            </button>
-          )}
+          <button className="active-session-danger" type="button"
+            disabled={leaving} onClick={() => setConfirmingLeave(true)}>
+            {isCreator ? "End session" : "Leave"}
+          </button>
         </div>
         )}
       </header>
@@ -819,6 +890,23 @@ const activeSessionCss = `
   .active-session-socket-status {
     color: #999;
     font-size: 0.82rem;
+  }
+  .active-session-header .active-session-title { flex: 1; min-width: 0; }
+  .active-session-leave-backdrop {
+    position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center;
+    padding: 16px; background: rgba(0,0,0,0.65);
+  }
+  .active-session-leave {
+    width: 100%; max-width: 420px; padding: 1.4rem 1.5rem; border: 1px solid #333; border-radius: 10px;
+    background: #161616; box-sizing: border-box;
+  }
+  .active-session-leave h2 { margin: 0 0 0.6rem; font-size: 1.15rem; }
+  .active-session-leave p { margin: 0 0 0.8rem; color: #bbb; line-height: 1.45; font-size: 0.92rem; }
+  .active-session-leave div { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1.1rem; }
+  .active-session-page .active-session-back {
+    display: flex; align-items: center; justify-content: center;
+    flex: 0 0 auto; width: 38px; height: 38px; padding: 0; margin-top: 0.2rem;
+    border-radius: 50%;
   }
   .active-session-header h1 {
     margin: 0.35rem 0;

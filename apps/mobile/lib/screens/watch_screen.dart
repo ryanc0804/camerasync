@@ -59,6 +59,9 @@ class _WatchScreenState extends State<WatchScreen> {
   /// the selected angle is open; on a big screen every uploaded one is.
   final Map<int, VideoPlayerController> _players = {};
 
+  /// Which copy each open player is playing (see [_urlFor]).
+  final Map<int, String> _playerUrls = {};
+
   /// How far into each angle the shared timeline starts, so every angle
   /// shows the same moment. [_position], [_duration] and comment times are
   /// all on that shared timeline.
@@ -73,6 +76,9 @@ class _WatchScreenState extends State<WatchScreen> {
   int _tvPage = 0;
   int _tvPageCount = 0;
   int? _tvFocused;
+
+  /// The angle heard on the TV, or null when muted.
+  int? _tvSound = 0;
   int? _tvCommentId;
 
   /// Where angle [i]'s player is on the shared timeline.
@@ -200,6 +206,9 @@ class _WatchScreenState extends State<WatchScreen> {
           {
             'name': recording.videos[i].name,
             'url': _recordings.absoluteUrl(recording.videos[i].url!),
+            if (recording.videos[i].previewUrl != null)
+              'previewUrl':
+                  _recordings.absoluteUrl(recording.videos[i].previewUrl!),
             'trimMs': _trimOf(i).inMilliseconds,
           }
       ],
@@ -215,6 +224,7 @@ class _WatchScreenState extends State<WatchScreen> {
       _tvPage = state.page;
       _tvPageCount = state.pageCount;
       _tvFocused = state.focused;
+      _tvSound = state.sound;
       _ready = true;
     });
     // The comment at this moment, up on the TV too.
@@ -263,11 +273,15 @@ class _WatchScreenState extends State<WatchScreen> {
 
   /// Picks up a live session's takes as their uploads finish: while the
   /// list is showing, while there's nothing to show yet, or while the open
-  /// recording has no angle uploaded. Never under a recording that plays.
+  /// recording has no angle uploaded. A recording being watched fills in
+  /// angles still on their way (and swaps previews for full videos) in
+  /// place, each joining at the current moment.
   Future<void> _refreshList() async {
     if (_loading) return;
     final waiting = _recording == null || _uploadedAngles.isEmpty;
-    if (!_picking && !waiting) return;
+    final filling = !waiting &&
+        _recording!.videos.any((v) => v.stillUploading || v.previewOnly);
+    if (!_picking && !waiting && !filling) return;
     try {
       final videos = await _recordings.getSessionVideos(widget.session.id);
       if (!mounted || _loading) return;
@@ -276,6 +290,10 @@ class _WatchScreenState extends State<WatchScreen> {
         return;
       }
       if (videos.recordings.isEmpty) return;
+      if (filling) {
+        await _fillIn(videos);
+        return;
+      }
       final hadNone = _recording == null;
       _videos = videos;
       if (hadNone && videos.recordings.length > 1) {
@@ -285,6 +303,26 @@ class _WatchScreenState extends State<WatchScreen> {
         if (_uploadedAngles.isNotEmpty || hadNone) await _openRecording();
       }
     } catch (_) {}
+  }
+
+  /// Takes the open recording's newly arrived angles from [videos] without
+  /// stopping playback. Skipped if its cameras changed, since players are
+  /// kept by position in the list.
+  Future<void> _fillIn(SessionVideos videos) async {
+    final current = _recording!;
+    final index = videos.recordings
+        .indexWhere((r) => r.startedAtMs == current.startedAtMs);
+    if (index < 0) return;
+    final fresh = videos.recordings[index];
+    String cameras(SessionRecording r) =>
+        r.videos.map((v) => v.userId).join(',');
+    if (cameras(fresh) != cameras(current)) return;
+    setState(() {
+      _videos = videos;
+      _index = index;
+      _trims = angleTrims(fresh.videos);
+    });
+    await _syncPlayers();
   }
 
   Future<void> _load() async {
@@ -357,8 +395,11 @@ class _WatchScreenState extends State<WatchScreen> {
 
     _position = _clockAt;
     for (final i in _players.keys.toList()) {
-      if (!wanted.contains(i)) {
+      // Closed when it's no longer shown, or to switch between its preview
+      // and the original (the grid grew or shrank around it).
+      if (!wanted.contains(i) || _playerUrls[i] != _urlFor(recording, i)) {
         final player = _players.remove(i)!;
+        _playerUrls.remove(i);
         if (player == _clockPlayer) _setClock(null);
         await player.dispose();
       }
@@ -378,6 +419,7 @@ class _WatchScreenState extends State<WatchScreen> {
       final player = opened[k];
       if (player == null) continue;
       _players[missing[k]] = player;
+      _playerUrls[missing[k]] = _urlFor(recording, missing[k])!;
       await player.seekTo(_position + _trimOf(missing[k]));
     }
 
@@ -408,15 +450,32 @@ class _WatchScreenState extends State<WatchScreen> {
     });
   }
 
+  /// The copy angle [i] plays, as an absolute URL: its preview while the
+  /// grid draws it small, so many can play at once; the original when it's
+  /// expanded, or the one big angle upright.
+  String? _urlFor(SessionRecording recording, int i) {
+    final video = recording.videos[i];
+    final preview = video.previewUrl;
+    var url = video.url;
+    if (preview != null && _gridMode && i != _focused) {
+      final screen = MediaQuery.of(context);
+      if (usePreviews(
+          screen.size, _pageAngles.length, screen.devicePixelRatio)) {
+        url = preview;
+      }
+    }
+    return url == null ? null : _recordings.absoluteUrl(url);
+  }
+
   /// One angle's player, or null if it fails to load (the tile then shows
   /// "Not uploaded" rather than blocking the other angles).
   Future<VideoPlayerController?> _openPlayer(
       SessionRecording recording, int i) async {
-    final url = recording.videos[i].url;
+    final url = _urlFor(recording, i);
     if (url == null) return null;
     final cookie = widget.auth.api.cookie;
     final player = VideoPlayerController.networkUrl(
-      Uri.parse(_recordings.absoluteUrl(url)),
+      Uri.parse(url),
       httpHeaders: {if (cookie != null) 'Cookie': cookie},
     );
     try {
@@ -482,6 +541,10 @@ class _WatchScreenState extends State<WatchScreen> {
       _focused = i;
       if (i != null) _selected = i;
     });
+    // The expanded angle switches to its original, and back to its preview
+    // when it rejoins the grid.
+    await _syncPlayers();
+    if (!mounted) return;
     await _seek(at);
     if (!mounted) return;
     final live = _liveAngles;
@@ -513,6 +576,7 @@ class _WatchScreenState extends State<WatchScreen> {
     _setClock(null);
     final old = _players.values.toList();
     _players.clear();
+    _playerUrls.clear();
     for (final p in old) {
       await p.dispose();
     }
@@ -778,7 +842,9 @@ class _WatchScreenState extends State<WatchScreen> {
                                       fontSize: 17,
                                       fontWeight: FontWeight.w700)),
                               SizedBox(height: 2),
-                              Text('Tap an angle to show it on its own.',
+                              Text(
+                                  'Tap an angle to show it on its own, or its '
+                                  'speaker to hear it.',
                                   style: TextStyle(color: kMuted)),
                             ],
                           ),
@@ -833,6 +899,21 @@ class _WatchScreenState extends State<WatchScreen> {
                           ? const Text('On its own. Tap for every angle.',
                               style: TextStyle(color: kMuted))
                           : null,
+                      // One angle's sound plays on the TV; tap another to
+                      // switch, or the playing one to mute.
+                      trailing: IconButton(
+                        onPressed: () => TvLink.instance.send(TvAction.sound,
+                            {'angle': _tvSound == k ? -1 : k}),
+                        tooltip: _tvSound == k
+                            ? 'Mute'
+                            : 'Hear this angle on the TV',
+                        icon: Icon(
+                          _tvSound == k
+                              ? Icons.volume_up
+                              : Icons.volume_off_outlined,
+                          color: _tvSound == k ? team.accent : kMuted,
+                        ),
+                      ),
                       onTap: () => TvLink.instance.send(
                           TvAction.focus, {'angle': _tvFocused == k ? -1 : k}),
                     ),
@@ -1676,6 +1757,23 @@ class _AngleTile extends StatelessWidget {
                   child: VideoPlayer(p),
                 ),
               )
+            else if (video.stillUploading)
+              const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox.square(
+                      dimension: 22,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2.5, color: Color(0xFFCFCBD6)),
+                    ),
+                    SizedBox(height: 8),
+                    Text('Uploading…',
+                        style:
+                            TextStyle(color: Color(0xFFCFCBD6), fontSize: 12)),
+                  ],
+                ),
+              )
             else
               Center(
                 child: Text(
@@ -1690,11 +1788,22 @@ class _AngleTile extends StatelessWidget {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 color: Colors.black45,
-                child: Text(
-                  video.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white, fontSize: 11),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        video.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 11),
+                      ),
+                    ),
+                    if (video.previewOnly)
+                      const Text('Preview',
+                          style: TextStyle(
+                              color: Color(0xFFFFCC66), fontSize: 10)),
+                  ],
                 ),
               ),
             ),

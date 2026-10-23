@@ -1,12 +1,16 @@
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:async';
 import 'dart:math' as math;
-import '../api/api_client.dart';
 import '../api/recordings_api.dart';
 import '../keep_awake.dart';
+import '../recording/first_frame.dart';
+import '../outbox/upload_queue.dart';
+import '../outbox/upload_status.dart';
+import '../recording_quality.dart';
 import '../notifications/take_alerts.dart';
 import '../socket/sync_socket.dart';
 import '../sync_beep.dart';
@@ -65,7 +69,6 @@ class CameraScreen extends StatefulWidget {
   State<CameraScreen> createState() => _CameraScreenState();
 }
 
-enum _UploadState { idle, uploading, done, failed }
 
 /// How long before a take's shared start the camera is told to record.
 /// Phones only really start a beat after they're asked (0.9 s on an Android
@@ -101,22 +104,12 @@ class _CameraScreenState extends State<CameraScreen> {
   /// planned start. Playback shifts this angle by the difference.
   int? _actualStartAtEpochMs;
 
+  /// What [_actualStartAtEpochMs] is: 'frame' when it's the first frame's
+  /// capture time, 'call' when it's when the camera was asked to start.
+  String? _startClock;
+
   /// "Recording N" for the current session recording, when the server said.
   int? _recordingNumber;
-
-  /// The most recent finished recording, kept so a failed upload can be
-  /// retried without recording again.
-  String? _lastVideoPath;
-  String? _lastVideoName;
-  int? _lastStartedAtEpochMs;
-  int? _lastActualStartedAtEpochMs;
-
-  _UploadState _upload = _UploadState.idle;
-  String _uploadMessage = '';
-
-  /// Clears "Uploaded for playback" after a few seconds; a failed upload
-  /// stays up, with its retry.
-  Timer? _hideUploadDone;
 
   bool get _uploadsEnabled =>
       widget.sessionId != null && widget.recordings != null;
@@ -167,6 +160,10 @@ class _CameraScreenState extends State<CameraScreen> {
         // if upload size or bandwidth becomes the bottleneck.
         ResolutionPreset.veryHigh,
         enableAudio: true,
+        // Capped so uploads stay manageable on slow Wi-Fi (see
+        // recording_quality.dart).
+        videoBitrate: videoBitrateFor(defaultTargetPlatform),
+        audioBitrate: kAudioBitrate,
       );
 
       await _cameraController!.initialize();
@@ -360,6 +357,17 @@ class _CameraScreenState extends State<CameraScreen> {
       if (socket != null) {
         _actualStartAtEpochMs =
             socket.localToServer(DateTime.now().millisecondsSinceEpoch);
+        _startClock = 'call';
+        // Better still: when the first frame was really captured, which the
+        // camera knows a moment later (see first_frame.dart).
+        final take = _plannedStartAtEpochMs;
+        unawaited(firstFrameAtEpochMs().then((local) {
+          if (local == null || take == null || _plannedStartAtEpochMs != take) {
+            return;
+          }
+          _actualStartAtEpochMs = socket.localToServer(local);
+          _startClock = 'frame';
+        }));
       }
 
       setState(() {
@@ -385,6 +393,8 @@ class _CameraScreenState extends State<CameraScreen> {
 
     final startedAt = _plannedStartAtEpochMs;
     final actualStartedAt = _actualStartAtEpochMs;
+    final startClock = _startClock;
+    _startClock = null;
     _plannedStartAtEpochMs = null;
     _plannedLocalStartAtEpochMs = null;
     _actualStartAtEpochMs = null;
@@ -399,75 +409,23 @@ class _CameraScreenState extends State<CameraScreen> {
       debugPrint('Video saved: ${file.path}');
 
       if (_uploadsEnabled && startedAt != null && !discard) {
-        _lastVideoPath = file.path;
-        _lastVideoName = file.name;
-        _lastStartedAtEpochMs = startedAt;
-        _lastActualStartedAtEpochMs = actualStartedAt;
-        // Not awaited: leaving the app stops a take, and the camera is let
-        // go right after, whether or not the upload finishes first.
-        unawaited(_uploadLastVideo());
+        // Into the phone's outbox, which sends it as soon as it can and
+        // keeps it until it's through (see UploadQueue). Not awaited:
+        // leaving the app stops a take, and the camera is let go right
+        // after.
+        final queue = UploadQueue.instance ??= UploadQueue(widget.recordings!);
+        unawaited(queue.add(
+          sessionId: widget.sessionId!,
+          startedAtMs: startedAt,
+          actualStartedAtMs: actualStartedAt,
+          startClock: startClock,
+          sourcePath: file.path,
+          filename: file.name,
+        ));
       }
     } catch (e) {
       debugPrint('Stop recording error: $e');
       await _unlockOrientation();
-    }
-  }
-
-  /// Registers the finished video with the session and uploads it so it shows
-  /// up in playback next to the other angles. The details call comes first so
-  /// the session's video count includes this recording even if the upload
-  /// fails; the upload can then be retried from the banner.
-  Future<void> _uploadLastVideo() async {
-    final sessionId = widget.sessionId;
-    final api = widget.recordings;
-    final path = _lastVideoPath;
-    final startedAt = _lastStartedAtEpochMs;
-    if (sessionId == null || api == null || path == null || startedAt == null) {
-      return;
-    }
-    if (!mounted) return;
-
-    _hideUploadDone?.cancel();
-    setState(() {
-      _upload = _UploadState.uploading;
-      _uploadMessage = 'Uploading recording…';
-    });
-
-    try {
-      final actualStartedAt = _lastActualStartedAtEpochMs;
-      await api.saveRecordingDetails(sessionId, startedAt,
-          actualStartedAtMs: actualStartedAt);
-      await api.uploadSessionVideo(
-        sessionId,
-        startedAt,
-        path,
-        filename: _lastVideoName,
-        actualStartedAtMs: actualStartedAt,
-      );
-      if (!mounted) return;
-      setState(() {
-        _upload = _UploadState.done;
-        _uploadMessage = 'Uploaded for playback';
-      });
-      _hideUploadDone = Timer(const Duration(seconds: 4), () {
-        if (mounted && _upload == _UploadState.done) {
-          setState(() => _upload = _UploadState.idle);
-        }
-      });
-    } on ApiException catch (e) {
-      debugPrint('Upload failed: ${e.message}');
-      if (!mounted) return;
-      setState(() {
-        _upload = _UploadState.failed;
-        _uploadMessage = 'Upload failed: ${e.message}';
-      });
-    } catch (e) {
-      debugPrint('Upload failed: $e');
-      if (!mounted) return;
-      setState(() {
-        _upload = _UploadState.failed;
-        _uploadMessage = 'Upload failed. The video is still on this phone.';
-      });
     }
   }
 
@@ -481,7 +439,6 @@ class _CameraScreenState extends State<CameraScreen> {
     if (_orientationLocked) SystemChrome.setPreferredOrientations(const []);
     _pendingStart?.cancel();
     _pendingBeep?.cancel();
-    _hideUploadDone?.cancel();
     _beep?.dispose();
 
     for (final sub in _subs) {
@@ -580,13 +537,18 @@ class _CameraScreenState extends State<CameraScreen> {
             ),
           ),
 
-        // Upload status for the last recording, with a retry when it failed.
-        if (_upload != _UploadState.idle)
+        // What the phone's outbox is doing (sending, waiting, done).
+        if (_uploadsEnabled)
           Positioned(
             top: 96 + _topBarSpace,
             left: 16,
             right: 16,
-            child: Center(child: _uploadBanner()),
+            child: Center(
+              child: UploadStatusBanner(
+                queue: UploadQueue.instance ??=
+                    UploadQueue(widget.recordings!),
+              ),
+            ),
           ),
 
         // Shutter: bottom-centre in portrait, right-hand side and vertically
@@ -632,59 +594,6 @@ class _CameraScreenState extends State<CameraScreen> {
           height: isPortrait ? size.width : size.height,
           child: CameraPreview(_cameraController!),
         ),
-      ),
-    );
-  }
-
-  Widget _uploadBanner() {
-    final failed = _upload == _UploadState.failed;
-    final uploading = _upload == _UploadState.uploading;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.black54,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (uploading)
-            const SizedBox(
-              width: 14,
-              height: 14,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: Colors.white,
-              ),
-            )
-          else
-            Icon(
-              failed ? Icons.error_outline : Icons.cloud_done_outlined,
-              size: 18,
-              color: failed ? Colors.redAccent : Colors.greenAccent,
-            ),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              _uploadMessage,
-              style: const TextStyle(color: Colors.white, fontSize: 13),
-            ),
-          ),
-          if (failed) ...[
-            const SizedBox(width: 6),
-            TextButton(
-              onPressed: _uploadLastVideo,
-              style: TextButton.styleFrom(
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: const Text('Retry'),
-            ),
-          ],
-        ],
       ),
     );
   }

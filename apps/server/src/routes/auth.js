@@ -11,6 +11,7 @@ import {
 import { signupEmailError } from "../auth/emailPolicy.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { storage } from "../storage/index.js";
+import { storedFileIds } from "./file.js";
 import {
   SESSION_COOKIE,
   createSession,
@@ -615,7 +616,7 @@ authRouter.delete("/me", requireAuth, async (req, res, next) => {
 
     await client.query("BEGIN");
     const files = await client.query(
-      `SELECT file_id FROM recording_session_videos
+      `SELECT file_id, preview_file_id, thumbnail_file_id FROM recording_session_videos
         WHERE user_id = $1 AND file_id IS NOT NULL`,
       [req.user.id]
     );
@@ -624,7 +625,7 @@ authRouter.delete("/me", requireAuth, async (req, res, next) => {
     await client.query("DELETE FROM users WHERE user_id = $1", [req.user.id]);
     await client.query("COMMIT");
 
-    const fileIds = files.rows.map((row) => row.file_id);
+    const fileIds = storedFileIds(files.rows);
     if (fileIds.length > 0) {
       // The account is gone either way; a file left behind is only space.
       await storage.remove(fileIds).catch((err) =>

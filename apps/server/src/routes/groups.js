@@ -6,7 +6,7 @@ import {
   closeSessionSocket,
   removeMemberFromGroupSessions,
 } from "../sockets/websocket.js";
-import { deleteRecordingFiles } from "./file.js";
+import { deleteRecordingFiles, storedFileIds } from "./file.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { ROLE_RANK, atLeast, getGroupRole } from "../middleware/groupRole.js";
 import { DEFAULT_TEAM_COLOR, teamColor } from "../groups/teamColors.js";
@@ -507,7 +507,7 @@ groupRouter.delete("/:id", async (req, res) => {
       [req.params.id]
     );
     const { rows: videos } = await client.query(
-      `SELECT v.file_id FROM recording_session_videos v
+      `SELECT v.file_id, v.preview_file_id, v.thumbnail_file_id FROM recording_session_videos v
          JOIN recording_sessions rs ON rs.id = v.session_id
         WHERE rs.group_id = $1 AND v.file_id IS NOT NULL`,
       [req.params.id]
@@ -516,7 +516,7 @@ groupRouter.delete("/:id", async (req, res) => {
     await client.query("COMMIT");
 
     // The rows are gone; now the files, and anyone still in a live session.
-    await deleteRecordingFiles(videos.map((video) => video.file_id));
+    await deleteRecordingFiles(storedFileIds(videos));
     for (const session of sessions.filter((item) => item.status === "active")) {
       await closeSessionSocket(session.id).catch(() => {});
     }

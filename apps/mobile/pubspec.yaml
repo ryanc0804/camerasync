@@ -22,6 +22,15 @@ dependencies:
   external_display: ^0.4.3
   url_launcher: ^6.3.3
   wakelock_plus: ^1.8.1
+  video_compress: ^3.1.4
+
+# Project copies of the camera plugins with one addition each: they report
+# when a recording's first frame was captured (see packages/*/README-8kount).
+dependency_overrides:
+  camera_android_camerax:
+    path: packages/camera_android_camerax
+  camera_avfoundation:
+    path: packages/camera_avfoundation
 
 dev_dependencies:
   flutter_launcher_icons: ^0.14.4

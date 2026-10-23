@@ -14,9 +14,11 @@ import { requireAuth } from "../middleware/requireAuth.js";
 import { atLeast, getSessionRole, sessionVisibleSql } from "../middleware/groupRole.js";
 import { storage } from "../storage/index.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
-import { startOffsetMs } from "../recordings/startOffset.js";
+import { START_OFFSET_UPSERT_SQL, startClock, startOffsetMs } from "../recordings/startOffset.js";
 import { findEndBeep, findSyncBeep } from "../recordings/syncBeep.js";
 import { remuxForStreaming } from "../recordings/remux.js";
+import { queuePreview } from "../recordings/previews.js";
+import { queueThumbnail } from "../recordings/thumbnails.js";
 
 export const fileRouter = Router();
 
@@ -99,6 +101,41 @@ async function readHeader(filePath) {
   }
 }
 
+// Saves a phone's preview of a take (see the kind=preview branch above):
+// stored, and filed on the take's row as its preview, so playback shows it
+// until the full video arrives. Ignored once the full video (or an earlier
+// preview) is there.
+async function savePreview(req, res, { fileId, tempPath, mediaType }) {
+  await storage.put({ fileId, tempPath, contentType: mediaType.mime, size: req.file.size });
+  let rows;
+  try {
+    const startedAt = Number(req.query.startedAt);
+    await ensureRecordingNumber(req.query.sessionId, startedAt);
+    ({ rows } = await pool.query(
+      `INSERT INTO recording_session_videos
+         (session_id, user_id, started_at_ms, preview_file_id, start_offset_ms,
+          start_offset_source)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (session_id, user_id, started_at_ms)
+       DO UPDATE SET preview_file_id = EXCLUDED.preview_file_id,
+         ${START_OFFSET_UPSERT_SQL}
+       WHERE recording_session_videos.file_id IS NULL
+         AND recording_session_videos.preview_file_id IS NULL
+       RETURNING preview_file_id`,
+      [req.query.sessionId, req.user.id, startedAt, fileId,
+        startOffsetMs(req.query.actualStartedAt, startedAt), startClock(req.query.startClock)]
+    ));
+  } catch (err) {
+    await storage.remove([fileId]).catch(() => {});
+    throw err;
+  }
+  if (rows.length === 0) {
+    await storage.remove([fileId]);
+    return res.json({ ok: true });
+  }
+  return res.status(201).json({ preview: { id: fileId, url: `/api/files/get/${fileId}` } });
+}
+
 // Removes a temp file that never made it into storage; a no-op once put()
 // has consumed it.
 async function discard(filePath) {
@@ -156,7 +193,9 @@ fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
   }
 
   const ext = path.extname(fileId);
-  const mediaType = MEDIA_TYPES[ext];
+  // Thumbnails (see ../recordings/thumbnails.js) are served too, though
+  // never accepted as uploads.
+  const mediaType = ext === ".jpg" ? { mime: "image/jpeg" } : MEDIA_TYPES[ext];
   if (!mediaType) {
     return res.status(400).json({ error: "File ID is invalid." });
   }
@@ -166,7 +205,9 @@ fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
       `SELECT EXISTS (
          SELECT 1 FROM recording_sessions rs
          WHERE rs.id = v.session_id AND ${sessionVisibleSql("rs", "$2")}
-       ) AS allowed FROM recording_session_videos v WHERE v.file_id = $1`,
+       ) AS allowed FROM recording_session_videos v
+        WHERE v.file_id = $1 OR v.preview_file_id = $1 OR v.thumbnail_file_id = $1
+        LIMIT 1`,
       [fileId, req.user.id]
     );
     // A file is only reachable through the session it was recorded for.
@@ -286,6 +327,14 @@ fileRouter.post(
       // Index at the front and seekable, so playback starts quickly. Keeps
       // the original if it can't (no re-encode either way).
       await remuxForStreaming(tempPath, path.extname(fileId));
+
+      // A phone's small preview, sent before the full video so the take can
+      // be watched within seconds on a slow connection. It stands in until
+      // the full video arrives (which then replaces it).
+      if (req.query.kind === "preview") {
+        return savePreview(req, res, { fileId, tempPath, mediaType });
+      }
+
       // Listen for the sync beep while the file is still on local disk, in
       // the file as stored: playback lines angles up in that file, and an
       // iPhone's sound can sit ~50 ms differently in the original.
@@ -309,22 +358,30 @@ fileRouter.post(
       let rows;
       try {
         await ensureRecordingNumber(req.query.sessionId, Number(req.query.startedAt));
+        // The phone's preview, if one came first, gives way to one the server
+        // makes from the full video (bigger, for the angle grid).
         ({ rows } = await pool.query(
-          `INSERT INTO recording_session_videos
+          `WITH old AS (
+             SELECT preview_file_id FROM recording_session_videos
+              WHERE session_id = $1 AND user_id = $2 AND started_at_ms = $3
+                AND file_id IS NULL
+           )
+           INSERT INTO recording_session_videos
              (session_id, user_id, started_at_ms, file_id, start_offset_ms, beep_at_ms,
-              end_beep_at_ms)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+              end_beep_at_ms, start_offset_source)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            ON CONFLICT (session_id, user_id, started_at_ms)
            DO UPDATE SET file_id = EXCLUDED.file_id,
-             start_offset_ms = COALESCE(recording_session_videos.start_offset_ms,
-                                        EXCLUDED.start_offset_ms),
+             ${START_OFFSET_UPSERT_SQL},
              beep_at_ms = EXCLUDED.beep_at_ms,
-             end_beep_at_ms = EXCLUDED.end_beep_at_ms
+             end_beep_at_ms = EXCLUDED.end_beep_at_ms,
+             preview_file_id = NULL,
+             preview_failed = FALSE
            WHERE recording_session_videos.file_id IS NULL
-           RETURNING file_id`,
+           RETURNING file_id, (SELECT preview_file_id FROM old) AS old_preview`,
           [req.query.sessionId, req.user.id, Number(req.query.startedAt), fileId,
             startOffsetMs(req.query.actualStartedAt, Number(req.query.startedAt)),
-            beepAtMs, endBeepAtMs]
+            beepAtMs, endBeepAtMs, startClock(req.query.startClock)]
         ));
       } catch (err) {
         await storage.remove([fileId]).catch(() => {});
@@ -335,6 +392,14 @@ fileRouter.post(
         await storage.remove([fileId]);
         return res.json({ ok: true });
       }
+
+      if (rows[0].old_preview) {
+        await storage.remove([rows[0].old_preview]).catch(() => {});
+      }
+      // The smaller copy for the angle grid, made in the background.
+      queuePreview(fileId);
+      // And a still for the session lists.
+      queueThumbnail(fileId);
 
       res.status(201).json({
         file: {
@@ -353,6 +418,18 @@ fileRouter.post(
     }
   }
 );
+
+// Every stored file behind these video rows: the originals and their
+// previews, once each.
+export function storedFileIds(rows) {
+  const ids = new Set();
+  for (const row of rows) {
+    if (row.file_id) ids.add(row.file_id);
+    if (row.preview_file_id) ids.add(row.preview_file_id);
+    if (row.thumbnail_file_id) ids.add(row.thumbnail_file_id);
+  }
+  return [...ids];
+}
 
 // Remove the stored files when their session is deleted.
 export async function deleteRecordingFiles(fileIds) {

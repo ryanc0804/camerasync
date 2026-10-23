@@ -23,11 +23,12 @@ import {
   startSessionRecording,
   stopSessionRecording,
   closeSessionSocket,
+  leaveSessionRoom,
 } from "../sockets/websocket.js";
-import { deleteRecordingFiles } from "./file.js";
+import { deleteRecordingFiles, storedFileIds } from "./file.js";
 import { EVENTS } from "../sockets/events.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
-import { startOffsetMs } from "../recordings/startOffset.js";
+import { START_OFFSET_UPSERT_SQL, startClock, startOffsetMs } from "../recordings/startOffset.js";
 import { startOffsetFromBeep, startOffsetFromEndBeep } from "../recordings/syncBeep.js";
 
 export const recordingsRouter = Router();
@@ -73,6 +74,8 @@ function publicSession(row) {
     recordingCount: row.recording_count == null ? null : Number(row.recording_count),
     activeMemberCount: Number(row.active_member_count ?? 0),
     isJoined: Boolean(row.is_joined),
+    // A still from the session's first take, for the session lists.
+    thumbnailUrl: row.thumbnail_file_id ? `/api/files/get/${row.thumbnail_file_id}` : null,
   };
 }
 
@@ -124,7 +127,10 @@ recordingsRouter.get("/sessions", requireAuth, async (req, res, next) => {
                   FROM recording_session_members rsm
                  WHERE rsm.session_id = rs.id
                    AND rsm.user_id = $1
-              ) AS is_joined
+              ) AS is_joined,
+              (SELECT v.thumbnail_file_id FROM recording_session_videos v
+                WHERE v.session_id = rs.id AND v.thumbnail_file_id IS NOT NULL
+                ORDER BY v.started_at_ms, v.user_id LIMIT 1) AS thumbnail_file_id
         FROM recording_sessions rs
         WHERE ${sessionVisibleSql("rs", "$1")}
         ORDER BY
@@ -170,10 +176,11 @@ recordingsRouter.delete("/sessions/:id", requireAuth, async (req, res, next) => 
       return res.status(409).json({ error: "End this session before deleting it." });
     }
     const { rows: videos } = await client.query(
-      "SELECT file_id FROM recording_session_videos WHERE session_id = $1 FOR UPDATE",
+      `SELECT file_id, preview_file_id, thumbnail_file_id FROM recording_session_videos
+        WHERE session_id = $1 FOR UPDATE`,
       [req.params.id]
     );
-    await deleteRecordingFiles(videos.filter((video) => video.file_id).map((video) => video.file_id));
+    await deleteRecordingFiles(storedFileIds(videos));
     await client.query("DELETE FROM recording_sessions WHERE id = $1", [req.params.id]);
     await client.query("COMMIT");
     res.json({ ok: true });
@@ -186,20 +193,49 @@ recordingsRouter.delete("/sessions/:id", requireAuth, async (req, res, next) => 
 });
 
 // How much later a camera really started than its take's startedAt, which
-// players shift the angle by, and what that comes from: the start beep when
-// the video heard it, else the end beep (a camera that started too late for
-// the first), else the time the device reported, else nothing.
+// players shift the angle by, and what that comes from.
+//
+// First choice is the moment the device's camera captured its first frame
+// ('clock'): it lines up the pictures, which is what a coach compares. The
+// beeps line up each device's sound, and every device keeps its picture a
+// different distance from its sound: on 2026-10-22's light-switch test the
+// beep left a Galaxy, an iPhone and Chrome 3-6 frames apart, the first-frame
+// time 1-1.5 frames. The beep (start, else end) is the fallback for devices
+// that don't report a first frame (Firefox, Safari, older app versions) and
+// the check on those that do; then the time the device reported, else
+// nothing. Both are returned on their own too, to compare.
 function videoStartOffset(row, startedAt) {
-  if (row.beep_at_ms != null) {
-    return { startOffsetMs: startOffsetFromBeep(Number(row.beep_at_ms)), syncedBy: "beep" };
-  }
+  const clock = row.start_offset_source === "frame" && row.start_offset_ms != null
+    ? Number(row.start_offset_ms)
+    : null;
+  const beep = beepOffset(row, startedAt);
+  return {
+    ...syncOffset(row, clock, beep),
+    ...(clock != null ? { clockStartOffsetMs: clock } : {}),
+    ...(beep != null ? { beepStartOffsetMs: beep } : {}),
+  };
+}
+
+// Further apart than this, a first-frame time and the beep can't both be
+// right (the phone's clock jumped, or synced badly on a poor connection), and
+// the beep, which is measured in the video itself, is trusted.
+export const CLOCK_BEEP_MAX_DISAGREEMENT_MS = 500;
+
+function beepOffset(row, startedAt) {
+  if (row.beep_at_ms != null) return startOffsetFromBeep(Number(row.beep_at_ms));
   if (row.end_beep_at_ms != null && row.end_beep_epoch_ms != null) {
-    return {
-      startOffsetMs: startOffsetFromEndBeep(
-        Number(row.end_beep_at_ms), Number(row.end_beep_epoch_ms), startedAt),
-      syncedBy: "beep",
-    };
+    return startOffsetFromEndBeep(
+      Number(row.end_beep_at_ms), Number(row.end_beep_epoch_ms), startedAt);
   }
+  return null;
+}
+
+function syncOffset(row, clock, beep) {
+  if (clock != null &&
+      (beep == null || Math.abs(clock - beep) <= CLOCK_BEEP_MAX_DISAGREEMENT_MS)) {
+    return { startOffsetMs: clock, syncedBy: "clock" };
+  }
+  if (beep != null) return { startOffsetMs: beep, syncedBy: "beep" };
   if (row.start_offset_ms != null) {
     return { startOffsetMs: Number(row.start_offset_ms), syncedBy: "device" };
   }
@@ -218,7 +254,8 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
       return res.status(404).json({ error: "Session not found." });
     }
     const { rows } = await pool.query(
-      `SELECT v.started_at_ms, v.user_id, v.file_id, v.start_offset_ms,
+      `SELECT v.started_at_ms, v.user_id, v.file_id, v.preview_file_id, v.start_offset_ms,
+              v.start_offset_source,
               v.beep_at_ms, v.end_beep_at_ms, sr.end_beep_epoch_ms,
               u.display_name, sr.recording_number
        FROM recording_session_videos v JOIN users u ON u.user_id = v.user_id
@@ -247,7 +284,15 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
       recording.videos.push({
         userId: Number(row.user_id),
         name: row.display_name || "Unnamed member",
-        url: row.file_id ? `/api/files/get/${row.file_id}` : null,
+        // The full video; until it arrives, the phone's preview stands in
+        // (previewOnly), so a take can be watched while it uploads.
+        url: row.file_id
+          ? `/api/files/get/${row.file_id}`
+          : row.preview_file_id ? `/api/files/get/${row.preview_file_id}` : null,
+        previewOnly: !row.file_id && Boolean(row.preview_file_id),
+        // A smaller copy for when the angle is shown small; null until it's
+        // made (see ../recordings/previews.js).
+        previewUrl: row.preview_file_id ? `/api/files/get/${row.preview_file_id}` : null,
         ...videoStartOffset(row, startedAt),
       });
     }
@@ -280,13 +325,12 @@ recordingsRouter.post("/sessions/:id/videos", requireAuth, async (req, res, next
     const number = await ensureRecordingNumber(req.params.id, startedAt);
     await pool.query(
       `INSERT INTO recording_session_videos
-         (session_id, user_id, started_at_ms, start_offset_ms)
-       VALUES ($1, $2, $3, $4)
+         (session_id, user_id, started_at_ms, start_offset_ms, start_offset_source)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (session_id, user_id, started_at_ms) DO UPDATE
-         SET start_offset_ms = COALESCE(recording_session_videos.start_offset_ms,
-                                        EXCLUDED.start_offset_ms)`,
+         SET ${START_OFFSET_UPSERT_SQL}`,
       [req.params.id, req.user.id, startedAt,
-        startOffsetMs(req.body?.actualStartedAt, startedAt)]
+        startOffsetMs(req.body?.actualStartedAt, startedAt), startClock(req.body?.startClock)]
     );
     res.json({ ok: true, recording: { startedAt, number } });
   } catch (err) {
@@ -719,15 +763,16 @@ recordingsRouter.post(
         });
       }
 
-      const joinOpensAt =
-        new Date(session.scheduled_at).getTime() - 15 * 60 * 1000;
+      // Opens at its start time (not before), and closes if nobody has
+      // joined 15 minutes after.
+      const joinOpensAt = new Date(session.scheduled_at).getTime();
       const joinClosesAt =
         new Date(session.scheduled_at).getTime() + 15 * 60 * 1000;
 
       if (session.status === "scheduled" && !session.has_members) {
         if (Date.now() < joinOpensAt) {
           return res.status(409).json({
-            error: "Scheduled sessions open 15 minutes before they start.",
+            error: "This session opens at its start time.",
           });
         }
         if (Date.now() > joinClosesAt) {
@@ -827,6 +872,8 @@ recordingsRouter.delete(
             AND user_id = $2`,
         [id, req.user.id]
       );
+      await leaveSessionRoom(id, req.user.id).catch((err) =>
+        console.error("Could not update the session's devices:", err));
 
       res.json({ ok: true });
     } catch (err) {

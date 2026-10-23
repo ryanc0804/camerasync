@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import 'events.dart';
@@ -87,11 +89,15 @@ class JoinResult {
     this.error,
     this.sessionName,
     this.canControl = false,
+    this.createdBy,
   });
 
   final bool ok;
   final String? error;
   final String? sessionName;
+
+  /// The user who started the session (its host).
+  final int? createdBy;
 
   /// This user may start and stop takes for everyone: the session's creator,
   /// or an admin or the owner of its group.
@@ -356,7 +362,20 @@ class SyncSocket {
   /// user from the handshake cookie, so no device name is sent. With
   /// [camera] false this phone runs the session without recording; joining
   /// again switches it.
-  Future<JoinResult> joinSession(String sessionId, {bool camera = true}) {
+  /// This phone's id, made once and kept: the server allows one device per
+  /// account in a session, and tells a reconnect from a second device by it.
+  static Future<String> _deviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    var id = prefs.getString('deviceId');
+    if (id == null) {
+      final random = Random.secure();
+      id = List.generate(16, (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+      await prefs.setString('deviceId', id);
+    }
+    return id;
+  }
+
+  Future<JoinResult> joinSession(String sessionId, {bool camera = true}) async {
     final socket = _socket;
     if (socket == null || !socket.connected) {
       return Future.value(
@@ -366,9 +385,10 @@ class SyncSocket {
 
     final completer = Completer<JoinResult>();
 
+    final deviceId = await _deviceId();
     socket.emitWithAck(
       Events.joinSession,
-      {'sessionId': sessionId, 'camera': camera},
+      {'sessionId': sessionId, 'camera': camera, 'deviceId': deviceId},
       ack: (reply) {
         if (completer.isCompleted) return;
         if (reply is! Map || reply['ok'] != true) {
@@ -409,6 +429,8 @@ class SyncSocket {
           sessionName:
               session is Map ? session['name']?.toString() : null,
           canControl: session is Map && session['canControl'] == true,
+          createdBy:
+              session is Map ? (session['createdBy'] as num?)?.toInt() : null,
         ));
       },
     );

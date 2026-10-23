@@ -51,6 +51,25 @@ async function getRoomMembers(sessionId) {
 /// One entry per person in the room. camera: false marks someone only
 /// starting and stopping the others; with a camera on any of their devices
 /// they count as recording.
+// The account's other connections in a room, apart from [socket] itself:
+// on other devices (which keep it out), and this same device's older ones
+// (a reconnect, which it replaces). Devices that don't send an id (older
+// app versions) can't be told apart, so between two of those nothing is
+// blocked, as before.
+export function otherDevicesOf(sockets, socket) {
+  const userId = Number(socket.data.user?.id);
+  const mine = socket.data.deviceId ?? null;
+  const elsewhere = [];
+  const staleHere = [];
+  for (const other of sockets) {
+    if (other.id === socket.id || Number(other.data.user?.id) !== userId) continue;
+    const theirs = other.data.deviceId ?? null;
+    if (mine !== null && theirs === mine) staleHere.push(other);
+    else if (mine !== null || theirs !== null) elsewhere.push(other);
+  }
+  return { elsewhere, staleHere };
+}
+
 export function roomMembersFrom(sockets) {
   const members = new Map();
   for (const socket of sockets) {
@@ -62,7 +81,12 @@ export function roomMembersFrom(sockets) {
   return Array.from(members.values());
 }
 
+// Called whenever a device joins or leaves, so it also notes the session's
+// last activity (see ../sessions/idleSessions.js).
 async function sendRoomMembers(sessionId) {
+  pool
+    .query("UPDATE recording_sessions SET last_active_at = NOW() WHERE id = $1", [sessionId])
+    .catch((err) => console.error("Could not note session activity:", err));
   const members = await getRoomMembers(sessionId);
   getIO().to(roomName(sessionId)).emit(EVENTS.SESSION_MEMBERS, members);
   return members;
@@ -146,7 +170,7 @@ export async function initSocket(httpServer) {
   io.on("connection", (socket) => {
     trackRoundTrips(socket);
 
-    socket.on(EVENTS.JOIN_SESSION, async ({ sessionId, camera } = {}, ack) => {
+    socket.on(EVENTS.JOIN_SESSION, async ({ sessionId, camera, deviceId } = {}, ack) => {
       if (typeof ack !== "function") return;
       if (!sessionId) {
         return ack({ ok: false, error: "Session ID is required." });
@@ -189,6 +213,21 @@ export async function initSocket(httpServer) {
             error: "Viewers can watch recordings but can't join and record.",
           });
         }
+
+        // One device per account in a session: the server keeps one video
+        // per account per take, so a second device's would be lost.
+        socket.data.deviceId = typeof deviceId === "string" ? deviceId.slice(0, 64) : null;
+        const { elsewhere, staleHere } = otherDevicesOf(
+          await getIO().in(roomName(sessionId)).fetchSockets(), socket);
+        if (elsewhere.length > 0) {
+          return ack({
+            ok: false,
+            error: "This account is already in this session on another device. " +
+              "Leave it there first, or sign in with a different account.",
+          });
+        }
+        // This device's own older connection (it dropped and came back).
+        for (const old of staleHere) old.leave(roomName(sessionId));
 
         const previousSessionId = socket.data.sessionId;
         if (previousSessionId && previousSessionId !== sessionId) {
@@ -393,6 +432,13 @@ export async function stopSessionRecording(sessionId) {
   return stoppedRecording;
 }
 
+// Whether any device is in the session right now, or a take is running.
+export async function sessionInUse(sessionId) {
+  if (activeRecordings.has(sessionId)) return true;
+  const sockets = await getIO().in(roomName(sessionId)).fetchSockets();
+  return sockets.length > 0;
+}
+
 export async function closeSessionSocket(sessionId) {
   const room = roomName(sessionId);
   if (activeRecordings.has(sessionId)) {
@@ -400,6 +446,21 @@ export async function closeSessionSocket(sessionId) {
   }
   getIO().to(room).emit(EVENTS.CLOSE_SESSION, { sessionId });
   getIO().in(room).socketsLeave(room);
+}
+
+// Someone left a session (its leave route): take their devices out of the
+// live room and tell everyone still in it, so device counts update even if
+// the phone's own leave message never got through.
+export async function leaveSessionRoom(sessionId, userId) {
+  const room = roomName(sessionId);
+  const sockets = await getIO().in(room).fetchSockets();
+  for (const socket of sockets) {
+    if (Number(socket.data.user?.id) === Number(userId)) {
+      socket.leave(room);
+      socket.data.sessionId = null;
+    }
+  }
+  await sendRoomMembers(sessionId);
 }
 
 // Stop sending session events to someone removed from the group.

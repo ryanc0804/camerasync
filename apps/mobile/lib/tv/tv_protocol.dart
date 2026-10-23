@@ -5,7 +5,7 @@ abstract final class TvAction {
   // Phone → TV.
 
   /// Shows one recording: `{session, recording, cookie, angles: [{name,
-  /// url, trimMs}], atMs, playing}`.
+  /// url, previewUrl?, trimMs}], atMs, playing}`.
   static const load = 'load';
 
   /// Back to the idle screen.
@@ -27,9 +27,13 @@ abstract final class TvAction {
   /// `{author, body}` while a comment is up, or null.
   static const comment = 'comment';
 
+  /// `{angle}`: the angle whose sound plays (an index into the loaded
+  /// angles), or -1 for none. Only one plays at a time.
+  static const sound = 'sound';
+
   // TV → phone.
 
-  /// `{positionMs, durationMs, playing, page, pageCount, focused}`,
+  /// `{positionMs, durationMs, playing, page, pageCount, focused, sound}`,
   /// several times a second.
   static const state = 'state';
 }
@@ -43,6 +47,7 @@ class TvState {
     required this.page,
     required this.pageCount,
     required this.focused,
+    this.sound,
   });
 
   final Duration position;
@@ -54,6 +59,9 @@ class TvState {
   /// The expanded angle, or null for the grid.
   final int? focused;
 
+  /// The angle whose sound is playing, or null when muted.
+  final int? sound;
+
   Map<String, Object?> toMap() => {
         'positionMs': position.inMilliseconds,
         'durationMs': duration.inMilliseconds,
@@ -61,12 +69,14 @@ class TvState {
         'page': page,
         'pageCount': pageCount,
         'focused': focused ?? -1,
+        'sound': sound ?? -1,
       };
 
   static TvState? fromMap(Object? value) {
     if (value is! Map) return null;
     int number(String key) => (value[key] as num?)?.toInt() ?? 0;
     final focused = number('focused');
+    final sound = (value['sound'] as num?)?.toInt() ?? -1;
     return TvState(
       position: Duration(milliseconds: number('positionMs')),
       duration: Duration(milliseconds: number('durationMs')),
@@ -74,6 +84,7 @@ class TvState {
       page: number('page'),
       pageCount: number('pageCount'),
       focused: focused < 0 ? null : focused,
+      sound: sound < 0 ? null : sound,
     );
   }
 }

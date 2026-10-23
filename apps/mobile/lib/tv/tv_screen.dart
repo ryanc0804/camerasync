@@ -31,10 +31,14 @@ class TvApp extends StatelessWidget {
 }
 
 class _TvAngle {
-  const _TvAngle(this.name, this.url, this.trim);
+  const _TvAngle(this.name, this.url, this.trim, [this.previewUrl]);
   final String name;
   final String url;
   final Duration trim;
+
+  /// The smaller copy, for when the angle is drawn small; null until the
+  /// server has made it.
+  final String? previewUrl;
 }
 
 class TvScreen extends StatefulWidget {
@@ -46,7 +50,6 @@ class TvScreen extends StatefulWidget {
 
 class _TvScreenState extends State<TvScreen> {
   String? _session;
-  String? _recording;
   String? _cookie;
   List<_TvAngle> _angles = const [];
 
@@ -82,15 +85,62 @@ class _TvScreenState extends State<TvScreen> {
 
   // ---- Layout ------------------------------------------------------------
 
+  /// Room around the angles; they get the rest of the screen.
+  static const _margin = 8.0;
+  static const _gap = 8.0;
+
   int get _perPage {
     final size = MediaQuery.sizeOf(context);
-    // Each angle is its own video decoder on the phone, so no more than 9.
-    return anglesPerPage(Size(size.width - 48, size.height - 120), 16 / 9,
-        minTileWidth: 360);
+    final area = Size(size.width - 2 * _margin, size.height - 2 * _margin);
+    // Each angle at least about a third of the screen's width. A TV's size
+    // in points depends on the density Android gives it (often only 640 or
+    // so wide), so a fixed width put one angle per page on many TVs. Each
+    // angle is its own video decoder on the phone, so no more than 9.
+    return anglesPerPage(area, 16 / 9,
+        minTileWidth: area.width * 0.3, gap: _gap);
   }
 
   int get _pageCount =>
       _angles.isEmpty ? 0 : (_angles.length / _perPage).ceil();
+
+  /// The angle picked on the phone to be heard, or -1 for none. Only one
+  /// angle plays its sound: several at once just echo.
+  int _sound = 0;
+
+  /// The angle heard right now: the picked one when it's on screen,
+  /// otherwise the first on screen. Null when muted.
+  int? get _heard {
+    if (_sound < 0) return null;
+    final live = _liveAngles;
+    if (live.contains(_sound)) return _sound;
+    return live.isEmpty ? null : live.first;
+  }
+
+  /// Which copy each open player is playing (see [_urlFor]).
+  final Map<int, String> _playerUrls = {};
+
+  /// The copy angle [i] plays: its preview while the grid draws it small
+  /// (the phone decodes every angle, and full-HD originals are too many for
+  /// it), the original when it's on its own or the tiles are big.
+  String _urlFor(int i) {
+    final angle = _angles[i];
+    final preview = angle.previewUrl;
+    if (preview == null || i == _focused) return angle.url;
+    final screen = MediaQuery.of(context);
+    final area = Size(screen.size.width - 2 * _margin,
+        screen.size.height - 2 * _margin);
+    return usePreviews(area, _liveAngles.length, screen.devicePixelRatio,
+            gap: _gap)
+        ? preview
+        : angle.url;
+  }
+
+  void _applySound() {
+    final heard = _heard;
+    for (final entry in _players.entries) {
+      entry.value.setVolume(entry.key == heard ? 1 : 0);
+    }
+  }
 
   List<int> get _liveAngles {
     final focused = _focused;
@@ -140,6 +190,9 @@ class _TvScreenState extends State<TvScreen> {
         setState(() =>
             _focused = angle >= 0 && angle < _angles.length ? angle : null);
         _syncPlayers();
+      case TvAction.sound:
+        _sound = (map['angle'] as num?)?.toInt() ?? -1;
+        _applySound();
       case TvAction.comment:
         setState(() => _comment = value is Map
             ? (
@@ -159,15 +212,16 @@ class _TvScreenState extends State<TvScreen> {
             (a['name'] ?? '').toString(),
             a['url'].toString(),
             Duration(milliseconds: (a['trimMs'] as num?)?.toInt() ?? 0),
+            a['previewUrl'] as String?,
           ),
     ];
     setState(() {
       _session = (map['session'] ?? '').toString();
-      _recording = (map['recording'] ?? '').toString();
       _cookie = map['cookie'] as String?;
       _angles = angles;
       _page = 0;
       _focused = null;
+      _sound = 0;
       _comment = null;
       _playing = map['playing'] == true;
       _position = Duration(milliseconds: (map['atMs'] as num?)?.toInt() ?? 0);
@@ -184,6 +238,7 @@ class _TvScreenState extends State<TvScreen> {
       player.dispose();
     }
     _players.clear();
+    _playerUrls.clear();
   }
 
   /// Opens the angles on screen and closes the rest, then puts them all at
@@ -192,7 +247,12 @@ class _TvScreenState extends State<TvScreen> {
     final generation = ++_generation;
     final live = _liveAngles.toSet();
     for (final i in _players.keys.toList()) {
-      if (!live.contains(i)) await _players.remove(i)!.dispose();
+      // Closed when it's off screen, or to switch between its preview and
+      // the original.
+      if (!live.contains(i) || _playerUrls[i] != _urlFor(i)) {
+        _playerUrls.remove(i);
+        await _players.remove(i)!.dispose();
+      }
     }
     final missing = live.where((i) => !_players.containsKey(i)).toList();
     final opened = await Future.wait(missing.map(_open));
@@ -204,7 +264,10 @@ class _TvScreenState extends State<TvScreen> {
     }
     for (var k = 0; k < missing.length; k++) {
       final player = opened[k];
-      if (player != null) _players[missing[k]] = player;
+      if (player != null) {
+        _players[missing[k]] = player;
+        _playerUrls[missing[k]] = _urlFor(missing[k]);
+      }
     }
     // Every angle on the exact same moment (a pause, a seek, a new page).
     await Future.wait([
@@ -212,6 +275,7 @@ class _TvScreenState extends State<TvScreen> {
         entry.value.seekTo(_position + _angles[entry.key].trim),
       AngleSync.resetSpeeds(_players.values),
     ]);
+    _applySound();
     for (final player in _players.values) {
       _playing ? player.play() : player.pause();
     }
@@ -229,7 +293,7 @@ class _TvScreenState extends State<TvScreen> {
   Future<VideoPlayerController?> _open(int i) async {
     final cookie = _cookie;
     final player = VideoPlayerController.networkUrl(
-      Uri.parse(_angles[i].url),
+      Uri.parse(_urlFor(i)),
       httpHeaders: {if (cookie != null) 'Cookie': cookie},
     );
     try {
@@ -278,6 +342,7 @@ class _TvScreenState extends State<TvScreen> {
         page: _page,
         pageCount: _pageCount,
         focused: _focused,
+        sound: _heard,
       ).toMap(),
     );
   }
@@ -288,64 +353,43 @@ class _TvScreenState extends State<TvScreen> {
   Widget build(BuildContext context) {
     if (_session == null) return _idle();
     final angles = _liveAngles;
+    // No title bar: the angles get the whole screen, with the page in a
+    // corner when there's more than one.
     return Scaffold(
       backgroundColor: kBackground,
       body: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    _session!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        color: kGold, fontSize: 28, fontWeight: FontWeight.w800),
-                  ),
+        padding: const EdgeInsets.all(_margin),
+        child: LayoutBuilder(builder: (context, constraints) {
+          final aspect = commonAspect([
+            for (final i in angles)
+              if (_players[i]?.value.isInitialized ?? false)
+                _players[i]!.value.aspectRatio
+          ]);
+          final rects =
+              gridLayout(constraints.biggest, angles.length, aspect, gap: _gap);
+          return Stack(
+            children: [
+              for (var k = 0; k < rects.length; k++)
+                Positioned.fromRect(
+                  rect: rects[k],
+                  child: _tile(angles[k]),
                 ),
-                Text(
-                  [
-                    _recording ?? '',
-                    if (_focused == null && _pageCount > 1)
-                      'Page ${_page + 1} of $_pageCount',
-                  ].where((s) => s.isNotEmpty).join('  ·  '),
-                  style: const TextStyle(color: kMuted, fontSize: 18),
+              if (_focused == null && _pageCount > 1)
+                Positioned(
+                  top: 6,
+                  right: 6,
+                  child: _tag('Page ${_page + 1} of $_pageCount'),
                 ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Expanded(
-              child: LayoutBuilder(builder: (context, constraints) {
-                final aspect = commonAspect([
-                  for (final i in angles)
-                    if (_players[i]?.value.isInitialized ?? false)
-                      _players[i]!.value.aspectRatio
-                ]);
-                final rects =
-                    gridLayout(constraints.biggest, angles.length, aspect, gap: 12);
-                return Stack(
-                  children: [
-                    for (var k = 0; k < rects.length; k++)
-                      Positioned.fromRect(
-                        rect: rects[k],
-                        child: _tile(angles[k]),
-                      ),
-                    if (_comment != null)
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 12,
-                        child: Center(child: _commentBubble(_comment!)),
-                      ),
-                  ],
-                );
-              }),
-            ),
-          ],
-        ),
+              if (_comment != null)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 12,
+                  child: Center(child: _commentBubble(_comment!)),
+                ),
+            ],
+          );
+        }),
       ),
     );
   }
@@ -371,22 +415,33 @@ class _TvScreenState extends State<TvScreen> {
             else
               const Center(child: CircularProgressIndicator()),
             Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: Container(
-                color: Colors.black54,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                child: Text(
-                  _angles[i].name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white, fontSize: 16),
-                ),
+              left: 6,
+              bottom: 6,
+              right: 6,
+              child: Align(
+                alignment: Alignment.bottomLeft,
+                child: _tag(_angles[i].name),
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// A small label over the video: an angle's name, or the page.
+  Widget _tag(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(5),
+      ),
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(color: Colors.white, fontSize: 12),
       ),
     );
   }

@@ -50,14 +50,21 @@ class AngleSync {
       final target = timeline + others[player]!;
       if (target < Duration.zero || target >= value.duration) continue;
       final driftMs = (at - target).inMilliseconds;
-      if (driftMs.abs() > jumpBeyondMs) {
-        await player.seekTo(target);
+      final aim = _aims[player] ??= JumpAim();
+      final now = DateTime.now();
+      if (aim.shouldJump(driftMs, now)) {
+        aim.jumped(now);
+        final landing = target + aim.lead;
+        await player.seekTo(landing < value.duration ? landing : target);
         await _setSpeed(player, 1.0);
       } else {
+        // Between jumps (or still landing one), nudge as hard as allowed.
         await _setSpeed(player, speedFor(driftMs));
       }
     }
   }
+
+  static final _aims = Expando<JumpAim>();
 
   /// Back to normal speed, for a pause or a seek, where every angle is put
   /// on the exact same moment instead.
@@ -69,5 +76,50 @@ class AngleSync {
       return Future.value();
     }
     return player.setPlaybackSpeed(speed).catchError((_) {});
+  }
+}
+
+/// Where to aim one angle's catch-up jumps. A jump isn't instant: the
+/// player loads from the nearest keyframe while the others keep playing, so
+/// aimed at where they are now it lands behind, gets jumped again, lands
+/// behind again... which is the skipping. Each landing teaches how far
+/// ahead to aim the next one, and an angle isn't jumped again until its
+/// last jump has landed.
+class JumpAim {
+  /// How far ahead of the others to land.
+  Duration lead = Duration.zero;
+
+  DateTime? _jumpedAt;
+  bool _landing = false;
+
+  /// No second jump sooner than this after one.
+  static const cooldown = Duration(milliseconds: 1500);
+
+  /// A landing is judged no sooner than this after its jump (the player
+  /// can report not loading for a moment before it starts to).
+  static const settle = Duration(milliseconds: 500);
+
+  static const maxLead = Duration(seconds: 2);
+
+  /// Called on each check of a loaded (not buffering) angle that is
+  /// [driftMs] ahead of where it should be (negative: behind). True when
+  /// it should be jumped now.
+  bool shouldJump(int driftMs, DateTime now) {
+    final jumpedAt = _jumpedAt;
+    final sinceJump = jumpedAt == null ? null : now.difference(jumpedAt);
+    if (_landing && sinceJump != null && sinceJump >= settle) {
+      _landing = false;
+      // Landed behind: aim that much further next time. Ahead: less.
+      final ms = (lead.inMilliseconds - driftMs)
+          .clamp(0, maxLead.inMilliseconds);
+      lead = Duration(milliseconds: ms);
+    }
+    if (driftMs.abs() <= AngleSync.jumpBeyondMs) return false;
+    return sinceJump == null || sinceJump >= cooldown;
+  }
+
+  void jumped(DateTime now) {
+    _jumpedAt = now;
+    _landing = true;
   }
 }
