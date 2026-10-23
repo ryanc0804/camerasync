@@ -353,3 +353,10 @@ ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS start_offset_sourc
 ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS thumbnail_file_id TEXT;
 ALTER TABLE recording_session_videos
     ADD COLUMN IF NOT EXISTS thumbnail_failed BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Whether a video that is its own preview (small enough) has had its codec
+-- checked: one that every phone can't play (a laptop's VP9) gets an H.264
+-- copy instead. FALSE for previews decided before codecs were checked, which
+-- are checked once (see src/recordings/previews.js).
+ALTER TABLE recording_session_videos
+    ADD COLUMN IF NOT EXISTS preview_checked BOOLEAN NOT NULL DEFAULT FALSE;

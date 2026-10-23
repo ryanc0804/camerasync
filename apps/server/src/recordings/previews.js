@@ -28,6 +28,10 @@ export const PREVIEW_SIZE = 720;
 const PREVIEW_FPS = 30;
 // An original already this small, light and slow is its own preview.
 const SMALL_ENOUGH_BITRATE = 4_000_000;
+// ...as long as every phone can play it. Laptops record VP9, which iPhones
+// can't, so those always get an H.264 copy (the preview the apps fall back
+// to), even when they're small.
+const PLAYABLE_EVERYWHERE = new Set(["h264", "hevc"]);
 
 const TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -66,7 +70,7 @@ export function run(command, args, { timeoutMs = TIMEOUT_MS } = {}) {
 async function probe(filePath) {
   const { ok, missing, out } = await run("ffprobe", [
     "-v", "error", "-select_streams", "v:0",
-    "-show_entries", "stream=width,height,avg_frame_rate,bit_rate:stream_side_data=rotation:format=bit_rate",
+    "-show_entries", "stream=codec_name,width,height,avg_frame_rate,bit_rate:stream_side_data=rotation:format=bit_rate",
     "-of", "json", filePath,
   ], { timeoutMs: 60_000 });
   if (missing) return { missing: true };
@@ -83,6 +87,7 @@ async function probe(filePath) {
       height: sideways ? stream.width : stream.height,
       fps: den ? num / den : 0,
       bitRate: Number(stream.bit_rate ?? info.format?.bit_rate ?? 0),
+      codec: stream.codec_name,
     };
   } catch {
     return null;
@@ -112,8 +117,9 @@ export function previewArgs(input, output, { fps }) {
   ];
 }
 
-export function isSmallEnough({ width, height, bitRate, fps }) {
-  return Math.min(width, height) <= PREVIEW_SIZE &&
+export function isSmallEnough({ width, height, bitRate, fps, codec }) {
+  return (!codec || PLAYABLE_EVERYWHERE.has(codec)) &&
+    Math.min(width, height) <= PREVIEW_SIZE &&
     bitRate > 0 && bitRate <= SMALL_ENOUGH_BITRATE &&
     fps > 0 && fps <= PREVIEW_FPS + 1;
 }
@@ -150,8 +156,8 @@ export async function makePreview(fileId) {
     }
 
     const { rowCount } = await pool.query(
-      `UPDATE recording_session_videos SET preview_file_id = $2
-        WHERE file_id = $1 AND preview_file_id IS NULL`,
+      `UPDATE recording_session_videos SET preview_file_id = $2, preview_checked = TRUE
+        WHERE file_id = $1 AND (preview_file_id IS NULL OR preview_file_id = file_id)`,
       [fileId, previewId]
     );
     // The video was deleted (or got a preview) while this one was made.
@@ -204,9 +210,13 @@ async function drain() {
 export function startPreviewBackfill({ delayMs = 30_000 } = {}) {
   const timer = setTimeout(async () => {
     try {
+      // Also, once, videos that are their own preview from before the
+      // codec was checked (a laptop's VP9 needs an H.264 copy).
       const { rows } = await pool.query(
         `SELECT file_id FROM recording_session_videos
-          WHERE file_id IS NOT NULL AND preview_file_id IS NULL AND NOT preview_failed
+          WHERE file_id IS NOT NULL AND NOT preview_failed
+            AND (preview_file_id IS NULL
+              OR (preview_file_id = file_id AND NOT preview_checked))
           ORDER BY started_at_ms DESC`
       );
       if (rows.length > 0) console.log(`[previews] ${rows.length} video(s) to do`);
