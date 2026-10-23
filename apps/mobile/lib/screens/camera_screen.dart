@@ -1,4 +1,5 @@
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -7,6 +8,7 @@ import 'dart:math' as math;
 import '../api/api_client.dart';
 import '../api/recordings_api.dart';
 import '../keep_awake.dart';
+import '../recording_quality.dart';
 import '../notifications/take_alerts.dart';
 import '../socket/sync_socket.dart';
 import '../sync_beep.dart';
@@ -167,6 +169,10 @@ class _CameraScreenState extends State<CameraScreen> {
         // if upload size or bandwidth becomes the bottleneck.
         ResolutionPreset.veryHigh,
         enableAudio: true,
+        // Capped so uploads stay manageable on slow Wi-Fi (see
+        // recording_quality.dart).
+        videoBitrate: videoBitrateFor(defaultTargetPlatform),
+        audioBitrate: kAudioBitrate,
       );
 
       await _cameraController!.initialize();

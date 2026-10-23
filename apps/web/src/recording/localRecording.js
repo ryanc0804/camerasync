@@ -7,6 +7,12 @@ const RECORDING_FORMATS = [
   { mimeType: "video/webm", extension: "webm" },
 ];
 
+// The most data a take may use per second, so a laptop's upload stays small
+// on slow Wi-Fi (a 1080p webcam would otherwise use far more). Keep in step
+// with the phone app's lib/recording_quality.dart.
+export const VIDEO_BITS_PER_SECOND = 4_000_000;
+export const AUDIO_BITS_PER_SECOND = 128_000;
+
 // creates a recorder from the selected local stream
 export function createLocalRecorder(stream) {
   if (!window.MediaRecorder) {
@@ -16,9 +22,13 @@ export function createLocalRecorder(stream) {
   const format = RECORDING_FORMATS.find(({ mimeType }) =>
     MediaRecorder.isTypeSupported(mimeType)
   );
+  const bitrates = {
+    videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
+    audioBitsPerSecond: AUDIO_BITS_PER_SECOND,
+  };
   const recorder = format
-    ? new MediaRecorder(stream, { mimeType: format.mimeType })
-    : new MediaRecorder(stream);
+    ? new MediaRecorder(stream, { mimeType: format.mimeType, ...bitrates })
+    : new MediaRecorder(stream, bitrates);
 
   return {
     recorder,
