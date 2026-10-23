@@ -8,6 +8,10 @@ Upstream plugin, unchanged except:
 - `PendingRecordingProxyApi.start`: passes each recording event to
   `FirstFrameClock` before the plugin's own listener.
 - `CameraAndroidCameraxPlugin.onAttachedToEngine`: sets up that channel.
+- `android_camera_camerax.dart` (`createCameraWithSettings`): passes
+  `mediaSettings.videoBitrate` to CameraX's `Recorder` as
+  `targetVideoEncodingBitRate`. Upstream ignores it, so the app's bitrate cap
+  had no effect on Android.
 
 To update the plugin, copy the new upstream version over this folder and
-reapply those three changes.
+reapply those changes.

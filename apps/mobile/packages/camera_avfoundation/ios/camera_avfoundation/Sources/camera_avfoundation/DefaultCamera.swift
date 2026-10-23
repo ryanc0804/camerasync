@@ -371,6 +371,29 @@ final class DefaultCamera: NSObject, Camera {
     return bestFormat
   }
 
+  /// 8kount: the microphone is set up once, but something else in the app
+  /// can switch the audio session to playback-only afterwards (the video
+  /// player watching a take, the sound player playing the sync beep), which
+  /// stops the audio capture session for good. Every later recording then
+  /// came out empty. Put recording back at the start of each take.
+  private func restoreMicrophoneIfNeeded() {
+    guard mediaSettings.enableAudio, isAudioSetup else { return }
+    let block = {
+      DefaultCamera.upgradeAudioSessionCategory(
+        requestedCategory: .playAndRecord,
+        options: [.defaultToSpeaker, .allowBluetoothA2DP, .allowAirPlay]
+      )
+    }
+    if !Thread.isMainThread {
+      DispatchQueue.main.sync(execute: block)
+    } else {
+      block()
+    }
+    if !audioCaptureSession.isRunning {
+      audioCaptureSession.startRunning()
+    }
+  }
+
   func setUpCaptureSessionForAudioIfNeeded() {
     // Don't setup audio twice or we will lose the audio.
     guard mediaSettings.enableAudio && !isAudioSetup else { return }
@@ -565,6 +588,7 @@ final class DefaultCamera: NSObject, Camera {
 
   private func setupWriter(forPath path: String) -> Bool {
     setUpCaptureSessionForAudioIfNeeded()
+    restoreMicrophoneIfNeeded()  // 8kount
 
     let videoWriter: AssetWriter
 
@@ -1215,9 +1239,10 @@ final class DefaultCamera: NSObject, Camera {
 
     handleSampleBufferStreaming(sampleBuffer)
 
-    if isRecording && !isRecordingPaused && videoCaptureSession.isRunning
-      && audioCaptureSession.isRunning
-    {
+    // 8kount: upstream also required audioCaptureSession.isRunning, so a
+    // stopped microphone threw away every video frame (an empty file). Keep
+    // the video either way; the sound joins when the microphone does.
+    if isRecording && !isRecordingPaused && videoCaptureSession.isRunning {
       if videoWriter?.status == .failed, let error = videoWriter?.error {
         reportErrorMessage("\(error)")
         return
