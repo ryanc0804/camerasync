@@ -187,34 +187,51 @@ recordingsRouter.delete("/sessions/:id", requireAuth, async (req, res, next) => 
 });
 
 // How much later a camera really started than its take's startedAt, which
-// players shift the angle by, and what that comes from: the start beep when
-// the video heard it, else the end beep (a camera that started too late for
-// the first), else the time the device reported ('clock' when that's its
-// first frame's capture time), else nothing. The first-frame time is also
-// returned on its own, to compare the two while it's new.
+// players shift the angle by, and what that comes from.
+//
+// First choice is the moment the device's camera captured its first frame
+// ('clock'): it lines up the pictures, which is what a coach compares. The
+// beeps line up each device's sound, and every device keeps its picture a
+// different distance from its sound: on 2026-10-22's light-switch test the
+// beep left a Galaxy, an iPhone and Chrome 3-6 frames apart, the first-frame
+// time 1-1.5 frames. The beep (start, else end) is the fallback for devices
+// that don't report a first frame (Firefox, Safari, older app versions) and
+// the check on those that do; then the time the device reported, else
+// nothing. Both are returned on their own too, to compare.
 function videoStartOffset(row, startedAt) {
   const clock = row.start_offset_source === "frame" && row.start_offset_ms != null
-    ? { clockStartOffsetMs: Number(row.start_offset_ms) }
-    : {};
-  return { ...syncOffset(row, startedAt), ...clock };
+    ? Number(row.start_offset_ms)
+    : null;
+  const beep = beepOffset(row, startedAt);
+  return {
+    ...syncOffset(row, clock, beep),
+    ...(clock != null ? { clockStartOffsetMs: clock } : {}),
+    ...(beep != null ? { beepStartOffsetMs: beep } : {}),
+  };
 }
 
-function syncOffset(row, startedAt) {
-  if (row.beep_at_ms != null) {
-    return { startOffsetMs: startOffsetFromBeep(Number(row.beep_at_ms)), syncedBy: "beep" };
-  }
+// Further apart than this, a first-frame time and the beep can't both be
+// right (the phone's clock jumped, or synced badly on a poor connection), and
+// the beep, which is measured in the video itself, is trusted.
+export const CLOCK_BEEP_MAX_DISAGREEMENT_MS = 500;
+
+function beepOffset(row, startedAt) {
+  if (row.beep_at_ms != null) return startOffsetFromBeep(Number(row.beep_at_ms));
   if (row.end_beep_at_ms != null && row.end_beep_epoch_ms != null) {
-    return {
-      startOffsetMs: startOffsetFromEndBeep(
-        Number(row.end_beep_at_ms), Number(row.end_beep_epoch_ms), startedAt),
-      syncedBy: "beep",
-    };
+    return startOffsetFromEndBeep(
+      Number(row.end_beep_at_ms), Number(row.end_beep_epoch_ms), startedAt);
   }
+  return null;
+}
+
+function syncOffset(row, clock, beep) {
+  if (clock != null &&
+      (beep == null || Math.abs(clock - beep) <= CLOCK_BEEP_MAX_DISAGREEMENT_MS)) {
+    return { startOffsetMs: clock, syncedBy: "clock" };
+  }
+  if (beep != null) return { startOffsetMs: beep, syncedBy: "beep" };
   if (row.start_offset_ms != null) {
-    return {
-      startOffsetMs: Number(row.start_offset_ms),
-      syncedBy: row.start_offset_source === "frame" ? "clock" : "device",
-    };
+    return { startOffsetMs: Number(row.start_offset_ms), syncedBy: "device" };
   }
   return { startOffsetMs: null, syncedBy: null };
 }
