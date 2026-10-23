@@ -14,7 +14,7 @@ import { requireAuth } from "../middleware/requireAuth.js";
 import { atLeast, getSessionRole, sessionVisibleSql } from "../middleware/groupRole.js";
 import { storage } from "../storage/index.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
-import { startOffsetMs } from "../recordings/startOffset.js";
+import { START_OFFSET_UPSERT_SQL, startClock, startOffsetMs } from "../recordings/startOffset.js";
 import { findEndBeep, findSyncBeep } from "../recordings/syncBeep.js";
 import { remuxForStreaming } from "../recordings/remux.js";
 import { queuePreview } from "../recordings/previews.js";
@@ -315,19 +315,18 @@ fileRouter.post(
         ({ rows } = await pool.query(
           `INSERT INTO recording_session_videos
              (session_id, user_id, started_at_ms, file_id, start_offset_ms, beep_at_ms,
-              end_beep_at_ms)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+              end_beep_at_ms, start_offset_source)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            ON CONFLICT (session_id, user_id, started_at_ms)
            DO UPDATE SET file_id = EXCLUDED.file_id,
-             start_offset_ms = COALESCE(recording_session_videos.start_offset_ms,
-                                        EXCLUDED.start_offset_ms),
+             ${START_OFFSET_UPSERT_SQL},
              beep_at_ms = EXCLUDED.beep_at_ms,
              end_beep_at_ms = EXCLUDED.end_beep_at_ms
            WHERE recording_session_videos.file_id IS NULL
            RETURNING file_id`,
           [req.query.sessionId, req.user.id, Number(req.query.startedAt), fileId,
             startOffsetMs(req.query.actualStartedAt, Number(req.query.startedAt)),
-            beepAtMs, endBeepAtMs]
+            beepAtMs, endBeepAtMs, startClock(req.query.startClock)]
         ));
       } catch (err) {
         await storage.remove([fileId]).catch(() => {});

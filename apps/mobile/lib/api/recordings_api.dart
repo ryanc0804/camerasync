@@ -307,11 +307,15 @@ class RecordingsApi {
   ///
   /// [actualStartedAtMs] is when this phone's camera really began (server
   /// clock); playback shifts the angle by how late that was.
+  ///
+  /// [startClock] says what that is: 'frame' for the first frame's capture
+  /// time, 'call' for when the camera was asked to start.
   Future<void> saveRecordingDetails(String id, int startedAtMs,
-          {int? actualStartedAtMs}) =>
+          {int? actualStartedAtMs, String? startClock}) =>
       _api.post('/api/recordings/sessions/$id/videos', {
         'startedAt': startedAtMs,
         if (actualStartedAtMs != null) 'actualStartedAt': actualStartedAtMs,
+        if (startClock != null) 'startClock': startClock,
       });
 
   /// Uploads a finished recording so it appears in the session's playback.
@@ -325,12 +329,16 @@ class RecordingsApi {
     String filePath, {
     String? filename,
     int? actualStartedAtMs,
+    String? startClock,
+    Duration timeout = const Duration(minutes: 10),
   }) =>
       _api.postFile(
         '/api/files/upload'
         '?sessionId=${Uri.encodeQueryComponent(id)}&startedAt=$startedAtMs'
-        '${actualStartedAtMs == null ? '' : '&actualStartedAt=$actualStartedAtMs'}',
+        '${actualStartedAtMs == null ? '' : '&actualStartedAt=$actualStartedAtMs'}'
+        '${startClock == null ? '' : '&startClock=$startClock'}',
         filePath: filePath,
         filename: filename,
+        timeout: timeout,
       );
 }
