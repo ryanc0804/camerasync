@@ -427,7 +427,12 @@ class AndroidCameraCameraX extends CameraPlatform {
     );
 
     // Configure VideoCapture and Recorder instances.
-    recorder = Recorder(qualitySelector: presetQualitySelector);
+    recorder = Recorder(
+      qualitySelector: presetQualitySelector,
+      // 8kount: upstream drops mediaSettings.videoBitrate; pass it through
+      // (CameraX treats it as the target average).
+      targetVideoEncodingBitRate: mediaSettings?.videoBitrate,
+    );
     videoCapture = VideoCapture.withOutput(
       videoOutput: recorder!,
       targetFpsRange: _targetFpsRange,
