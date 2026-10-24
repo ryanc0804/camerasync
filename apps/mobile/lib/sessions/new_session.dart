@@ -59,8 +59,32 @@ Future<void> joinAndOpen(
   }
 }
 
-/// The + menu. Returns true when a session was started or scheduled, so the
-/// session lists can refresh.
+/// What the + offers, nearest the button first. The nav bar grows into a
+/// panel of these (see home_shell.dart); [showNewSessionMenu] lists them in
+/// a sheet.
+const newSessionChoices = [
+  (
+    value: 'start',
+    icon: Icons.fiber_manual_record,
+    title: 'Start a session now',
+    detail: 'Go live and record with your team.',
+  ),
+  (
+    value: 'schedule',
+    icon: Icons.event,
+    title: 'Schedule a session',
+    detail: 'Put one on the calendar for later.',
+  ),
+  (
+    value: 'code',
+    icon: Icons.pin_outlined,
+    title: 'Join with a code',
+    detail: 'Enter the 6-character code someone shared.',
+  ),
+];
+
+/// The + menu as a sheet. Returns true when a session was started or
+/// scheduled, so the session lists can refresh.
 Future<bool> showNewSessionMenu(BuildContext context, AuthService auth) async {
   final team = TeamAccent.of(context);
   final choice = await showModalBottomSheet<String>(
@@ -89,12 +113,8 @@ Future<bool> showNewSessionMenu(BuildContext context, AuthService auth) async {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              option('start', Icons.fiber_manual_record, 'Start a session now',
-                  'Go live and start recording with your team.'),
-              option('schedule', Icons.event, 'Schedule a session',
-                  'Put one on the calendar for later.'),
-              option('code', Icons.pin_outlined, 'Join with a code',
-                  'Enter the 6-character code someone shared.'),
+              for (final c in newSessionChoices)
+                option(c.value, c.icon, c.title, c.detail),
             ],
           ),
         ),
@@ -102,6 +122,13 @@ Future<bool> showNewSessionMenu(BuildContext context, AuthService auth) async {
     },
   );
   if (choice == null || !context.mounted) return false;
+  return runNewSessionChoice(context, auth, choice);
+}
+
+/// Carries out one of [newSessionChoices]. True when a session was started
+/// or scheduled.
+Future<bool> runNewSessionChoice(
+    BuildContext context, AuthService auth, String choice) async {
   if (choice == 'code') {
     await _joinWithCode(context, auth);
     return false;
