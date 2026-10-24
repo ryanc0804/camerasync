@@ -1567,15 +1567,21 @@ class _WatchScreenState extends State<WatchScreen> {
     var addingComment = false;
     final team = TeamAccent.of(context);
 
+    // Dark like the rest of the app, and no taller than it needs (half the
+    // screen at most), with a light scrim so the video stays in view.
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: team.fillLight,
+      backgroundColor: kSurface,
+      barrierColor: Colors.black38,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (sheetContext) => _CommentsSheet(
         notes: notes,
+        at: _clockAt,
+        accent: team.accent,
+        fill: team.fill,
         onSelect: (note) {
           selected = note;
           Navigator.of(sheetContext).pop();
@@ -1631,32 +1637,45 @@ class _WatchScreenState extends State<WatchScreen> {
 class _CommentsSheet extends StatelessWidget {
   const _CommentsSheet({
     required this.notes,
+    required this.at,
+    required this.accent,
+    required this.fill,
     required this.onSelect,
     required this.onAdd,
   });
 
   final List<SessionNote> notes;
+
+  /// Where the video is: a new comment is stamped there.
+  final Duration at;
+
+  /// The team color as text on dark, and as a button's fill.
+  final Color accent;
+  final Color fill;
   final ValueChanged<SessionNote> onSelect;
   final VoidCallback onAdd;
 
   @override
   Widget build(BuildContext context) {
-    final sheet = TeamAccent.of(context).fillLight;
-    final ink = inkOn(sheet);
+    final maxHeight = MediaQuery.sizeOf(context).height * 0.5;
     return SafeArea(
-      child: FractionallySizedBox(
-        heightFactor: 0.72,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxHeight),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Container(
-                width: 36,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 14),
-                decoration: BoxDecoration(
-                  color: ink.withValues(alpha: 0.3),
-                  borderRadius: BorderRadius.circular(4),
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 6),
+                  decoration: BoxDecoration(
+                    color: kSurfaceLight,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
                 ),
               ),
               Row(
@@ -1664,74 +1683,55 @@ class _CommentsSheet extends StatelessWidget {
                   Expanded(
                     child: Text(
                       'Comments (${notes.length})',
-                      style: TextStyle(
-                        color: ink,
-                        fontSize: 20,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
                   ),
                   IconButton(
-                    onPressed: onAdd,
-                    tooltip: 'Add a comment',
-                    icon: Icon(Icons.add_comment_outlined, color: ink),
-                  ),
-                  IconButton(
                     onPressed: () => Navigator.of(context).pop(),
                     tooltip: 'Close comments',
-                    icon: Icon(Icons.close, color: ink),
+                    icon: const Icon(Icons.close, color: kMuted),
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
-              Expanded(
-                child: notes.isEmpty
-                    ? Center(
-                        child: Text(
-                          'No comments on this recording yet.',
-                          style: TextStyle(color: ink.withValues(alpha: 0.7)),
-                        ),
-                      )
-                    : ListView.separated(
-                        itemCount: notes.length,
-                        separatorBuilder: (_, __) =>
-                            Divider(color: ink.withValues(alpha: 0.12)),
-                        itemBuilder: (context, index) {
-                          final note = notes[index];
-                          return ListTile(
-                            contentPadding:
-                                const EdgeInsets.symmetric(horizontal: 4),
-                            title: Text(
-                              note.authorName,
-                              style: TextStyle(
-                                color: ink,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            subtitle: Padding(
-                              padding: const EdgeInsets.only(top: 4),
-                              child: Text(
-                                note.body,
-                                style: TextStyle(
-                                  color: ink.withValues(alpha: 0.85),
-                                ),
-                              ),
-                            ),
-                            trailing: Text(
-                              formatClock(
-                                Duration(milliseconds: note.videoTimeMs),
-                              ),
-                              style: TextStyle(
-                                color: ink.withValues(alpha: 0.7),
-                                fontFeatures: const [
-                                  FontFeature.tabularFigures(),
-                                ],
-                              ),
-                            ),
-                            onTap: () => onSelect(note),
-                          );
-                        },
-                      ),
+              if (notes.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 18),
+                  child: Text(
+                    'No comments on this recording yet.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: kMuted),
+                  ),
+                )
+              else
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    padding: EdgeInsets.zero,
+                    itemCount: notes.length,
+                    itemBuilder: (context, index) =>
+                        _commentRow(notes[index]),
+                  ),
+                ),
+              const SizedBox(height: 10),
+              Tooltip(
+                message: 'Add a comment',
+                child: FilledButton.icon(
+                  onPressed: onAdd,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: fill,
+                    foregroundColor: inkOn(fill),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  icon: const Icon(Icons.add_comment_outlined, size: 20),
+                  label: Text('Add a comment at ${formatClock(at)}'),
+                ),
               ),
             ],
           ),
@@ -1739,10 +1739,61 @@ class _CommentsSheet extends StatelessWidget {
       ),
     );
   }
+
+  /// One comment: its moment as a team-colored tag, then who and what.
+  /// Tapping it jumps the video there.
+  Widget _commentRow(SessionNote note) {
+    return InkWell(
+      onTap: () => onSelect(note),
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                formatClock(Duration(milliseconds: note.videoTimeMs)),
+                style: TextStyle(
+                  color: accent,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    note.authorName,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    note.body,
+                    style: const TextStyle(color: Colors.white70, height: 1.3),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-/// One angle: the player, or a grey placeholder when that member has not
-/// uploaded, with the member's name along the bottom.
 class _AngleTile extends StatelessWidget {
   const _AngleTile({
     required this.video,
