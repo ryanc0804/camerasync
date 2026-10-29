@@ -134,6 +134,12 @@ class UploadQueue extends ChangeNotifier {
   /// The take being sent right now, if any.
   QueuedTake? sending;
 
+  /// What of [sending] is going up ('preview' or 'full'), and how much of it
+  /// has gone, 0 to 1. Null while a preview is being made, and the fraction
+  /// until the first bytes go.
+  String? sendingStage;
+  double? sendingFraction;
+
   /// The most recent outcome, and when, for a short message on the camera.
   UploadEvent? lastEvent;
   DateTime? lastEventAt;
@@ -283,6 +289,8 @@ class UploadQueue extends ChangeNotifier {
     } finally {
       _running = false;
       sending = null;
+      sendingStage = null;
+      sendingFraction = null;
       notifyListeners();
       _scheduleWake();
     }
@@ -307,6 +315,8 @@ class UploadQueue extends ChangeNotifier {
 
   Future<void> _makePreviewFor(QueuedTake item) async {
     sending = item;
+    sendingStage = null;
+    sendingFraction = null;
     notifyListeners();
     _makingPreview = true;
     String? made;
@@ -344,6 +354,8 @@ class UploadQueue extends ChangeNotifier {
 
   Future<void> _send(QueuedTake item, {bool preview = false}) async {
     sending = item;
+    sendingStage = preview ? 'preview' : 'full';
+    sendingFraction = null;
     notifyListeners();
     try {
       await _api.saveRecordingDetails(item.sessionId, item.startedAtMs,
@@ -358,8 +370,10 @@ class UploadQueue extends ChangeNotifier {
         startClock: item.startClock,
         preview: preview,
         timeout: const Duration(minutes: 30),
-        onProgress: (sent, total) =>
-            _reportProgress(item, preview ? 'preview' : 'full', sent, total),
+        onProgress: (sent, total) {
+          _showProgress(sent, total);
+          _reportProgress(item, preview ? 'preview' : 'full', sent, total);
+        },
       );
       item.attempts = 0;
       if (preview) {
@@ -396,6 +410,17 @@ class UploadQueue extends ChangeNotifier {
   /// with the upload on a bad connection.
   static const _progressEvery = Duration(seconds: 3);
   DateTime? _progressSentAt;
+
+  /// For the camera's upload pill: redrawn only when the whole percent moves.
+  void _showProgress(int sent, int total) {
+    if (total <= 0) return;
+    final fraction = (sent / total).clamp(0.0, 1.0);
+    final before = sendingFraction;
+    sendingFraction = fraction;
+    if (before == null || (before * 100).floor() != (fraction * 100).floor()) {
+      notifyListeners();
+    }
+  }
 
   void _reportProgress(QueuedTake item, String stage, int sent, int total) {
     final now = DateTime.now();
