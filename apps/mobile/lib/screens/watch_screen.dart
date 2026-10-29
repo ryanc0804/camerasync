@@ -142,6 +142,11 @@ class _WatchScreenState extends State<WatchScreen> {
 
   bool _ready = false;
   bool _playing = false;
+
+  /// Played and not yet through to the end. Meanwhile an angle whose full
+  /// video arrives keeps playing its preview rather than loading again; the
+  /// switch happens once the take ends.
+  bool _midTake = false;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   List<SessionNote> _notes = [];
@@ -332,7 +337,7 @@ class _WatchScreenState extends State<WatchScreen> {
       _index = index;
       _trims = angleTrims(fresh.videos);
     });
-    await _syncPlayers();
+    await _syncPlayers(keepSources: _midTake);
   }
 
   Future<void> _load() async {
@@ -373,6 +378,7 @@ class _WatchScreenState extends State<WatchScreen> {
       _loading = recording != null;
       _ready = false;
       _playing = false;
+      _midTake = false;
       _position = Duration.zero;
       _duration = Duration.zero;
       _notes = [];
@@ -395,7 +401,9 @@ class _WatchScreenState extends State<WatchScreen> {
 
   /// Opens the players this screen size needs and closes the rest. A new
   /// player joins at the current position, playing if the others are.
-  Future<void> _syncPlayers() async {
+  /// [keepSources] leaves open players on the copy they're playing, even if
+  /// a better one has arrived.
+  Future<void> _syncPlayers({bool keepSources = false}) async {
     final recording = _recording;
     if (recording == null || _onTv) return;
     final generation = ++_syncGeneration;
@@ -406,7 +414,8 @@ class _WatchScreenState extends State<WatchScreen> {
     for (final i in _players.keys.toList()) {
       // Closed when it's no longer shown, or to switch between its preview
       // and the original (the grid grew or shrank around it).
-      if (!wanted.contains(i) || _playerUrls[i] != _urlFor(recording, i)) {
+      if (!wanted.contains(i) ||
+          (!keepSources && _playerUrls[i] != _urlFor(recording, i))) {
         final player = _players.remove(i)!;
         _playerUrls.remove(i);
         if (player == _clockPlayer) _setClock(null);
@@ -535,6 +544,11 @@ class _WatchScreenState extends State<WatchScreen> {
         value.position >= value.duration && value.duration > Duration.zero;
     if (ended && _playing) {
       _pause();
+      if (_midTake) {
+        // Through to the end: angles held on a preview take the full video.
+        _midTake = false;
+        unawaited(_syncPlayers());
+      }
       return;
     }
     final at = _clockAt;
@@ -623,7 +637,10 @@ class _WatchScreenState extends State<WatchScreen> {
     for (final entry in _players.entries) {
       if (live.contains(entry.key)) entry.value.play();
     }
-    setState(() => _playing = true);
+    setState(() {
+      _playing = true;
+      _midTake = true;
+    });
     _keepInLine?.cancel();
     _keepInLine =
         Timer.periodic(const Duration(milliseconds: 250), (_) => _realign());
@@ -718,6 +735,7 @@ class _WatchScreenState extends State<WatchScreen> {
     setState(() {
       _picking = true;
       _playing = false;
+      _midTake = false;
       _focused = null;
     });
   }

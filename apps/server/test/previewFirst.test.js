@@ -29,6 +29,7 @@ const { groupRouter } = await import("../src/routes/groups.js");
 const { recordingsRouter } = await import("../src/routes/recordings.js");
 const { fileRouter } = await import("../src/routes/file.js");
 const { pool } = await import("../src/db/pool.js");
+const { sweepRetiredFiles } = await import("../src/recordings/retiredFiles.js");
 
 const app = express();
 app.use(express.json());
@@ -84,6 +85,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (dir) rmSync(dir, { recursive: true, force: true });
+  await pool.query("DELETE FROM retired_files WHERE session_id = $1", [sessionId]);
   await pool.query("DELETE FROM groups WHERE group_id = $1", [GROUP_ID]);
   await pool.query(
     "DELETE FROM sessions WHERE user_id IN (SELECT user_id FROM users WHERE email = $1)",
@@ -125,6 +127,17 @@ describe("preview first", () => {
     expect(later.url).toBe(`/api/files/get/${fullRes.body.file.id}`);
     // The phone's preview gives way to the server's (made in the background).
     expect(later.previewUrl).toBeNull();
+
+    // Anyone already watching it finishes the take on it...
+    const fetchPreview = () => request(app).get(early.url).set("Cookie", cookie);
+    expect((await fetchPreview()).status).toBe(200);
+    // ...and an hour later it's deleted.
+    await pool.query(
+      `UPDATE retired_files SET retired_at = NOW() - INTERVAL '2 hours' WHERE session_id = $1`,
+      [sessionId]
+    );
+    expect(await sweepRetiredFiles()).toBeGreaterThanOrEqual(1);
+    expect((await fetchPreview()).status).toBe(404);
   });
 
   it("shows the uploading device's progress until the full video is in", async () => {

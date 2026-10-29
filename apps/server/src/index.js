@@ -10,6 +10,7 @@ import { initSocket } from "./sockets/websocket.js";
 import { startIdleSessionChecks } from "./sessions/idleSessions.js";
 import { startPreviewBackfill } from "./recordings/previews.js";
 import { startThumbnailBackfill } from "./recordings/thumbnails.js";
+import { startRetiredFileSweep } from "./recordings/retiredFiles.js";
 import { authRouter } from "./routes/auth.js";
 import { groupRouter } from "./routes/groups.js";
 import { postRouter } from "./routes/posts.js";
@@ -50,6 +51,7 @@ initSocket(server);
 startIdleSessionChecks();
 startPreviewBackfill();
 startThumbnailBackfill();
+startRetiredFileSweep();
 
 server.listen(PORT, () => {
   console.log(`[camerasync] server listening on http://localhost:${PORT}`);

@@ -96,6 +96,7 @@ export async function getSessionVideos(id) {
   for (const recording of data.recordings) {
     for (const video of recording.videos) {
       if (video.url) video.url = `${SERVER_URL}${video.url}`;
+      if (video.previewUrl) video.previewUrl = `${SERVER_URL}${video.previewUrl}`;
     }
   }
   return data;
