@@ -18,8 +18,18 @@ class _FakeApi implements RecordingsApi {
       int? actualStartedAtMs,
       String? startClock,
       bool preview = false,
-      Duration timeout = const Duration(minutes: 10)}) async {
+      Duration timeout = const Duration(minutes: 10),
+      void Function(int sent, int total)? onProgress}) async {
+    onProgress?.call(5, 10);
     sent.add('${preview ? 'preview' : 'full'} $startedAtMs');
+  }
+
+  final progress = <String>[];
+
+  @override
+  Future<void> reportUploadProgress(
+      String id, int startedAtMs, String stage, double fraction) async {
+    progress.add('$stage $startedAtMs $fraction');
   }
 
   @override
@@ -64,6 +74,9 @@ void main() {
     queue.resume('take');
     await settle(queue);
     expect(api.sent, ['preview 1', 'preview 2', 'full 1', 'full 2']);
+    // Viewers' progress bars got a report, without one per byte.
+    expect(api.progress, isNotEmpty);
+    expect(api.progress.first, 'preview 1 0.5');
     // Nothing left behind on the phone.
     expect(Directory('${dir.path}/queue').listSync().whereType<File>()
         .where((f) => f.path.endsWith('.mp4')), isEmpty);

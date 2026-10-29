@@ -118,14 +118,46 @@ export async function uploadSessionVideo(
   const actual = Number.isFinite(actualStartedAt)
     ? `&actualStartedAt=${Math.round(actualStartedAt)}${startClock ? `&startClock=${startClock}` : ""}`
     : "";
-  const response = await fetch(
-    `${SERVER_URL}/api/files/upload?sessionId=${encodeURIComponent(id)}&startedAt=${startedAt}${actual}`,
-    { method: "POST", credentials: "include", body }
-  );
-  if (!response.ok) {
-    const data = await response.json().catch(() => null);
+  // XMLHttpRequest rather than fetch: it reports upload progress, which
+  // goes to the server every few seconds for the bars viewers see.
+  let reportedAt = 0;
+  const { status, data } = await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST",
+      `${SERVER_URL}/api/files/upload?sessionId=${encodeURIComponent(id)}&startedAt=${startedAt}${actual}`);
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable || Date.now() - reportedAt < PROGRESS_EVERY_MS) return;
+      reportedAt = Date.now();
+      reportUploadProgress(id, startedAt, "full", event.loaded / event.total).catch(() => {});
+    };
+    xhr.onload = () => {
+      let parsed = null;
+      try { parsed = JSON.parse(xhr.responseText); } catch { /* not JSON */ }
+      resolve({ status: xhr.status, data: parsed });
+    };
+    xhr.onerror = () => reject(new Error("Could not upload this recording."));
+    xhr.send(body);
+  });
+  if (status < 200 || status >= 300) {
     throw new Error(data?.error || "Could not upload this recording.");
   }
+}
+
+// Often enough for the bars to look alive, rarely enough not to compete
+// with the upload on a slow connection.
+const PROGRESS_EVERY_MS = 3000;
+
+// How far along this device's upload of one angle is (stage "preview" or
+// "full"), for the progress bars under angles still uploading.
+export async function reportUploadProgress(id, startedAt, stage, fraction) {
+  // No reply body (204), so not through request().
+  await fetch(`${SERVER_URL}/api/recordings/sessions/${encodeURIComponent(id)}/upload-progress`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ startedAt, stage, fraction }),
+  });
 }
 
 export async function deleteSession(id) {

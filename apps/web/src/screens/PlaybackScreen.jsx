@@ -67,13 +67,15 @@ export function PlaybackScreen({ live = null } = {}) {
   // A live session's takes show up as their uploads finish. While a take is
   // being watched, only when one of its angles is still on its way (missing,
   // or just the preview so far), so it fills in without a refresh.
+  // Every 3 s while an angle is uploading, so its progress bar moves.
+  const filling = Boolean(recording?.videos.some((video) =>
+    stillUploading(video, recording.startedAt) || video.previewOnly));
   useAutoRefresh(() => {
-    if (recording && !recording.videos.some((video) => stillUploading(video, recording.startedAt)
-      || video.previewOnly)) return;
+    if (recording && !filling) return;
     getSessionVideos(sessionId)
       .then((data) => setRecordings(data.recordings))
       .catch(() => {});
-  }, 10000);
+  }, filling ? 3000 : 10000);
 
   useEffect(() => {
     if (!startedAt) return;
@@ -196,6 +198,16 @@ function RecordingList({ sessionId, recordings, onChoose }) {
 // A camera's take that hasn't arrived yet is shown as on its way for this
 // long after the take; after that it's probably not coming.
 const UPLOAD_WAIT_MS = 30 * 60 * 1000;
+
+// Beside an angle's name: its upload's stage and how far along, "Waiting
+// for connection" when it stopped, or "Preview" while one plays.
+function uploadLabel(video) {
+  const upload = video.upload;
+  if (!upload) return video.previewOnly ? "Preview" : null;
+  if (upload.stalled) return "Waiting for connection";
+  const percent = Math.round(upload.fraction * 100);
+  return upload.stage === "preview" ? `Preview ${percent}%` : `Full quality ${percent}%`;
+}
 
 function stillUploading(video, startedAt) {
   return !video.url && Date.now() - startedAt < UPLOAD_WAIT_MS;
@@ -844,8 +856,21 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                 </div>
               )}
               {video && <figcaption><span>{video.name}</span>
-                {video.previewOnly && <span className="playback-preview-note" title="Full quality is still uploading">Preview</span>}
+                {uploadLabel(video) && (
+                  <span className="playback-preview-note" title="Full quality is still uploading">
+                    {uploadLabel(video)}
+                  </span>
+                )}
               </figcaption>}
+              {/* How far along the upload is, along the bottom edge. */}
+              {video?.upload && (
+                <span className={video.upload.stalled ? "playback-upload playback-upload-stalled" : "playback-upload"}
+                  role="progressbar" aria-label={`${video.name}: ${uploadLabel(video)}`}
+                  aria-valuemin={0} aria-valuemax={100}
+                  aria-valuenow={Math.round(video.upload.fraction * 100)}>
+                  <span style={{ width: `${video.upload.fraction * 100}%` }} />
+                </span>
+              )}
             </figure>
             );
           })}
@@ -1094,6 +1119,12 @@ const css = `
   @keyframes playback-spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .playback-spinner { animation-duration: 3s; } }
   .playback-grid figcaption .playback-preview-note { flex-shrink: 0; color: #fc6; }
+  .playback-upload {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; height: 3px;
+    background: rgba(255,255,255,0.12); pointer-events: none;
+  }
+  .playback-upload span { display: block; height: 100%; background: var(--accent); transition: width 0.4s; }
+  .playback-upload-stalled span { background: #8a8a8a; }
   .playback-grid figcaption { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 8px; background: rgba(0,0,0,0.55); color: #ddd; font-size: 0.7rem; pointer-events: none; }
   .playback-grid figcaption span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .playback-panel-picker { z-index: 2; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 220px; max-width: calc(100% - 24px); max-height: calc(100% - 16px); overflow: auto; padding: 4px; border: 1px solid #555; border-radius: 6px; background: #222; box-sizing: border-box; }

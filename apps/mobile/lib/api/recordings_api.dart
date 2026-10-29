@@ -79,6 +79,7 @@ class AngleVideo {
     this.previewOnly = false,
     this.startOffsetMs,
     this.takeStartedAtMs,
+    this.upload,
   });
 
   final int userId;
@@ -98,6 +99,9 @@ class AngleVideo {
   /// When the take began, for telling a video still on its way from one
   /// that's not coming.
   final int? takeStartedAtMs;
+
+  /// How far along its upload is, while the full video isn't in yet.
+  final UploadProgress? upload;
 
   /// Shown as on its way for this long after the take.
   static const uploadWait = Duration(minutes: 30);
@@ -126,6 +130,28 @@ class AngleVideo {
         previewOnly: json['previewOnly'] == true,
         startOffsetMs: (json['startOffsetMs'] as num?)?.toInt(),
         takeStartedAtMs: takeStartedAtMs,
+        upload: json['upload'] is Map
+            ? UploadProgress.fromJson(Map<String, dynamic>.from(json['upload']))
+            : null,
+      );
+}
+
+/// An angle's upload as the uploading device last reported it.
+class UploadProgress {
+  const UploadProgress(
+      {required this.stage, required this.fraction, required this.stalled});
+
+  /// 'preview' (the small copy, sent first) or 'full'.
+  final String stage;
+  final double fraction;
+
+  /// No report for a while: the device lost its connection.
+  final bool stalled;
+
+  factory UploadProgress.fromJson(Map<String, dynamic> json) => UploadProgress(
+        stage: (json['stage'] ?? 'full').toString(),
+        fraction: (json['fraction'] as num?)?.toDouble() ?? 0,
+        stalled: json['stalled'] == true,
       );
 }
 
@@ -387,6 +413,7 @@ class RecordingsApi {
     String? startClock,
     bool preview = false,
     Duration timeout = const Duration(minutes: 10),
+    void Function(int sent, int total)? onProgress,
   }) =>
       _api.postFile(
         '/api/files/upload'
@@ -397,5 +424,16 @@ class RecordingsApi {
         filePath: filePath,
         filename: filename,
         timeout: timeout,
+        onProgress: onProgress,
       );
+
+  /// How far along this device's upload of one angle is, for the bars
+  /// viewers see under it. [stage] is 'preview' or 'full'.
+  Future<void> reportUploadProgress(
+          String id, int startedAtMs, String stage, double fraction) =>
+      _api.post('/api/recordings/sessions/$id/upload-progress', {
+        'startedAt': startedAtMs,
+        'stage': stage,
+        'fraction': fraction,
+      });
 }

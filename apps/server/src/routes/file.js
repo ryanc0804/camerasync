@@ -19,6 +19,7 @@ import { findEndBeep, findSyncBeep } from "../recordings/syncBeep.js";
 import { remuxForStreaming } from "../recordings/remux.js";
 import { queuePreview } from "../recordings/previews.js";
 import { queueThumbnail } from "../recordings/thumbnails.js";
+import { clearProgress } from "../recordings/uploadProgress.js";
 
 export const fileRouter = Router();
 
@@ -332,6 +333,7 @@ fileRouter.post(
       // be watched within seconds on a slow connection. It stands in until
       // the full video arrives (which then replaces it).
       if (req.query.kind === "preview") {
+        clearProgress(req.query.sessionId, Number(req.query.startedAt), Number(req.user.id), "preview");
         return savePreview(req, res, { fileId, tempPath, mediaType });
       }
 
@@ -400,6 +402,8 @@ fileRouter.post(
       queuePreview(fileId);
       // And a still for the session lists.
       queueThumbnail(fileId);
+      // In: no more progress bar for this angle.
+      clearProgress(req.query.sessionId, Number(req.query.startedAt), Number(req.user.id));
 
       res.status(201).json({
         file: {
