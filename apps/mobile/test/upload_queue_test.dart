@@ -71,9 +71,19 @@ void main() {
           sourcePath: await take('t$at', UploadQueue.previewFromBytes),
           filename: 't$at.mp4');
     }
+    // What the camera's upload pill shows, as it changes.
+    final shown = <String>[];
+    queue.addListener(() {
+      if (queue.sendingFraction case final fraction?) {
+        final line = '${queue.sendingStage} $fraction';
+        if (shown.lastOrNull != line) shown.add(line);
+      }
+    });
     queue.resume('take');
     await settle(queue);
     expect(api.sent, ['preview 1', 'preview 2', 'full 1', 'full 2']);
+    expect(shown, ['preview 0.5', 'full 0.5']);
+    expect(queue.sendingFraction, isNull);
     // Viewers' progress bars got a report, without one per byte.
     expect(api.progress, isNotEmpty);
     expect(api.progress.first, 'preview 1 0.5');
