@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -137,12 +138,22 @@ class ApiClient {
     String field = 'file',
     String? filename,
     Duration timeout = const Duration(minutes: 10),
+    void Function(int sent, int total)? onProgress,
   }) async {
+    // The file is streamed from disk; counting the bytes as they're read
+    // gives the upload's progress without holding the file in memory.
+    final file = File(filePath);
+    final total = await file.length();
+    var sent = 0;
+    final body = file.openRead().map((chunk) {
+      sent += chunk.length;
+      onProgress?.call(sent, total);
+      return chunk;
+    });
     final request = http.MultipartRequest('POST', Uri.parse('$baseUrl$path'))
       ..headers.addAll(_headers())
-      ..files.add(
-        await http.MultipartFile.fromPath(field, filePath, filename: filename),
-      );
+      ..files.add(http.MultipartFile(field, body, total,
+          filename: filename ?? filePath.split('/').last));
 
     late http.Response res;
     try {
@@ -161,7 +172,8 @@ class ApiClient {
   dynamic _decode(http.Response res) {
     if (res.statusCode == 204 || res.body.isEmpty) {
       if (res.statusCode >= 400) {
-        throw ApiException(res.statusCode, 'Request failed (${res.statusCode})');
+        throw ApiException(
+            res.statusCode, 'Request failed (${res.statusCode})');
       }
       return null;
     }

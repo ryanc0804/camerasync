@@ -127,6 +127,24 @@ describe("preview first", () => {
     expect(later.previewUrl).toBeNull();
   });
 
+  it("shows the uploading device's progress until the full video is in", async () => {
+    if (!hasFfmpeg) return;
+    const startedAt = Date.now() - 3_000;
+    const report = (stage, fraction) => request(app)
+      .post(`/api/recordings/sessions/${sessionId}/upload-progress`)
+      .set("Cookie", cookie)
+      .send({ startedAt, stage, fraction });
+    await request(app).post(`/api/recordings/sessions/${sessionId}/videos`)
+      .set("Cookie", cookie).send({ startedAt });
+
+    expect((await report("full", 0.4)).status).toBe(204);
+    expect((await angle(startedAt)).upload).toEqual({ stage: "full", fraction: 0.4, stalled: false });
+
+    expect((await upload(full, startedAt)).status).toBe(201);
+    expect((await angle(startedAt)).upload).toBeNull();
+    expect((await report("bogus", 0.4)).status).toBe(400);
+  });
+
   it("ignores a preview that arrives after the full video", async () => {
     if (!hasFfmpeg) return;
     const startedAt = Date.now() - 4_000;

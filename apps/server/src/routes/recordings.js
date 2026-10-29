@@ -29,6 +29,7 @@ import { deleteRecordingFiles, storedFileIds } from "./file.js";
 import { EVENTS } from "../sockets/events.js";
 import { ensureRecordingNumber } from "../recordings/numbering.js";
 import { START_OFFSET_UPSERT_SQL, startClock, startOffsetMs } from "../recordings/startOffset.js";
+import { STAGES, progressFor, reportProgress } from "../recordings/uploadProgress.js";
 import { startOffsetFromBeep, startOffsetFromEndBeep } from "../recordings/syncBeep.js";
 
 export const recordingsRouter = Router();
@@ -294,9 +295,38 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
         // made (see ../recordings/previews.js).
         previewUrl: row.preview_file_id ? `/api/files/get/${row.preview_file_id}` : null,
         ...videoStartOffset(row, startedAt),
+        // How far along its upload is, while the full video isn't in yet.
+        upload: row.file_id ? null : progressFor(req.params.id, startedAt, Number(row.user_id)),
       });
     }
     res.json({ session: sessions[0], recordings });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// The uploading device's progress on one angle, every few seconds: the
+// preview, then the full video (see ../recordings/uploadProgress.js).
+recordingsRouter.post("/sessions/:id/upload-progress", requireAuth, async (req, res, next) => {
+  const startedAt = req.body?.startedAt;
+  const stage = req.body?.stage;
+  const fraction = Number(req.body?.fraction);
+  if (!SESSION_ID_PATTERN.test(req.params.id) ||
+      !Number.isSafeInteger(startedAt) || startedAt <= 0 ||
+      !STAGES.has(stage) || !Number.isFinite(fraction)) {
+    return res.status(400).json({ error: "Invalid upload progress." });
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT 1 FROM recording_session_participants
+        WHERE session_id = $1 AND user_id = $2`,
+      [req.params.id, req.user.id]
+    );
+    if (rows.length === 0) {
+      return res.status(403).json({ error: "You did not join this session." });
+    }
+    reportProgress(req.params.id, startedAt, Number(req.user.id), stage, fraction);
+    res.status(204).end();
   } catch (err) {
     next(err);
   }

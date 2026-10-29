@@ -101,6 +101,7 @@ class _WatchScreenState extends State<WatchScreen> {
     final clock = _clockPlayer;
     return i == null || clock == null ? _position : _timelineAt(i, clock);
   }
+
   int _selected = 0;
   bool _bigScreen = false;
 
@@ -135,6 +136,7 @@ class _WatchScreenState extends State<WatchScreen> {
     if (focused != null) return {focused};
     return _gridMode ? _pageAngles.toSet() : {_selected};
   }
+
   VideoPlayerController? _clockPlayer;
   int _syncGeneration = 0;
 
@@ -162,7 +164,9 @@ class _WatchScreenState extends State<WatchScreen> {
     TvLink.instance.addListener(_onTvChanged);
     _tvStates = TvLink.instance.states.listen(_onTvState);
     // A live session's takes show up as their uploads finish.
-    _refresher = AutoRefresher(const Duration(seconds: 10), _refreshList);
+    // Every 3 s, so upload bars move; anything other than an open take
+    // filling in still only every 10 s (see _refreshList).
+    _refresher = AutoRefresher(const Duration(seconds: 3), _refreshList);
     _load();
   }
 
@@ -256,7 +260,8 @@ class _WatchScreenState extends State<WatchScreen> {
       Size(size.width - 42, size.height - 260),
       16 / 9,
     );
-    if (big != _bigScreen || landscape != _landscape ||
+    if (big != _bigScreen ||
+        landscape != _landscape ||
         (big && perPage != _bigPerPage)) {
       _bigScreen = big;
       _landscape = landscape;
@@ -270,6 +275,7 @@ class _WatchScreenState extends State<WatchScreen> {
   }
 
   late final AutoRefresher _refresher;
+  DateTime? _lastListRefresh;
 
   /// Picks up a live session's takes as their uploads finish: while the
   /// list is showing, while there's nothing to show yet, or while the open
@@ -282,6 +288,10 @@ class _WatchScreenState extends State<WatchScreen> {
     final filling = !waiting &&
         _recording!.videos.any((v) => v.stillUploading || v.previewOnly);
     if (!_picking && !waiting && !filling) return;
+    final now = DateTime.now();
+    final last = _lastListRefresh;
+    if (!filling && last != null && now.difference(last).inSeconds < 10) return;
+    _lastListRefresh = now;
     try {
       final videos = await _recordings.getSessionVideos(widget.session.id);
       if (!mounted || _loading) return;
@@ -389,9 +399,8 @@ class _WatchScreenState extends State<WatchScreen> {
     final recording = _recording;
     if (recording == null || _onTv) return;
     final generation = ++_syncGeneration;
-    final wanted = _gridMode
-        ? _pageAngles.toSet()
-        : {_selected, ..._stillAngles};
+    final wanted =
+        _gridMode ? _pageAngles.toSet() : {_selected, ..._stillAngles};
 
     _position = _clockAt;
     for (final i in _players.keys.toList()) {
@@ -478,8 +487,7 @@ class _WatchScreenState extends State<WatchScreen> {
     final url = _urlFor(recording, i);
     if (url == null) return null;
     final preview = recording.videos[i].previewUrl;
-    final fallback =
-        preview == null ? null : _recordings.absoluteUrl(preview);
+    final fallback = preview == null ? null : _recordings.absoluteUrl(preview);
     for (final candidate in {url, if (fallback != null) fallback}) {
       final player = await _tryPlayer(candidate);
       if (player != null) return player;
@@ -617,8 +625,8 @@ class _WatchScreenState extends State<WatchScreen> {
     }
     setState(() => _playing = true);
     _keepInLine?.cancel();
-    _keepInLine = Timer.periodic(
-        const Duration(milliseconds: 250), (_) => _realign());
+    _keepInLine =
+        Timer.periodic(const Duration(milliseconds: 250), (_) => _realign());
   }
 
   void _pause() {
@@ -647,7 +655,10 @@ class _WatchScreenState extends State<WatchScreen> {
   Future<void> _realign() async {
     final clockIndex = _clockIndex;
     final clock = _clockPlayer;
-    if (_realigning || !_playing || clockIndex == null || clock == null ||
+    if (_realigning ||
+        !_playing ||
+        clockIndex == null ||
+        clock == null ||
         _players.length < 2) {
       return;
     }
@@ -783,7 +794,8 @@ class _WatchScreenState extends State<WatchScreen> {
                                 color: team.fill,
                                 borderRadius: BorderRadius.circular(12),
                               ),
-                              child: Icon(Icons.play_arrow, color: team.ink, size: 28),
+                              child: Icon(Icons.play_arrow,
+                                  color: team.ink, size: 28),
                             ),
                             const SizedBox(width: 14),
                             Expanded(
@@ -802,7 +814,8 @@ class _WatchScreenState extends State<WatchScreen> {
                                   const SizedBox(height: 2),
                                   Text(
                                     '${_clockTime(at)} · $angles ${angles == 1 ? 'angle' : 'angles'}',
-                                    style: const TextStyle(color: kMuted, fontSize: 13),
+                                    style: const TextStyle(
+                                        color: kMuted, fontSize: 13),
                                   ),
                                 ],
                               ),
@@ -914,7 +927,8 @@ class _WatchScreenState extends State<WatchScreen> {
                       ),
                       title: Text(recording.videos[i].name,
                           style: TextStyle(
-                              color: _tvFocused == k ? team.accent : Colors.white,
+                              color:
+                                  _tvFocused == k ? team.accent : Colors.white,
                               fontWeight: _tvFocused == k
                                   ? FontWeight.w700
                                   : FontWeight.w500)),
@@ -925,8 +939,8 @@ class _WatchScreenState extends State<WatchScreen> {
                       // One angle's sound plays on the TV; tap another to
                       // switch, or the playing one to mute.
                       trailing: IconButton(
-                        onPressed: () => TvLink.instance.send(TvAction.sound,
-                            {'angle': _tvSound == k ? -1 : k}),
+                        onPressed: () => TvLink.instance.send(
+                            TvAction.sound, {'angle': _tvSound == k ? -1 : k}),
                         tooltip: _tvSound == k
                             ? 'Mute'
                             : 'Hear this angle on the TV',
@@ -1137,8 +1151,7 @@ class _WatchScreenState extends State<WatchScreen> {
                   Positioned(
                     left: xOf(n.videoTimeMs) - 7,
                     child: GestureDetector(
-                      onTap: () =>
-                          _seek(Duration(milliseconds: n.videoTimeMs)),
+                      onTap: () => _seek(Duration(milliseconds: n.videoTimeMs)),
                       child: Container(
                         width: 14,
                         height: 14,
@@ -1353,7 +1366,9 @@ class _WatchScreenState extends State<WatchScreen> {
                       onPressed: () => Navigator.of(context).maybePop(),
                       icon: const Icon(Icons.arrow_back,
                           color: Colors.white,
-                          shadows: [Shadow(blurRadius: 6, color: Colors.black)]),
+                          shadows: [
+                            Shadow(blurRadius: 6, color: Colors.black)
+                          ]),
                       tooltip: _focused != null ? 'Back to all angles' : 'Back',
                     ),
                   ),
@@ -1487,8 +1502,8 @@ class _WatchScreenState extends State<WatchScreen> {
   Future<void> _download() async {
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _downloading = true);
-    messenger.showSnackBar(
-        const SnackBar(content: Text('Preparing the download…')));
+    messenger
+        .showSnackBar(const SnackBar(content: Text('Preparing the download…')));
     File? file;
     try {
       final api = widget.auth.api;
@@ -1712,8 +1727,7 @@ class _CommentsSheet extends StatelessWidget {
                     shrinkWrap: true,
                     padding: EdgeInsets.zero,
                     itemCount: notes.length,
-                    itemBuilder: (context, index) =>
-                        _commentRow(notes[index]),
+                    itemBuilder: (context, index) => _commentRow(notes[index]),
                   ),
                 ),
               const SizedBox(height: 10),
@@ -1812,6 +1826,18 @@ class _AngleTile extends StatelessWidget {
 
   static const _panel = Color(0xFF49454F);
 
+  /// Beside the name: the upload's stage and how far along, "Waiting for
+  /// connection" when it stopped, or "Preview" while one plays.
+  String? get _uploadLabel {
+    final upload = video.upload;
+    if (upload == null) return video.previewOnly ? 'Preview' : null;
+    if (upload.stalled) return 'Waiting for connection';
+    final percent = (upload.fraction * 100).round();
+    return upload.stage == 'preview'
+        ? 'Preview $percent%'
+        : 'Full quality $percent%';
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = player;
@@ -1829,6 +1855,21 @@ class _AngleTile extends StatelessWidget {
                   width: p.value.size.width,
                   height: p.value.size.height,
                   child: VideoPlayer(p),
+                ),
+              )
+            // The upload's stage and percent once the device reports it;
+            // a spinner only until then.
+            else if (video.upload != null && _uploadLabel != null)
+              Center(
+                child: Text(
+                  _uploadLabel!,
+                  style: TextStyle(
+                    color: video.upload!.stalled
+                        ? const Color(0xFF8A8A8A)
+                        : const Color(0xFFE8E8E8),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               )
             else if (video.stillUploading)
@@ -1852,7 +1893,8 @@ class _AngleTile extends StatelessWidget {
               Center(
                 child: Text(
                   video.url == null ? 'Not uploaded' : missingLabel,
-                  style: const TextStyle(color: Color(0xFFCFCBD6), fontSize: 12),
+                  style:
+                      const TextStyle(color: Color(0xFFCFCBD6), fontSize: 12),
                 ),
               ),
             Positioned(
@@ -1873,14 +1915,32 @@ class _AngleTile extends StatelessWidget {
                             const TextStyle(color: Colors.white, fontSize: 11),
                       ),
                     ),
-                    if (video.previewOnly)
-                      const Text('Preview',
-                          style: TextStyle(
-                              color: Color(0xFFFFCC66), fontSize: 10)),
+                    // With a preview playing, its upload's stage goes
+                    // here; with nothing playing yet, it's in the middle.
+                    if (p != null && p.value.isInitialized)
+                      if (_uploadLabel case final label?)
+                        Text(label,
+                            style: const TextStyle(
+                                color: Color(0xFFFFCC66), fontSize: 10)),
                   ],
                 ),
               ),
             ),
+            // How far along the upload is, along the bottom edge.
+            if (video.upload case final upload?)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: LinearProgressIndicator(
+                  value: upload.fraction,
+                  minHeight: 3,
+                  backgroundColor: Colors.white12,
+                  color: upload.stalled
+                      ? const Color(0xFF8A8A8A)
+                      : TeamAccent.of(context).accent,
+                ),
+              ),
           ],
         ),
       ),
@@ -1928,7 +1988,9 @@ class _AddCommentSheetState extends State<_AddCommentSheet> {
       if (mounted) {
         setState(() {
           _busy = false;
-          _error = e is ApiException ? e.message : 'Something went wrong. Try again.';
+          _error = e is ApiException
+              ? e.message
+              : 'Something went wrong. Try again.';
         });
       }
     }
@@ -1951,7 +2013,8 @@ class _AddCommentSheetState extends State<_AddCommentSheet> {
           children: [
             Text(
               'Comment at ${formatClock(widget.at)}',
-              style: TextStyle(color: ink, fontSize: 18, fontWeight: FontWeight.w700),
+              style: TextStyle(
+                  color: ink, fontSize: 18, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 12),
             Row(

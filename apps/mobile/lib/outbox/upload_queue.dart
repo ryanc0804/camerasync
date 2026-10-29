@@ -173,7 +173,8 @@ class UploadQueue extends ChangeNotifier {
       if (await file.exists()) {
         final list = jsonDecode(await file.readAsString()) as List;
         for (final json in list) {
-          final item = QueuedTake.fromJson(Map<String, dynamic>.from(json as Map));
+          final item =
+              QueuedTake.fromJson(Map<String, dynamic>.from(json as Map));
           if (!await File(item.path).exists()) continue;
           final previewPath = item.previewPath;
           if (item.preview == PreviewState.toSend &&
@@ -273,7 +274,8 @@ class UploadQueue extends ChangeNotifier {
       while (!paused) {
         final now = DateTime.now();
         final next = _items
-            .where((item) => item.retryAt == null || !item.retryAt!.isAfter(now))
+            .where(
+                (item) => item.retryAt == null || !item.retryAt!.isAfter(now))
             .firstOrNull;
         if (next == null) break;
         await _step(next);
@@ -289,7 +291,8 @@ class UploadQueue extends ChangeNotifier {
   /// The next thing to do for [item]: a preview to make or send comes
   /// first, for any waiting take, before a full video.
   Future<void> _step(QueuedTake item) async {
-    final previews = _items.where((i) => i.preview != PreviewState.none &&
+    final previews = _items.where((i) =>
+        i.preview != PreviewState.none &&
         (i.retryAt == null || !i.retryAt!.isAfter(DateTime.now())));
     final take = previews.firstOrNull ?? item;
     switch (take.preview) {
@@ -316,10 +319,13 @@ class UploadQueue extends ChangeNotifier {
     }
     // Stopped for a take: make it again afterwards.
     if (paused) {
-      if (made != null) await File(made).delete().catchError((_) => File(made!));
+      if (made != null) {
+        await File(made).delete().catchError((_) => File(made!));
+      }
       return;
     }
-    final size = made == null ? 0 : await File(made).length().catchError((_) => 0);
+    final size =
+        made == null ? 0 : await File(made).length().catchError((_) => 0);
     if (made == null || size < minVideoBytes) {
       item.preview = PreviewState.none;
     } else {
@@ -341,7 +347,8 @@ class UploadQueue extends ChangeNotifier {
     notifyListeners();
     try {
       await _api.saveRecordingDetails(item.sessionId, item.startedAtMs,
-          actualStartedAtMs: item.actualStartedAtMs, startClock: item.startClock);
+          actualStartedAtMs: item.actualStartedAtMs,
+          startClock: item.startClock);
       await _api.uploadSessionVideo(
         item.sessionId,
         item.startedAtMs,
@@ -351,6 +358,8 @@ class UploadQueue extends ChangeNotifier {
         startClock: item.startClock,
         preview: preview,
         timeout: const Duration(minutes: 30),
+        onProgress: (sent, total) =>
+            _reportProgress(item, preview ? 'preview' : 'full', sent, total),
       );
       item.attempts = 0;
       if (preview) {
@@ -382,12 +391,33 @@ class UploadQueue extends ChangeNotifier {
     }
   }
 
+  /// How often an upload's progress is sent to the server, for the bars
+  /// viewers see: often enough to look alive, rarely enough not to compete
+  /// with the upload on a bad connection.
+  static const _progressEvery = Duration(seconds: 3);
+  DateTime? _progressSentAt;
+
+  void _reportProgress(QueuedTake item, String stage, int sent, int total) {
+    final now = DateTime.now();
+    final last = _progressSentAt;
+    if (total <= 0 || (last != null && now.difference(last) < _progressEvery)) {
+      return;
+    }
+    _progressSentAt = now;
+    unawaited(_api
+        .reportUploadProgress(
+            item.sessionId, item.startedAtMs, stage, sent / total)
+        .catchError((_) {}));
+  }
+
   void _failed(QueuedTake item, String error) {
     item.attempts += 1;
     item.lastError = error;
-    final wait = _retryDelays[math.min(item.attempts - 1, _retryDelays.length - 1)];
+    final wait =
+        _retryDelays[math.min(item.attempts - 1, _retryDelays.length - 1)];
     item.retryAt = DateTime.now().add(Duration(seconds: wait));
-    debugPrint('Upload failed (try ${item.attempts}), again in ${wait}s: $error');
+    debugPrint(
+        'Upload failed (try ${item.attempts}), again in ${wait}s: $error');
     unawaited(_save());
     notifyListeners();
   }
@@ -433,6 +463,7 @@ class UploadQueue extends ChangeNotifier {
   Future<void> _save() async {
     final dir = await _storage();
     final file = File('${dir.path}/queue.json');
-    await file.writeAsString(jsonEncode([for (final item in _items) item.toJson()]));
+    await file
+        .writeAsString(jsonEncode([for (final item in _items) item.toJson()]));
   }
 }
