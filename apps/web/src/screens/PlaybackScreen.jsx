@@ -811,9 +811,15 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                   setError("A video could not load. Try refreshing the page.");
                 }}
               /> : <div className="playback-missing">
-                {video && choosingPanel !== panelIndex && (stillUploading(video, recordings[recordingIndex].startedAt)
-                  ? <><span className="playback-spinner" aria-hidden="true" />Uploading…</>
-                  : "Not uploaded")}
+                {/* The upload's stage and percent once the device reports it;
+                    a spinner only until then. */}
+                {video && choosingPanel !== panelIndex && (video.upload
+                  ? <span className={video.upload.stalled ? "playback-upload-status playback-upload-status-stalled" : "playback-upload-status"}>
+                      {uploadLabel(video)}
+                    </span>
+                  : stillUploading(video, recordings[recordingIndex].startedAt)
+                    ? <><span className="playback-spinner" aria-hidden="true" />Uploading…</>
+                    : "Not uploaded")}
               </div>}
               {/* Clicking an angle plays it on its own (click again for the
                   grid). An empty panel opens the camera list instead. */}
@@ -856,7 +862,9 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                 </div>
               )}
               {video && <figcaption><span>{video.name}</span>
-                {uploadLabel(video) && (
+                {/* With a preview playing, its upload's stage goes here; with
+                    nothing playing yet, it's in the middle of the tile. */}
+                {video.url && uploadLabel(video) && (
                   <span className="playback-preview-note" title="Full quality is still uploading">
                     {uploadLabel(video)}
                   </span>
@@ -1125,6 +1133,8 @@ const css = `
   }
   .playback-upload span { display: block; height: 100%; background: var(--accent); transition: width 0.4s; }
   .playback-upload-stalled span { background: #8a8a8a; }
+  .playback-upload-status { color: #e8e8e8; font-size: 1rem; font-weight: 700; }
+  .playback-upload-status-stalled { color: #8a8a8a; font-weight: 600; }
   .playback-grid figcaption { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 8px; background: rgba(0,0,0,0.55); color: #ddd; font-size: 0.7rem; pointer-events: none; }
   .playback-grid figcaption span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .playback-panel-picker { z-index: 2; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 220px; max-width: calc(100% - 24px); max-height: calc(100% - 16px); overflow: auto; padding: 4px; border: 1px solid #555; border-radius: 6px; background: #222; box-sizing: border-box; }

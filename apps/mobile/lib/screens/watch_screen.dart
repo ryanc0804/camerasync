@@ -1857,6 +1857,21 @@ class _AngleTile extends StatelessWidget {
                   child: VideoPlayer(p),
                 ),
               )
+            // The upload's stage and percent once the device reports it;
+            // a spinner only until then.
+            else if (video.upload != null && _uploadLabel != null)
+              Center(
+                child: Text(
+                  _uploadLabel!,
+                  style: TextStyle(
+                    color: video.upload!.stalled
+                        ? const Color(0xFF8A8A8A)
+                        : const Color(0xFFE8E8E8),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              )
             else if (video.stillUploading)
               const Center(
                 child: Column(
@@ -1900,10 +1915,13 @@ class _AngleTile extends StatelessWidget {
                             const TextStyle(color: Colors.white, fontSize: 11),
                       ),
                     ),
-                    if (_uploadLabel case final label?)
-                      Text(label,
-                          style: const TextStyle(
-                              color: Color(0xFFFFCC66), fontSize: 10)),
+                    // With a preview playing, its upload's stage goes
+                    // here; with nothing playing yet, it's in the middle.
+                    if (p != null && p.value.isInitialized)
+                      if (_uploadLabel case final label?)
+                        Text(label,
+                            style: const TextStyle(
+                                color: Color(0xFFFFCC66), fontSize: 10)),
                   ],
                 ),
               ),
