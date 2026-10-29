@@ -19,6 +19,8 @@ void main() {
   late HttpServer server;
   late List<String> searches;
   late List<Map<String, dynamic>> patches;
+  late List<String> resetEmails;
+  late List<String> passwordFlowCalls;
   late Map<String, dynamic> me;
 
   setUp(() async {
@@ -26,6 +28,8 @@ void main() {
     HttpOverrides.global = null;
     searches = [];
     patches = [];
+    resetEmails = [];
+    passwordFlowCalls = [];
     me = {
       'id': 1,
       'email': 'demo.ryan@knights.ucf.edu',
@@ -36,7 +40,7 @@ void main() {
 
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((req) async {
-      Object body;
+      Object? body;
       final path = req.uri.path;
       if (path == '/api/auth/me' && req.method == 'GET') {
         body = {'user': me};
@@ -46,6 +50,23 @@ void main() {
         patches.add(sent);
         me = {...me, ...sent};
         body = {'user': me};
+      } else if (path == '/api/auth/forgot-password') {
+        passwordFlowCalls.add(path);
+        final sent = jsonDecode(await utf8.decoder.bind(req).join())
+            as Map<String, dynamic>;
+        resetEmails.add(sent['email'] as String);
+        body = null;
+      } else if (path == '/api/auth/verify-reset-code') {
+        passwordFlowCalls.add(path);
+        await utf8.decoder.bind(req).join();
+        body = {'token': 'reset-token'};
+      } else if (path == '/api/auth/reset-password' ||
+          path == '/api/auth/logout') {
+        passwordFlowCalls.add(path);
+        if (path == '/api/auth/reset-password') {
+          await utf8.decoder.bind(req).join();
+        }
+        body = null;
       } else if (path == '/api/groups/search') {
         searches.add(req.uri.queryParameters['q'] ?? '');
         body = {
@@ -187,6 +208,62 @@ void main() {
       {'name': 'Ryan C.'},
     ]);
     expect(find.text('Ryan C.'), findsOneWidget);
+  });
+
+  testWidgets('settings can reset password by email without current password',
+      (tester) async {
+    late AuthService auth;
+    await tester.runAsync(() async {
+      auth = await signedIn();
+      await tester.pumpWidget(
+          MaterialApp(home: Scaffold(body: SettingsTab(auth: auth))));
+    });
+    await settle(tester);
+
+    await tester.tap(find.widgetWithText(TextButton, 'Change'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Forgot your current password?'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Forgot Password'), findsOneWidget);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      'demo.ryan@knights.ucf.edu',
+    );
+
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Send Code'));
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+    });
+    await settle(tester);
+    expect(find.text('Enter Code'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), '123456');
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Verify'));
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+    });
+    await settle(tester);
+
+    await tester.enterText(find.byType(TextField).at(0), 'newpassword1');
+    await tester.enterText(find.byType(TextField).at(1), 'newpassword1');
+    await tester.runAsync(() async {
+      await tester.tap(find.widgetWithText(FilledButton, 'Reset Password'));
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+    });
+    await settle(tester);
+
+    expect(resetEmails, ['demo.ryan@knights.ucf.edu']);
+    expect(find.text('Forgot Password'), findsNothing);
+    expect(passwordFlowCalls, [
+      '/api/auth/forgot-password',
+      '/api/auth/verify-reset-code',
+      '/api/auth/reset-password',
+      '/api/auth/logout',
+    ]);
+    expect(auth.isAuthenticated, isFalse);
+    expect(find.text('Password reset. Sign in with your new password.'),
+        findsOneWidget);
   });
 
   test(
