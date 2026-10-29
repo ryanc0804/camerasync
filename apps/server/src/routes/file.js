@@ -18,6 +18,7 @@ import { START_OFFSET_UPSERT_SQL, startClock, startOffsetMs } from "../recording
 import { findEndBeep, findSyncBeep } from "../recordings/syncBeep.js";
 import { remuxForStreaming } from "../recordings/remux.js";
 import { queuePreview } from "../recordings/previews.js";
+import { retireFile } from "../recordings/retiredFiles.js";
 import { queueThumbnail } from "../recordings/thumbnails.js";
 import { clearProgress } from "../recordings/uploadProgress.js";
 
@@ -206,8 +207,12 @@ fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
       `SELECT EXISTS (
          SELECT 1 FROM recording_sessions rs
          WHERE rs.id = v.session_id AND ${sessionVisibleSql("rs", "$2")}
-       ) AS allowed FROM recording_session_videos v
-        WHERE v.file_id = $1 OR v.preview_file_id = $1 OR v.thumbnail_file_id = $1
+       ) AS allowed FROM (
+         SELECT session_id FROM recording_session_videos
+          WHERE file_id = $1 OR preview_file_id = $1 OR thumbnail_file_id = $1
+         UNION ALL
+         SELECT session_id FROM retired_files WHERE file_id = $1
+       ) v
         LIMIT 1`,
       [fileId, req.user.id]
     );
@@ -396,7 +401,9 @@ fileRouter.post(
       }
 
       if (rows[0].old_preview) {
-        await storage.remove([rows[0].old_preview]).catch(() => {});
+        // Kept a while for anyone watching it (see ../recordings/retiredFiles.js).
+        await retireFile(rows[0].old_preview, req.query.sessionId)
+          .catch(() => storage.remove([rows[0].old_preview]).catch(() => {}));
       }
       // The smaller copy for the angle grid, made in the background.
       queuePreview(fileId);

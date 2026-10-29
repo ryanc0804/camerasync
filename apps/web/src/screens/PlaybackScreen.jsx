@@ -234,6 +234,10 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
   const [commentsOpen, setCommentsOpen] = useState(false);
   // Waiting for every angle to have enough loaded to play together.
   const [buffering, setBuffering] = useState(false);
+  // Played and not yet through to the end: no angle changes video until it
+  // is (see sourceFor).
+  const [midTake, setMidTake] = useState(false);
+  const heldSources = useRef(new Map());
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState("");
   const videoRefs = useRef([]);
@@ -258,6 +262,19 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
       commonAspect(Object.values(aspects)), { minTileWidth: 340 })
     : 4;
   const pages = Math.ceil(panels.length / perPage);
+
+  // What an angle plays. Shown small (with others on screen, or behind the
+  // enlarged one) it's the smaller copy, which loads far quicker; enlarged or
+  // alone, the full video. An angle still uploading starts on the phone's
+  // preview. Mid-take an angle keeps what it started on, so the full video
+  // arriving doesn't make it load again while it's being watched: the switch
+  // happens once the take has played through.
+  const sourceFor = (video, small) => {
+    const wanted = (small && video.previewUrl) || video.url;
+    const key = `${video.userId}:${small ? "small" : "large"}`;
+    if (!midTake || !heldSources.current.has(key)) heldSources.current.set(key, wanted);
+    return heldSources.current.get(key);
+  };
   useEffect(() => {
     if (page > 0 && page >= pages) setPage(Math.max(0, pages - 1));
   }, [page, pages]);
@@ -457,7 +474,10 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     }
     try {
       await Promise.all(players.filter((video) => !video.ended).map((video) => video.play()));
-      if (request === playRequest.current) setPlaying(true);
+      if (request === playRequest.current) {
+        setPlaying(true);
+        setMidTake(true);
+      }
     } catch {
       if (request !== playRequest.current) return;
       pause();
@@ -699,11 +719,11 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
           <div className="playback-fs-tools">{tools}</div>
         </div>
       ) : toolsSlot ? createPortal(tools, toolsSlot) : <div className="playback-top">{tools}</div>}
-      {buffering && <p className="playback-buffering" role="status">Loading angles…</p>}
       {panelVideos.length === 0 ? (
         <p className="playback-empty">No videos have been uploaded for this recording yet.</p>
       ) : [page].map((pageIndex) => {
         const pageVideos = panelVideos.slice(pageIndex * perPage, pageIndex * perPage + perPage);
+        const sharingPage = pageVideos.filter((video) => video?.url).length > 1;
         return (
         <div aria-busy={buffering} className="playback-grid" ref={setGridElement}
           style={gridHeight ? { height: gridHeight } : undefined}
@@ -712,6 +732,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
             const panelIndex = pageIndex * perPage + index;
             const audio = getPanelAudio(panelIndex);
             const focused = focusedPanel === panelIndex;
+            const small = focusedPanel === null ? sharingPage : !focused;
             return (
             <figure key={pageIndex * perPage + index} style={tileStyle(panelIndex)}
               className={focused ? "playback-focused" : undefined}>
@@ -768,7 +789,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                   videoRefs.current[panelIndex] = element;
                   if (element) element.volume = audio.volume;
                 }}
-                src={video.url}
+                src={sourceFor(video, small)}
                 data-trim={trims.get(video.userId) ?? 0}
                 crossOrigin="use-credentials"
                 preload="auto"
@@ -797,6 +818,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                 onEnded={() => {
                   if (onScreenPlayers().every((player) => player.ended)) {
                     setPlaying(false);
+                    setMidTake(false);
                   }
                 }}
                 onWaiting={() => {
@@ -894,6 +916,13 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                   strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </button>
+          )}
+          {/* Over the angles while one is still loading, so they start
+              (and carry on) together. Shown only past a moment's wait. */}
+          {buffering && (
+            <div className="playback-loading" role="status" aria-label="Loading">
+              <span className="playback-spinner" />
+            </div>
           )}
           {pages > 1 && focusedPanel === null && page + 1 < pages && (
             <button type="button" className="playback-page-arrow"
@@ -1163,7 +1192,9 @@ const css = `
   .playback-transport .playback-controls { flex: 0 0 auto; gap: 6px; }
   .playback-seek { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
   .playback-seek span { color: #999; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
-  .playback-buffering { margin: 0 0 0.5rem; text-align: center; color: #aaa; font-size: 0.85rem; }
+  .playback-loading { position: absolute; inset: 0; z-index: 4; display: flex; align-items: center; justify-content: center; pointer-events: none; opacity: 0; animation: playback-appear 0.15s 0.4s forwards; }
+  .playback-loading .playback-spinner { width: 48px; height: 48px; border-width: 4px; border-color: rgba(255,255,255,0.25); border-top-color: var(--accent); box-shadow: 0 0 0 10px rgba(0,0,0,0.35); background: rgba(0,0,0,0.35); }
+  @keyframes playback-appear { to { opacity: 1; } }
   .playback-track { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
   .playback-seek input { flex: 1; min-width: 0; margin: 0; accent-color: var(--accent); cursor: pointer; }
   /* A blue dot on the bar for each comment; click it to jump there. */

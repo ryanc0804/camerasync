@@ -360,3 +360,12 @@ ALTER TABLE recording_session_videos
 -- are checked once (see src/recordings/previews.js).
 ALTER TABLE recording_session_videos
     ADD COLUMN IF NOT EXISTS preview_checked BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Files a take no longer uses (a phone's preview, once the full video is
+-- in), kept for a while so anyone already watching them can finish (see
+-- src/recordings/retiredFiles.js).
+CREATE TABLE IF NOT EXISTS retired_files (
+    file_id TEXT PRIMARY KEY,
+    session_id VARCHAR(6) NOT NULL,
+    retired_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
