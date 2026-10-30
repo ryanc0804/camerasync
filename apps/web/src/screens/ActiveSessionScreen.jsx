@@ -684,10 +684,6 @@ export function ActiveSessionScreen() {
           <h1>{session?.name || "Loading session..."}</h1>
           {session && <code>{session.id}</code>}
         </div>
-        {session && (
-          <ConnectionStatus offline={socketStatus === "Disconnected"}
-            roundTripMs={members.find((member) => Number(member.id) === Number(user.id))?.roundTripMs} />
-        )}
 
         {session && (
         <div className="active-session-actions">
@@ -808,17 +804,23 @@ export function ActiveSessionScreen() {
                     {members.map((member) => (
                       <li key={member.id}>
                         <span className="session-member-name">
-                          {member.name || member.email}
-                          {Number(member.id) === Number(user.id) && <em> (you)</em>}
+                          <strong>
+                            {member.name || member.email}
+                            {Number(member.id) === Number(user.id) && <em> (you)</em>}
+                          </strong>
+                          {/* Roles on a line of their own, so the name has
+                              the row's width. */}
+                          {(Number(member.id) === Number(session.createdBy) || member.camera === false) && (
+                            <small>
+                              {[
+                                Number(member.id) === Number(session.createdBy) && "Creator",
+                                member.camera === false && "Controller",
+                              ].filter(Boolean).join(" · ")}
+                            </small>
+                          )}
                         </span>
-                        {Number(member.id) === Number(session.createdBy) && (
-                          <span>Creator</span>
-                        )}
-                        {member.camera === false && <span>Controller</span>}
-                        <SignalBars level={signalLevel(member.roundTripMs, true)}
-                          title={member.roundTripMs == null
-                            ? "Checking connection"
-                            : `${member.roundTripMs} ms to the server`} />
+                        <MemberSignal roundTripMs={member.roundTripMs}
+                          offline={Number(member.id) === Number(user.id) && socketStatus === "Disconnected"} />
                       </li>
                     ))}
                   </ul>
@@ -893,15 +895,13 @@ const activeSessionCss = `
     background: #000;
   }
   @media (max-width: 640px) { .session-watch-overlay { padding: 1rem; } }
-  .connection-status { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; background: rgba(127,127,127,0.14); font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
-  .connection-status svg { display: block; }
-  .connection-status-good { color: #22a559; }
-  .connection-status-weak { color: #e08a00; }
-  .connection-status-offline { color: #e5484d; }
-  .connection-status-unknown { color: #666; }
   .signal-bars { display: inline-flex; flex: none; }
+  .active-session-members li .member-signal { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: 0.8rem; font-weight: 600; }
   .signal-bars svg { display: block; }
   .active-session-members li { gap: 0.6rem; }
+  .session-member-name strong, .session-member-name small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .session-member-name strong { font-weight: 500; }
+  .session-member-name small { color: #888; font-size: 0.75rem; margin-top: 2px; }
   .session-member-name { flex: 1; min-width: 0; color: inherit !important; font-size: inherit !important; }
   .session-member-name em { font-style: normal; color: #888; }
   .active-session-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; justify-content: flex-end; }
@@ -1121,16 +1121,15 @@ function SignalBars({ level, title }) {
   );
 }
 
-// This computer's connection in the header: Good, Weak or Offline, like the
-// phone's session bar.
-// Nothing until the server has timed it; Offline only once the connection
-// has dropped (not while it's still waiting for the camera).
-function ConnectionStatus({ offline, roundTripMs }) {
+// Someone's connection in the session's list: the bars and the word (Good,
+// Weak, Offline, or Checking until the server has timed it), with the round
+// trip on hover. The only place connections show on the website.
+function MemberSignal({ roundTripMs, offline }) {
   const level = signalLevel(roundTripMs, !offline);
-  if (level === "unknown") return null;
   return (
-    <span className={`connection-status connection-status-${level}`} role="status"
-      title={roundTripMs == null ? "No connection to the server" : `${roundTripMs} ms to the server`}>
+    <span className="member-signal" style={{ color: SIGNAL_COLORS[level] }}
+      title={level === "offline" ? "No connection to the server"
+        : roundTripMs == null ? "Checking connection" : `${roundTripMs} ms to the server`}>
       <SignalBars level={level} />
       {SIGNAL_LABELS[level]}
     </span>
