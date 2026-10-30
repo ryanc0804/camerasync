@@ -11,6 +11,7 @@ import '../auth/auth_service.dart';
 import '../keep_awake.dart';
 import '../socket/sync_socket.dart';
 import '../outbox/upload_queue.dart';
+import '../widgets/frosted.dart';
 
 /// Recording view for a session. Requests camera/mic only while mounted and
 /// releases them on dispose (per the MVP permissions rule — no background
@@ -311,7 +312,7 @@ class _SessionScreenState extends State<SessionScreen> {
       reconnecting: _reconnecting,
       recording: _takeRunning,
       takeNumber: _takeNumber,
-      socket: socket,
+      myId: widget.auth.user?.id,
     );
 
     if (joined && _controllerOnly) {
@@ -374,7 +375,7 @@ class _SessionTopBar extends StatelessWidget {
     this.reconnecting = false,
     this.recording = false,
     this.takeNumber,
-    required this.socket,
+    this.myId,
   });
 
   final String name;
@@ -390,20 +391,24 @@ class _SessionTopBar extends StatelessWidget {
 
   final bool recording;
   final int? takeNumber;
-  final SyncSocket socket;
+
+  /// This phone's user, whose own connection shows top right.
+  final int? myId;
 
   @override
   Widget build(BuildContext context) {
     // Back, the name and the connection on top; the device count centred
     // under them.
     final left = <Widget>[
-      // A dark circle behind it rather than a shadow: Flutter draws an
+      // A frosted circle behind it rather than a shadow: Flutter draws an
       // icon's shadow out of place (beside it, or behind the name).
-      IconButton(
-        onPressed: () => Navigator.of(context).maybePop(),
-        style: IconButton.styleFrom(backgroundColor: Colors.black54),
-        icon: const Icon(Icons.arrow_back, color: Colors.white, size: 22),
-        tooltip: 'Leave session',
+      Frosted(
+        radius: 24,
+        child: IconButton(
+          onPressed: () => Navigator.of(context).maybePop(),
+          icon: const Icon(Icons.arrow_back, color: Colors.white, size: 22),
+          tooltip: 'Leave session',
+        ),
       ),
       const SizedBox(width: 6),
       Expanded(
@@ -439,10 +444,13 @@ class _SessionTopBar extends StatelessWidget {
         ),
       ),
     ];
-    final status =
-        _ConnectionStatus(socket: socket, reconnecting: reconnecting);
+    final status = _ConnectionStatus(
+      roundTripMs: members.where((m) => m.id == myId).firstOrNull?.roundTripMs,
+      reconnecting: reconnecting,
+    );
     final devices = _DevicesPill(
       members: members,
+      myId: myId,
       recording: recording,
       takeNumber: takeNumber,
     );
@@ -491,9 +499,11 @@ class _DevicesPill extends StatefulWidget {
     required this.members,
     required this.recording,
     required this.takeNumber,
+    this.myId,
   });
 
   final List<SessionMember> members;
+  final int? myId;
   final bool recording;
   final int? takeNumber;
 
@@ -509,26 +519,32 @@ class _DevicesPillState extends State<_DevicesPill> {
     final members = widget.members;
     final count =
         '${members.length} ${members.length == 1 ? 'device' : 'devices'}';
-    const ease = Duration(milliseconds: 200);
+    // Opening, the list unfolds from under the pill and fades in while the
+    // pill widens and rounds out with it, all on one curve; closing plays
+    // it back.
+    const ease = Duration(milliseconds: 280);
+    const curve = Curves.easeOutCubic;
     return TapRegion(
       onTapOutside: (_) {
         if (_open) setState(() => _open = false);
       },
-      child: AnimatedContainer(
-        duration: ease,
-        curve: Curves.easeOut,
-        // Open, only as wide as the names need (within limits).
-        constraints: const BoxConstraints(maxWidth: 260),
-        decoration: BoxDecoration(
-          color: _open ? const Color(0xF2161616) : Colors.black54,
-          borderRadius: BorderRadius.circular(_open ? 20 : 999),
-          border:
-              Border.all(color: _open ? Colors.white12 : Colors.transparent),
-        ),
-        child: AnimatedSize(
+      // Frosted: the camera behind is blurred, so the list reads over a
+      // bright picture with the pill's own light tint, open or closed. The
+      // corners are one size throughout (closed, the pill is shorter than
+      // them, so its ends stay round).
+      child: Frosted(
+        tint: Colors.transparent,
+        child: AnimatedContainer(
           duration: ease,
-          curve: Curves.easeOut,
-          alignment: Alignment.topCenter,
+          curve: curve,
+          // Open, only as wide as the names need (within limits).
+          constraints: const BoxConstraints(maxWidth: 260),
+          decoration: BoxDecoration(
+            color: Colors.black54,
+            borderRadius: BorderRadius.circular(18),
+            border:
+                Border.all(color: _open ? Colors.white12 : Colors.transparent),
+          ),
           child: IntrinsicWidth(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -545,11 +561,17 @@ class _DevicesPillState extends State<_DevicesPill> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
+                          // Red while recording; orange when someone's
+                          // connection is weak (open it to see whose).
                           Icon(Icons.circle,
                               size: 9,
                               color: widget.recording
                                   ? Colors.redAccent
-                                  : const Color(0xFF4ADE80)),
+                                  : members.any((m) =>
+                                          _signalOf(m.roundTripMs) ==
+                                          _Signal.weak)
+                                      ? Colors.orangeAccent
+                                      : const Color(0xFF4ADE80)),
                           const SizedBox(width: 6),
                           if (widget.recording) ...[
                             Text(
@@ -573,6 +595,7 @@ class _DevicesPillState extends State<_DevicesPill> {
                           AnimatedRotation(
                             turns: _open ? 0.5 : 0,
                             duration: ease,
+                            curve: curve,
                             child: const Icon(Icons.arrow_drop_down,
                                 size: 18, color: Colors.white70),
                           ),
@@ -581,20 +604,34 @@ class _DevicesPillState extends State<_DevicesPill> {
                     ),
                   ),
                 ),
-                if (_open)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(14, 2, 14, 10),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        for (final member in members)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 5),
-                            child: _MemberRow(member: member),
-                          ),
-                      ],
+                // Always there, folded to nothing while closed.
+                AnimatedAlign(
+                  duration: ease,
+                  curve: curve,
+                  alignment: Alignment.topCenter,
+                  widthFactor: _open ? 1 : 0,
+                  heightFactor: _open ? 1 : 0,
+                  child: AnimatedOpacity(
+                    duration: ease,
+                    curve: _open ? const Interval(0.25, 1) : Curves.easeOut,
+                    opacity: _open ? 1 : 0,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 2, 14, 10),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          for (final member in members)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 5),
+                              child: _MemberRow(
+                                  member: member,
+                                  isMe: member.id == widget.myId),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
+                ),
               ],
             ),
           ),
@@ -604,93 +641,83 @@ class _DevicesPillState extends State<_DevicesPill> {
   }
 }
 
-/// How good this phone's connection to the server is, top right: a quick
-/// round trip every few seconds. Weak means start and stop may arrive late
-/// and uploads will be slow.
-class _ConnectionStatus extends StatefulWidget {
-  const _ConnectionStatus({required this.socket, required this.reconnecting});
+/// How good a connection is, from how long it takes to answer the server.
+enum _Signal { good, weak, offline, unknown }
 
-  final SyncSocket socket;
+/// Above this a round trip counts as weak: start and stop may arrive late
+/// and uploads will be slow.
+const _weakAboveMs = 600;
+
+_Signal _signalOf(int? roundTripMs, {bool offline = false}) {
+  if (offline) return _Signal.offline;
+  if (roundTripMs == null) return _Signal.unknown;
+  return roundTripMs > _weakAboveMs ? _Signal.weak : _Signal.good;
+}
+
+(IconData, Color, String) _signalLook(_Signal signal) => switch (signal) {
+      _Signal.good => (
+          Icons.signal_cellular_alt,
+          const Color(0xFF4ADE80),
+          'Good'
+        ),
+      _Signal.weak => (Icons.network_cell, Colors.orangeAccent, 'Weak'),
+      _Signal.offline => (
+          Icons.signal_cellular_connected_no_internet_0_bar,
+          Colors.redAccent,
+          'Offline'
+        ),
+      _Signal.unknown => (
+          Icons.signal_cellular_alt,
+          Colors.white38,
+          'Checking'
+        ),
+    };
+
+/// This phone's connection, top right: Good, Weak or Offline, from the
+/// round trip the server times on its connection (sent with the device
+/// list every few seconds).
+class _ConnectionStatus extends StatelessWidget {
+  const _ConnectionStatus({this.roundTripMs, required this.reconnecting});
+
+  final int? roundTripMs;
   final bool reconnecting;
 
   @override
-  State<_ConnectionStatus> createState() => _ConnectionStatusState();
-}
-
-class _ConnectionStatusState extends State<_ConnectionStatus> {
-  /// Above this a round trip counts as weak.
-  static const _weakAboveMs = 600;
-
-  late final Timer _timer =
-      Timer.periodic(const Duration(seconds: 5), (_) => _check());
-  int? _rttMs;
-  bool _checked = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _timer;
-    _check();
-  }
-
-  @override
-  void dispose() {
-    _timer.cancel();
-    super.dispose();
-  }
-
-  Future<void> _check() async {
-    final rtt = await widget.socket.ping();
-    if (!mounted) return;
-    setState(() {
-      _rttMs = rtt;
-      _checked = true;
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
-    if (!_checked && !widget.reconnecting) return const SizedBox.shrink();
-    final rtt = _rttMs;
-    final (icon, color, label) = widget.reconnecting || rtt == null
-        ? (
-            Icons.signal_cellular_connected_no_internet_0_bar,
-            Colors.redAccent,
-            'Offline'
-          )
-        : rtt > _weakAboveMs
-            ? (Icons.network_cell, Colors.orangeAccent, 'Weak')
-            : (Icons.signal_cellular_alt, const Color(0xFF4ADE80), 'Good');
+    final signal = _signalOf(roundTripMs, offline: reconnecting);
+    if (signal == _Signal.unknown) return const SizedBox.shrink();
+    final (icon, color, label) = _signalLook(signal);
     return Tooltip(
-      message:
-          rtt == null ? 'No connection to the server' : '$rtt ms to the server',
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.black54,
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 16, color: color),
-            const SizedBox(width: 4),
-            Text(label,
-                style: TextStyle(
-                    color: color, fontSize: 12, fontWeight: FontWeight.w600)),
-          ],
+      message: signal == _Signal.offline
+          ? 'No connection to the server'
+          : '$roundTripMs ms to the server',
+      child: Frosted(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 16, color: color),
+              const SizedBox(width: 4),
+              Text(label,
+                  style: TextStyle(
+                      color: color, fontSize: 12, fontWeight: FontWeight.w600)),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-/// One person in the who's-connected list: their initial, name, and whether
-/// their camera is recording or they're just running the session.
+/// One person in the who's-connected list: their initial, name ("(you)" on
+/// this phone's own), whether their camera is recording or they're just
+/// running the session, and how good their connection is.
 class _MemberRow extends StatelessWidget {
-  const _MemberRow({required this.member});
+  const _MemberRow({required this.member, this.isMe = false});
 
   final SessionMember member;
+  final bool isMe;
 
   @override
   Widget build(BuildContext context) {
@@ -708,8 +735,15 @@ class _MemberRow extends StatelessWidget {
         ),
         const SizedBox(width: 12),
         Expanded(
-          child: Text(
-            name,
+          child: Text.rich(
+            TextSpan(text: name, children: [
+              if (isMe)
+                const TextSpan(
+                  text: ' (you)',
+                  style: TextStyle(
+                      color: Colors.white54, fontWeight: FontWeight.w400),
+                ),
+            ]),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
@@ -718,11 +752,32 @@ class _MemberRow extends StatelessWidget {
         ),
         const SizedBox(width: 10),
         if (member.camera)
-          const Icon(Icons.videocam, size: 18, color: Color(0xFF4ADE80))
+          const Icon(Icons.videocam, size: 18, color: Colors.white70)
         else
           const Text('Controlling',
               style: TextStyle(color: Colors.white54, fontSize: 12)),
+        const SizedBox(width: 10),
+        _SignalIcon(roundTripMs: member.roundTripMs),
       ],
+    );
+  }
+}
+
+/// Someone's connection in the who's-connected list: green, orange (weak) or
+/// grey (not timed yet), with the round trip on a long press.
+class _SignalIcon extends StatelessWidget {
+  const _SignalIcon({this.roundTripMs});
+
+  final int? roundTripMs;
+
+  @override
+  Widget build(BuildContext context) {
+    final (icon, color, label) = _signalLook(_signalOf(roundTripMs));
+    return Tooltip(
+      message: roundTripMs == null
+          ? 'Checking connection'
+          : '$label · $roundTripMs ms',
+      child: Icon(icon, size: 18, color: color, semanticLabel: label),
     );
   }
 }
