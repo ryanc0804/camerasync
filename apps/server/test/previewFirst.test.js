@@ -23,6 +23,10 @@ vi.mock("../src/recordings/previews.js", () => ({
   queuePreview: vi.fn(),
   startPreviewBackfill: vi.fn(),
 }));
+vi.mock("../src/recordings/scrubFrames.js", () => ({
+  queueScrubFrames: vi.fn(),
+  startScrubBackfill: vi.fn(),
+}));
 
 const { authRouter } = await import("../src/routes/auth.js");
 const { groupRouter } = await import("../src/routes/groups.js");

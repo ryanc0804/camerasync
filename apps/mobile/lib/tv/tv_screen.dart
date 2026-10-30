@@ -127,8 +127,8 @@ class _TvScreenState extends State<TvScreen> {
     final preview = angle.previewUrl;
     if (preview == null || i == _focused) return angle.url;
     final screen = MediaQuery.of(context);
-    final area = Size(screen.size.width - 2 * _margin,
-        screen.size.height - 2 * _margin);
+    final area =
+        Size(screen.size.width - 2 * _margin, screen.size.height - 2 * _margin);
     return usePreviews(area, _liveAngles.length, screen.devicePixelRatio,
             gap: _gap)
         ? preview
@@ -292,9 +292,13 @@ class _TvScreenState extends State<TvScreen> {
 
   Future<VideoPlayerController?> _open(int i) async {
     final cookie = _cookie;
+    final url = _urlFor(i);
     final player = VideoPlayerController.networkUrl(
-      Uri.parse(_urlFor(i)),
-      httpHeaders: {if (cookie != null) 'Cookie': cookie},
+      Uri.parse(url),
+      // The login only goes to our server; a CDN link is signed.
+      httpHeaders: {
+        if (cookie != null && !_isCdnLink(url)) 'Cookie': cookie,
+      },
     );
     try {
       await player.initialize();
@@ -486,3 +490,7 @@ class _TvScreenState extends State<TvScreen> {
     );
   }
 }
+
+/// A signed CDN link (see the server's storage/cdn.js) rather than one to
+/// our server.
+bool _isCdnLink(String url) => url.contains('Key-Pair-Id=');

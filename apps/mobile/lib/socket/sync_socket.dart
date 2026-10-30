@@ -26,8 +26,7 @@ class SessionMember {
   /// False for a host or admin running the session without recording.
   final bool camera;
 
-  String get displayName =>
-      (name != null && name!.isNotEmpty) ? name! : email;
+  String get displayName => (name != null && name!.isNotEmpty) ? name! : email;
 
   factory SessionMember.fromJson(Map json) => SessionMember(
         id: (json['id'] as num).toInt(),
@@ -337,6 +336,25 @@ class SyncSocket {
     }
   }
 
+  /// One small round trip to the server, for showing how good the
+  /// connection is: its time in ms, or null when it didn't get through.
+  Future<int?> ping() async {
+    try {
+      final t0 = DateTime.now().millisecondsSinceEpoch;
+      final res = await http
+          .post(
+            Uri.parse('$serverUrl/timesync'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'jsonrpc': '2.0', 'id': 0, 'method': 'timesync'}),
+          )
+          .timeout(const Duration(seconds: 4));
+      if (res.statusCode != 200) return null;
+      return DateTime.now().millisecondsSinceEpoch - t0;
+    } catch (_) {
+      return null;
+    }
+  }
+
   int serverToLocal(int serverEpochMs) => serverEpochMs + _clockOffsetMs;
 
   /// The server clock is the shared reference, so a local instant maps back
@@ -369,7 +387,9 @@ class SyncSocket {
     var id = prefs.getString('deviceId');
     if (id == null) {
       final random = Random.secure();
-      id = List.generate(16, (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+      id = List.generate(
+              16, (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'))
+          .join();
       await prefs.setString('deviceId', id);
     }
     return id;
@@ -426,8 +446,7 @@ class SyncSocket {
         final session = reply['session'];
         completer.complete(JoinResult(
           ok: true,
-          sessionName:
-              session is Map ? session['name']?.toString() : null,
+          sessionName: session is Map ? session['name']?.toString() : null,
           canControl: session is Map && session['canControl'] == true,
           createdBy:
               session is Map ? (session['createdBy'] as num?)?.toInt() : null,

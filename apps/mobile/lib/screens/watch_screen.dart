@@ -148,6 +148,121 @@ class _WatchScreenState extends State<WatchScreen> {
   /// switch happens once the take ends.
   bool _midTake = false;
   Duration _position = Duration.zero;
+
+  /// The playhead to the frame while playing, for the scrub bar alone
+  /// ([_position] moves the rest of the screen once a second).
+  final _barAt = ValueNotifier(Duration.zero);
+
+  /// How far ahead every angle on screen has loaded, on the shared
+  /// timeline: the scrub bar's light grey part, like YouTube's. The slowest
+  /// angle sets it, since playback waits for that one.
+  final _loadedTo = ValueNotifier(Duration.zero);
+
+  /// Whether every angle on screen has [at] (on the shared timeline)
+  /// loaded already.
+  bool _loadedAt(Duration at) {
+    for (final entry in _players.entries) {
+      if (!_liveAngles.contains(entry.key)) continue;
+      final target = at + _trimOf(entry.key);
+      if (!entry.value.value.buffered
+          .any((range) => range.start <= target && target <= range.end)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  Duration _loadedAhead() {
+    Duration? least;
+    for (final entry in _players.entries) {
+      if (!_liveAngles.contains(entry.key)) continue;
+      final value = entry.value.value;
+      final trim = _trimOf(entry.key);
+      var end = value.position;
+      for (final range in value.buffered) {
+        if (range.start <= value.position + const Duration(milliseconds: 500) &&
+            range.end > end) {
+          end = range.end;
+        }
+      }
+      final ahead = end - trim;
+      if (least == null || ahead < least) least = ahead;
+    }
+    return least ?? Duration.zero;
+  }
+
+  /// Where the scrub bar's handle is held while it's dragged, and whether
+  /// playback picks up again when it's let go.
+  Duration? _dragTo;
+  bool _dragWasPlaying = false;
+
+  /// The moment every angle's still shows, from the start of a drag until
+  /// the videos have landed where it was let go (see [_stillFor]).
+  Duration? _stillsAt;
+
+  /// Every angle being watched has its stills, so a drag shows those
+  /// rather than moving the videos.
+  bool get _haveStills {
+    final recording = _recording;
+    final live = _liveAngles;
+    return recording != null &&
+        live.isNotEmpty &&
+        live.every((i) => recording.videos[i].scrub != null);
+  }
+
+  /// Starts downloading, for the angles being watched, the still sheets
+  /// for [at] and a little past it (each sheet is 20 s of one angle), so
+  /// only the parts a drag reaches are fetched.
+  void _fetchSheetsNear(Duration at) {
+    final recording = _recording;
+    if (recording == null) return;
+    for (final i in _liveAngles) {
+      final scrub = recording.videos[i].scrub;
+      if (scrub == null) continue;
+      for (final ahead in const [Duration.zero, Duration(seconds: 5)]) {
+        final tile = scrub.tileAt(at + ahead + _trimOf(i));
+        precacheImage(_recordings.scrubSheet(scrub.sheets[tile.sheet]), context)
+            .ignore();
+      }
+    }
+  }
+
+  /// Angle [i]'s still for [_stillsAt], over its tile; null when not
+  /// dragging, it has none, or it isn't one being watched (the paused ones
+  /// alongside stay as they are, so their stills aren't downloaded).
+  Widget? _stillFor(int i, BoxFit fit) {
+    final at = _stillsAt;
+    final scrub = _recording?.videos[i].scrub;
+    if (at == null || scrub == null || !_liveAngles.contains(i)) return null;
+    final tile = scrub.tileAt(at + _trimOf(i));
+    return _ScrubStill(
+      scrub: scrub,
+      sheet: _recordings.scrubSheet(scrub.sheets[tile.sheet]),
+      col: tile.col,
+      row: tile.row,
+      fit: fit,
+    );
+  }
+
+  /// Waits (up to [within]) until every angle being watched can play from
+  /// where it is.
+  Future<void> _untilPlayable({
+    Duration within = const Duration(seconds: 10),
+  }) async {
+    final deadline = DateTime.now().add(within);
+    while (mounted && DateTime.now().isBefore(deadline)) {
+      final live = [
+        for (final entry in _players.entries)
+          if (_liveAngles.contains(entry.key)) entry.value,
+      ];
+      if (live.every((p) => p.value.isInitialized && !p.value.isBuffering)) {
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+  }
+
+  DateTime _dragSeekAt = DateTime(0);
   Duration _duration = Duration.zero;
   List<SessionNote> _notes = [];
 
@@ -505,10 +620,9 @@ class _WatchScreenState extends State<WatchScreen> {
   }
 
   Future<VideoPlayerController?> _tryPlayer(String url) async {
-    final cookie = widget.auth.api.cookie;
     final player = VideoPlayerController.networkUrl(
       Uri.parse(url),
-      httpHeaders: {if (cookie != null) 'Cookie': cookie},
+      httpHeaders: _recordings.mediaHeaders(url),
     );
     try {
       await player.initialize();
@@ -552,6 +666,8 @@ class _WatchScreenState extends State<WatchScreen> {
       return;
     }
     final at = _clockAt;
+    _barAt.value = at;
+    _loadedTo.value = _loadedAhead();
     if (at.inSeconds != _position.inSeconds) {
       setState(() => _position = at);
     }
@@ -653,6 +769,7 @@ class _WatchScreenState extends State<WatchScreen> {
       return;
     }
     _keepInLine?.cancel();
+    _holding = false;
     for (final p in _players.values) {
       p.pause();
     }
@@ -669,6 +786,25 @@ class _WatchScreenState extends State<WatchScreen> {
   Timer? _keepInLine;
   bool _realigning = false;
 
+  /// The other angles are paused for one that ran out of video to play,
+  /// so they carry on together once it has loaded (it shows Loading).
+  bool _holding = false;
+
+  /// When each player started buffering. A jump, even to a part that's
+  /// loaded already, reports a moment of buffering while it decodes; only
+  /// one that lasts counts as loading.
+  final Map<VideoPlayerController, DateTime> _bufferingSince = {};
+  static const _loadingAfter = Duration(milliseconds: 500);
+
+  bool _reallyLoading(VideoPlayerController p) {
+    if (!p.value.isBuffering) {
+      _bufferingSince.remove(p);
+      return false;
+    }
+    final since = _bufferingSince.putIfAbsent(p, DateTime.now);
+    return DateTime.now().difference(since) >= _loadingAfter;
+  }
+
   Future<void> _realign() async {
     final clockIndex = _clockIndex;
     final clock = _clockPlayer;
@@ -678,6 +814,26 @@ class _WatchScreenState extends State<WatchScreen> {
         clock == null ||
         _players.length < 2) {
       return;
+    }
+    final live = [
+      for (final entry in _players.entries)
+        if (_liveAngles.contains(entry.key)) entry.value,
+    ];
+    final loading = [for (final p in live) _reallyLoading(p)];
+    if (loading.contains(true)) {
+      if (!_holding) {
+        _holding = true;
+        for (var i = 0; i < live.length; i++) {
+          if (!loading[i]) live[i].pause();
+        }
+      }
+      return;
+    }
+    if (_holding) {
+      _holding = false;
+      for (final p in live) {
+        p.play();
+      }
     }
     _realigning = true;
     try {
@@ -748,6 +904,8 @@ class _WatchScreenState extends State<WatchScreen> {
     if (_onTv) TvLink.instance.send(TvAction.idle);
     _keepInLine?.cancel();
     _closeAllPlayers();
+    _barAt.dispose();
+    _loadedTo.dispose();
     super.dispose();
   }
 
@@ -1127,61 +1285,145 @@ class _WatchScreenState extends State<WatchScreen> {
   }
 
   /// A scrub bar with a blue dot wherever someone left a comment. Tap the
-  /// bar to jump there, or a dot to jump to its comment.
+  /// bar to jump there, drag the handle to scrub (the angles follow a few
+  /// times a second; letting go lands exactly there, playing again if it
+  /// was), or tap a dot to jump to its comment.
   Widget _timeline() {
     final team = TeamAccent.of(context);
     final total = _duration.inMilliseconds;
     return Padding(
       padding: const EdgeInsets.fromLTRB(21, 0, 21, 4),
       child: SizedBox(
-        height: 28,
+        height: 32,
         child: LayoutBuilder(builder: (context, constraints) {
           final width = constraints.maxWidth;
           double xOf(int ms) =>
               total <= 0 ? 0 : (ms / total).clamp(0.0, 1.0) * width;
+          Duration at(double dx) => Duration(
+              milliseconds: (dx / width * total).round().clamp(0, total));
           return GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTapDown: total <= 0
+            onTapDown: total <= 0 ? null : (d) => _seek(at(d.localPosition.dx)),
+            onHorizontalDragStart: total <= 0
                 ? null
-                : (d) => _seek(Duration(
-                    milliseconds:
-                        (d.localPosition.dx / width * total).round())),
-            child: Stack(
-              alignment: Alignment.centerLeft,
-              clipBehavior: Clip.none,
-              children: [
-                Container(
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF333333),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                Container(
-                  width: xOf(_position.inMilliseconds),
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: team.accent,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                for (final n in _notes)
-                  Positioned(
-                    left: xOf(n.videoTimeMs) - 7,
-                    child: GestureDetector(
-                      onTap: () => _seek(Duration(milliseconds: n.videoTimeMs)),
-                      child: Container(
-                        width: 14,
-                        height: 14,
-                        decoration: BoxDecoration(
-                          color: _commentBlue,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: kBackground, width: 2),
-                        ),
+                : (d) {
+                    _dragWasPlaying = _playing;
+                    if (_playing) _pause();
+                    final to = at(d.localPosition.dx);
+                    _fetchSheetsNear(to);
+                    setState(() {
+                      _dragTo = to;
+                      if (_haveStills) _stillsAt = to;
+                    });
+                  },
+            onHorizontalDragUpdate: total <= 0
+                ? null
+                : (d) {
+                    final to = at(d.localPosition.dx);
+                    // With stills, every angle shows this instant at once;
+                    // the videos stay put until it's let go.
+                    if (_haveStills) {
+                      setState(() => _dragTo = _stillsAt = to);
+                      _fetchSheetsNear(to);
+                      return;
+                    }
+                    setState(() => _dragTo = to);
+                    final now = DateTime.now();
+                    // Shown as it moves only where it's loaded already;
+                    // elsewhere the angles hold still until let go, rather
+                    // than start downloads thrown away a moment later.
+                    if (now.difference(_dragSeekAt).inMilliseconds >= 200 &&
+                        _loadedAt(to)) {
+                      _dragSeekAt = now;
+                      unawaited(_seek(to));
+                    }
+                  },
+            onHorizontalDragEnd: total <= 0
+                ? null
+                : (_) async {
+                    final to = _dragTo;
+                    setState(() => _dragTo = null);
+                    if (to != null) await _seek(to);
+                    // The stills stay up until every angle can play from
+                    // there, then they all start together.
+                    if (_stillsAt != null) {
+                      await _untilPlayable();
+                      if (!mounted) return;
+                      setState(() => _stillsAt = null);
+                    }
+                    if (_dragWasPlaying && mounted) _play();
+                  },
+            child: ListenableBuilder(
+              listenable: Listenable.merge([_barAt, _loadedTo]),
+              builder: (context, _) {
+                final barAt = _barAt.value;
+                final shown =
+                    _dragTo ?? (_playing && !_onTv ? barAt : _position);
+                final x = xOf(shown.inMilliseconds);
+                final handle = _dragTo != null ? 22.0 : 16.0;
+                return Stack(
+                  alignment: Alignment.centerLeft,
+                  clipBehavior: Clip.none,
+                  children: [
+                    Container(
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF3A3A3A),
+                        borderRadius: BorderRadius.circular(3),
                       ),
                     ),
-                  ),
-              ],
+                    Container(
+                      width: xOf(_loadedTo.value.inMilliseconds),
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF8A8A8A),
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ),
+                    Container(
+                      width: x,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: team.accent,
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ),
+                    for (final n in _notes)
+                      Positioned(
+                        left: xOf(n.videoTimeMs) - 7,
+                        child: GestureDetector(
+                          onTap: () =>
+                              _seek(Duration(milliseconds: n.videoTimeMs)),
+                          child: Container(
+                            width: 14,
+                            height: 14,
+                            decoration: BoxDecoration(
+                              color: _commentBlue,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: kBackground, width: 2),
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (total > 0)
+                      Positioned(
+                        left: x - handle / 2,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 100),
+                          width: handle,
+                          height: handle,
+                          decoration: const BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(blurRadius: 3, color: Colors.black54),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
             ),
           );
         }),
@@ -1233,6 +1475,7 @@ class _WatchScreenState extends State<WatchScreen> {
               video: recording.videos[_selected],
               player: player,
               fit: BoxFit.contain,
+              still: _stillFor(_selected, BoxFit.contain),
             ),
           ),
         ),
@@ -1274,6 +1517,7 @@ class _WatchScreenState extends State<WatchScreen> {
                         video: recording.videos[angles[k]],
                         player: _players[angles[k]],
                         fit: BoxFit.contain,
+                        still: _stillFor(angles[k], BoxFit.contain),
                       ),
                     ),
                   ),
@@ -1330,6 +1574,7 @@ class _WatchScreenState extends State<WatchScreen> {
                   player: _players[i],
                   fit: BoxFit.cover,
                   missingLabel: 'Tap to show',
+                  still: _stillFor(i, BoxFit.cover),
                 ),
               ),
             ),
@@ -1430,7 +1675,7 @@ class _WatchScreenState extends State<WatchScreen> {
                   ),
                   Expanded(child: _timeline()),
                   Text(
-                    '${formatClock(_position)} / ${formatClock(_duration)}',
+                    '${formatClock(_dragTo ?? _position)} / ${formatClock(_duration)}',
                     style: TextStyle(color: team.accent, fontSize: 13),
                   ),
                   if (recording != null)
@@ -1499,7 +1744,7 @@ class _WatchScreenState extends State<WatchScreen> {
                 ? () => _seek(_position - const Duration(seconds: 10))
                 : null,
             child: Text(
-              '${formatClock(_position)} / ${formatClock(_duration)}',
+              '${formatClock(_dragTo ?? _position)} / ${formatClock(_duration)}',
               style: TextStyle(
                 color: team.accent.withValues(alpha: 0.8),
                 fontSize: 22,
@@ -1832,9 +2077,14 @@ class _AngleTile extends StatelessWidget {
     required this.player,
     this.fit = BoxFit.cover,
     this.missingLabel = 'Not uploaded',
+    this.still,
   });
 
   final AngleVideo video;
+
+  /// Over the video while the seek bar is dragged: its still for the moment
+  /// under the finger.
+  final Widget? still;
   final VideoPlayerController? player;
   final BoxFit fit;
 
@@ -1875,8 +2125,9 @@ class _AngleTile extends StatelessWidget {
                   child: VideoPlayer(p),
                 ),
               )
-            // The upload's stage and percent once the device reports it;
-            // a spinner only until then.
+            // The upload's stage and percent once the device reports it.
+            // No spinner: the only one is on an angle that's loading to
+            // play, so it's clear which that is.
             else if (video.upload != null && _uploadLabel != null)
               Center(
                 child: Text(
@@ -1892,20 +2143,8 @@ class _AngleTile extends StatelessWidget {
               )
             else if (video.stillUploading)
               const Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SizedBox.square(
-                      dimension: 22,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2.5, color: Color(0xFFCFCBD6)),
-                    ),
-                    SizedBox(height: 8),
-                    Text('Uploading…',
-                        style:
-                            TextStyle(color: Color(0xFFCFCBD6), fontSize: 12)),
-                  ],
-                ),
+                child: Text('Uploading…',
+                    style: TextStyle(color: Color(0xFFCFCBD6), fontSize: 12)),
               )
             else
               Center(
@@ -1913,6 +2152,34 @@ class _AngleTile extends StatelessWidget {
                   video.url == null ? 'Not uploaded' : missingLabel,
                   style:
                       const TextStyle(color: Color(0xFFCFCBD6), fontSize: 12),
+                ),
+              ),
+            if (still case final still?) Positioned.fill(child: still),
+            // This angle is loading to play: marked on its own tile, so it's
+            // clear which one everything's waiting on.
+            if (p != null && p.value.isInitialized)
+              _LoadingAfterDelay(
+                player: p,
+                child: const ColoredBox(
+                  color: Color(0x73000000),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox.square(
+                          dimension: 22,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2.5, color: Colors.white),
+                        ),
+                        SizedBox(height: 8),
+                        Text('Loading',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             Positioned(
@@ -2066,6 +2333,121 @@ class _AddCommentSheetState extends State<_AddCommentSheet> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Shows [child] while [player] is loading, but only once it has been for
+/// a moment: a jump reports a blip of buffering even into a part that's
+/// loaded already, which would otherwise flash "Loading".
+class _LoadingAfterDelay extends StatefulWidget {
+  const _LoadingAfterDelay({required this.player, required this.child});
+
+  final VideoPlayerController player;
+  final Widget child;
+
+  @override
+  State<_LoadingAfterDelay> createState() => _LoadingAfterDelayState();
+}
+
+class _LoadingAfterDelayState extends State<_LoadingAfterDelay> {
+  Timer? _timer;
+  bool _shown = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.player.addListener(_changed);
+    _changed();
+  }
+
+  @override
+  void didUpdateWidget(_LoadingAfterDelay old) {
+    super.didUpdateWidget(old);
+    if (old.player != widget.player) {
+      old.player.removeListener(_changed);
+      widget.player.addListener(_changed);
+      _changed();
+    }
+  }
+
+  void _changed() {
+    if (!widget.player.value.isBuffering) {
+      _timer?.cancel();
+      _timer = null;
+      if (_shown) setState(() => _shown = false);
+      return;
+    }
+    _timer ??= Timer(const Duration(milliseconds: 500), () {
+      if (mounted) setState(() => _shown = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    widget.player.removeListener(_changed);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      _shown ? widget.child : const SizedBox.shrink();
+}
+
+/// One still out of a sheet of them (see [ScrubStills]), fitted to its tile
+/// like the video under it. Nothing until its sheet has downloaded: the
+/// paused video shows meanwhile.
+class _ScrubStill extends StatelessWidget {
+  const _ScrubStill({
+    required this.scrub,
+    required this.sheet,
+    required this.col,
+    required this.row,
+    required this.fit,
+  });
+
+  final ScrubStills scrub;
+  final ImageProvider sheet;
+  final int col;
+  final int row;
+  final BoxFit fit;
+
+  @override
+  Widget build(BuildContext context) {
+    final w = scrub.width.toDouble();
+    final h = scrub.height.toDouble();
+    return Image(
+      image: sheet,
+      width: w * scrub.cols,
+      height: h * scrub.rows,
+      fit: BoxFit.fill,
+      frameBuilder: (context, image, frame, _) => frame == null
+          ? const SizedBox.shrink()
+          : ColoredBox(
+              color: Colors.black,
+              child: FittedBox(
+                fit: fit,
+                clipBehavior: Clip.hardEdge,
+                child: SizedBox(
+                  width: w,
+                  height: h,
+                  child: ClipRect(
+                    child: OverflowBox(
+                      alignment: Alignment.topLeft,
+                      minWidth: w * scrub.cols,
+                      maxWidth: w * scrub.cols,
+                      minHeight: h * scrub.rows,
+                      maxHeight: h * scrub.rows,
+                      child: Transform.translate(
+                        offset: Offset(-col * w, -row * h),
+                        child: image,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
     );
   }
 }

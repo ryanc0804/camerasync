@@ -80,6 +80,7 @@ class AngleVideo {
     this.startOffsetMs,
     this.takeStartedAtMs,
     this.upload,
+    this.scrub,
   });
 
   final int userId;
@@ -102,6 +103,10 @@ class AngleVideo {
 
   /// How far along its upload is, while the full video isn't in yet.
   final UploadProgress? upload;
+
+  /// Stills shown while the seek bar is dragged; null until the server has
+  /// made them.
+  final ScrubStills? scrub;
 
   /// Shown as on its way for this long after the take.
   static const uploadWait = Duration(minutes: 30);
@@ -133,6 +138,56 @@ class AngleVideo {
         upload: json['upload'] is Map
             ? UploadProgress.fromJson(Map<String, dynamic>.from(json['upload']))
             : null,
+        scrub: json['scrub'] is Map
+            ? ScrubStills.fromJson(Map<String, dynamic>.from(json['scrub']))
+            : null,
+      );
+}
+
+/// An angle's small stills, several a second, tiled [cols] x [rows] to a
+/// sheet (see the server's recordings/scrubFrames.js): frame k of the
+/// video's own timeline (k / [fps] s) is tile k % (cols * rows) of sheet
+/// k ~/ (cols * rows), left to right, top to bottom.
+class ScrubStills {
+  const ScrubStills({
+    required this.fps,
+    required this.width,
+    required this.height,
+    required this.cols,
+    required this.rows,
+    required this.frames,
+    required this.sheets,
+  });
+
+  final int fps;
+
+  /// One still's size in the sheet.
+  final int width;
+  final int height;
+  final int cols;
+  final int rows;
+  final int frames;
+
+  /// Server paths of the sheets, in order.
+  final List<String> sheets;
+
+  /// Which sheet, column and row hold the still for [at] into the video.
+  ({int sheet, int col, int row}) tileAt(Duration at) {
+    final frame =
+        (at.inMilliseconds * fps ~/ 1000).clamp(0, frames - 1).toInt();
+    final perSheet = cols * rows;
+    final index = frame % perSheet;
+    return (sheet: frame ~/ perSheet, col: index % cols, row: index ~/ cols);
+  }
+
+  factory ScrubStills.fromJson(Map<String, dynamic> json) => ScrubStills(
+        fps: (json['fps'] as num).toInt(),
+        width: (json['width'] as num).toInt(),
+        height: (json['height'] as num).toInt(),
+        cols: (json['cols'] as num).toInt(),
+        rows: (json['rows'] as num).toInt(),
+        frames: (json['frames'] as num).toInt(),
+        sheets: [for (final sheet in json['sheets'] as List) sheet.toString()],
       );
 }
 
@@ -372,12 +427,28 @@ class RecordingsApi {
   ImageProvider? thumbnailOf(RecordingSession session) {
     final path = session.thumbnailUrl;
     if (path == null) return null;
-    final cookie = _api.cookie;
-    return NetworkImage(absoluteUrl(path),
-        headers: {if (cookie != null) 'Cookie': cookie});
+    final url = absoluteUrl(path);
+    return NetworkImage(url, headers: mediaHeaders(url));
   }
 
-  /// Turns a server-relative path like `/api/files/get/x.mp4` into a full URL.
+  /// One sheet of an angle's seek-bar stills (see [ScrubStills]).
+  ImageProvider scrubSheet(String path) {
+    final url = absoluteUrl(path);
+    return NetworkImage(url, headers: mediaHeaders(url));
+  }
+
+  /// What to send with a request for a stored file at [url]: the login
+  /// cookie to this server (which checks it), nothing to the CDN (its links
+  /// are signed, and the cookie is nobody else's business).
+  Map<String, String> mediaHeaders(String url) {
+    final cookie = _api.cookie;
+    return {
+      if (cookie != null && url.startsWith(_api.baseUrl)) 'Cookie': cookie,
+    };
+  }
+
+  /// Turns a server-relative path like `/api/files/get/x.mp4` into a full
+  /// URL; a full one (a signed CDN link) is left as it is.
   String absoluteUrl(String path) =>
       path.startsWith('http') ? path : '${_api.baseUrl}$path';
 

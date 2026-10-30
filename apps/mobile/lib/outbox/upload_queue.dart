@@ -110,7 +110,8 @@ enum UploadEvent { uploaded, unrecorded, rejected }
 /// wait (5 s, 15 s, 30 s, 1 min, 2 min, then every 5 min) until it gets
 /// through. No upload starts while a take is starting or running ([pause]),
 /// so the start and stop messages aren't stuck behind video on a slow
-/// network; one already sending is let finish.
+/// network; one already sending is stopped, and sent again from the start
+/// once the take is over.
 class UploadQueue extends ChangeNotifier {
   UploadQueue(this._api, {PreviewMaker? makePreview, Directory? dir})
       : _makePreview = makePreview ?? makeVideoPreview,
@@ -352,6 +353,9 @@ class UploadQueue extends ChangeNotifier {
     await _save();
   }
 
+  /// The upload in progress was stopped for a [pause], not by a failure.
+  bool _stoppedForPause = false;
+
   Future<void> _send(QueuedTake item, {bool preview = false}) async {
     sending = item;
     sendingStage = preview ? 'preview' : 'full';
@@ -371,6 +375,11 @@ class UploadQueue extends ChangeNotifier {
         preview: preview,
         timeout: const Duration(minutes: 30),
         onProgress: (sent, total) {
+          // Throwing here ends the file's stream, which ends the upload.
+          if (paused) {
+            _stoppedForPause = true;
+            throw StateError('Upload paused for a take');
+          }
           _showProgress(sent, total);
           _reportProgress(item, preview ? 'preview' : 'full', sent, total);
         },
@@ -383,6 +392,7 @@ class UploadQueue extends ChangeNotifier {
         _event(UploadEvent.uploaded);
       }
     } on ApiException catch (e) {
+      if (_wasPaused()) return;
       // The server looked at it and said no (not a video, session gone):
       // trying again won't change that. Anything else (no connection, the
       // server busy, signed out) is worth another go.
@@ -401,8 +411,17 @@ class UploadQueue extends ChangeNotifier {
         _failed(item, e.message);
       }
     } catch (e) {
+      if (_wasPaused()) return;
       _failed(item, '$e');
     }
+  }
+
+  /// Whether the upload just ended was stopped for a [pause]. It then waits
+  /// in the queue as it was, with no failed try counted.
+  bool _wasPaused() {
+    if (!_stoppedForPause) return false;
+    _stoppedForPause = false;
+    return true;
   }
 
   /// How often an upload's progress is sent to the server, for the bars

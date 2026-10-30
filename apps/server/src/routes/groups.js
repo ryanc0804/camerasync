@@ -507,7 +507,7 @@ groupRouter.delete("/:id", async (req, res) => {
       [req.params.id]
     );
     const { rows: videos } = await client.query(
-      `SELECT v.file_id, v.preview_file_id, v.thumbnail_file_id FROM recording_session_videos v
+      `SELECT v.file_id, v.preview_file_id, v.thumbnail_file_id, v.scrub FROM recording_session_videos v
          JOIN recording_sessions rs ON rs.id = v.session_id
         WHERE rs.group_id = $1 AND v.file_id IS NOT NULL`,
       [req.params.id]
