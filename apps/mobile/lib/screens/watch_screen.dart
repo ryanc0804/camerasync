@@ -210,30 +210,71 @@ class _WatchScreenState extends State<WatchScreen> {
         live.every((i) => recording.videos[i].scrub != null);
   }
 
-  /// Starts downloading, for the angles being watched, the still sheets
+  /// Every angle drawn on screen: the ones playing and, beside the big one
+  /// on a phone, the paused ones in the strip. While the seek bar is
+  /// dragged they all show the same instant.
+  Set<int> get _shownAngles => {
+        ..._liveAngles,
+        if (!_gridMode) ..._stillAngles,
+      };
+
+  /// Still sheets (by path) that have downloaded, and ones downloading.
+  final Set<String> _loadedSheets = {};
+  final Set<String> _fetchingSheets = {};
+
+  /// The sheet angle [i] needs for [at], or null without stills.
+  String? _sheetFor(int i, Duration at) {
+    final scrub = _recording?.videos[i].scrub;
+    if (scrub == null) return null;
+    return scrub.sheets[scrub.tileAt(at + _trimOf(i)).sheet];
+  }
+
+  /// Whether every angle on screen with stills has its sheet for [at]: they
+  /// switch to their stills together, as one angle moving while another
+  /// sits on the old moment would look out of sync.
+  bool _stillsReadyAt(Duration at) => _shownAngles.every((i) {
+        final sheet = _sheetFor(i, at);
+        return sheet == null || _loadedSheets.contains(sheet);
+      });
+
+  /// Starts downloading, for every angle on screen, the still sheets
   /// for [at] and a little past it (each sheet is 20 s of one angle), so
   /// only the parts a drag reaches are fetched.
   void _fetchSheetsNear(Duration at) {
     final recording = _recording;
     if (recording == null) return;
-    for (final i in _liveAngles) {
-      final scrub = recording.videos[i].scrub;
-      if (scrub == null) continue;
+    for (final i in _shownAngles) {
       for (final ahead in const [Duration.zero, Duration(seconds: 5)]) {
-        final tile = scrub.tileAt(at + ahead + _trimOf(i));
-        precacheImage(_recordings.scrubSheet(scrub.sheets[tile.sheet]), context)
-            .ignore();
+        final sheet = _sheetFor(i, at + ahead);
+        if (sheet == null ||
+            _loadedSheets.contains(sheet) ||
+            !_fetchingSheets.add(sheet)) {
+          continue;
+        }
+        var failed = false;
+        precacheImage(_recordings.scrubSheet(sheet), context,
+            onError: (_, __) => failed = true).then((_) {
+          _fetchingSheets.remove(sheet);
+          // A failed one is asked for again on the next move.
+          if (failed) return;
+          _loadedSheets.add(sheet);
+          if (mounted && _stillsAt != null) setState(() {});
+        });
       }
     }
   }
 
   /// Angle [i]'s still for [_stillsAt], over its tile; null when not
-  /// dragging, it has none, or it isn't one being watched (the paused ones
-  /// alongside stay as they are, so their stills aren't downloaded).
+  /// dragging, it has none, or not every angle's sheet is here yet.
   Widget? _stillFor(int i, BoxFit fit) {
     final at = _stillsAt;
     final scrub = _recording?.videos[i].scrub;
-    if (at == null || scrub == null || !_liveAngles.contains(i)) return null;
+    if (at == null ||
+        scrub == null ||
+        !_shownAngles.contains(i) ||
+        !_stillsReadyAt(at)) {
+      return null;
+    }
     final tile = scrub.tileAt(at + _trimOf(i));
     return _ScrubStill(
       scrub: scrub,
