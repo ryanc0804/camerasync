@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
 import {
   createSessionNote,
   deleteSessionNote,
   getSessionNotes,
+  deleteRecording,
   getSessionVideos,
   mediaCors,
   sessionDownloadUrl,
@@ -25,8 +26,12 @@ export function PlaybackScreen({ live = null } = {}) {
   const params = useParams();
   const sessionId = live?.sessionId ?? params.sessionId;
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [session, setSession] = useState(null);
   const [recordings, setRecordings] = useState([]);
+  // Whether this user can delete recordings (an admin of the group).
+  const [canDelete, setCanDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notes, setNotes] = useState([]);
@@ -46,11 +51,30 @@ export function PlaybackScreen({ live = null } = {}) {
         if (cancelled) return;
         setSession(data.session);
         setRecordings(data.recordings);
+        setCanDelete(Boolean(data.canDelete));
       })
       .catch((err) => { if (!cancelled) setError(err.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [sessionId]);
+
+  // Deletes the open recording, after asking, and goes back to the list.
+  const deleteThisRecording = async () => {
+    const name = takeName(recording, recordingIndex);
+    if (!window.confirm(`Delete ${name}? Every angle of it and its comments go too. This can't be undone.`)) return;
+    setDeleting(true);
+    try {
+      await deleteRecording(sessionId, recording.startedAt);
+      const data = await getSessionVideos(sessionId);
+      setRecordings(data.recordings);
+      if (live) setLiveChoice(0);
+      else navigate(`/watch/${sessionId}`, { replace: true });
+    } catch (err) {
+      window.alert(err.message);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   // A session opens on its list of recordings (takes); ?recording=N plays
   // one. A session with a single recording goes straight to it.
@@ -115,6 +139,17 @@ export function PlaybackScreen({ live = null } = {}) {
               )}
             </h1>
             <div className="playback-title-tools" ref={setToolsSlot} />
+            {canDelete && recording && (
+              <button type="button" className="playback-delete" disabled={deleting}
+                aria-label={`Delete ${takeName(recording, recordingIndex)}`}
+                title={`Delete ${takeName(recording, recordingIndex)}`}
+                onClick={deleteThisRecording}>
+                <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true">
+                  <path d="M4 7h16M10 11v6m4-6v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"
+                    fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            )}
             {recordings.some((recording) => recording.videos.some((video) => video.url)) && (
               <a className="playback-download" href={sessionDownloadUrl(sessionId)} download
                 aria-label="Download all videos" title="Download all videos">
@@ -1319,6 +1354,13 @@ const css = `
     width: 38px; height: 38px; border-radius: 8px; color: var(--accent);
   }
   .playback-page .playback-download:hover { background: rgba(255,255,255,0.08); }
+  .playback-page .playback-delete {
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+    width: 38px; height: 38px; border-radius: 8px; border: none; background: none;
+    color: #e5484d; cursor: pointer; padding: 0;
+  }
+  .playback-page .playback-delete:hover { background: rgba(229,72,77,0.12); }
+  .playback-page .playback-delete:disabled { opacity: 0.5; cursor: default; }
   .playback-box { position: relative; }
   .playback-box:fullscreen { background: #050505; padding: 10px 20px 8px; box-sizing: border-box; overflow: hidden; }
   .playback-box::backdrop { background: #050505; }

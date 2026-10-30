@@ -203,6 +203,34 @@ describe("preview first", () => {
     expect((await request(app).get(`${base}/${uploadId}`).set("Cookie", cookie)).status).toBe(404);
   });
 
+  it("deletes one recording, and turns away a late upload of it", async () => {
+    if (!hasFfmpeg) return;
+    const keep = Date.now() - 9_000;
+    const gone = Date.now() - 8_000;
+    expect((await upload(full, keep)).status).toBe(201);
+    expect((await upload(full, gone)).status).toBe(201);
+    const listed = async () => (await request(app)
+      .get(`/api/recordings/sessions/${sessionId}/videos`)
+      .set("Cookie", cookie)).body.recordings.map((r) => r.startedAt);
+
+    const res = await request(app)
+      .delete(`/api/recordings/sessions/${sessionId}/recordings/${gone}`)
+      .set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    expect(await listed()).toContain(keep);
+    expect(await listed()).not.toContain(gone);
+
+    // A phone still sending it can't bring it back.
+    expect((await upload(full, gone)).status).toBe(410);
+    expect((await request(app).post(`/api/recordings/sessions/${sessionId}/videos`)
+      .set("Cookie", cookie).send({ startedAt: gone })).status).toBe(410);
+    expect(await listed()).not.toContain(gone);
+    // Twice is not found.
+    expect((await request(app)
+      .delete(`/api/recordings/sessions/${sessionId}/recordings/${gone + 1}`)
+      .set("Cookie", cookie)).status).toBe(404);
+  });
+
   it("ignores a preview that arrives after the full video", async () => {
     if (!hasFfmpeg) return;
     const startedAt = Date.now() - 4_000;
