@@ -28,7 +28,7 @@ import {
 } from "../sockets/websocket.js";
 import { deleteRecordingFiles, storedFileIds } from "./file.js";
 import { EVENTS } from "../sockets/events.js";
-import { ensureRecordingNumber } from "../recordings/numbering.js";
+import { ensureRecordingNumber, isRecordingDeleted } from "../recordings/numbering.js";
 import { START_OFFSET_UPSERT_SQL, startClock, startOffsetMs } from "../recordings/startOffset.js";
 import { STAGES, progressFor, reportProgress } from "../recordings/uploadProgress.js";
 import { startOffsetFromBeep, startOffsetFromEndBeep } from "../recordings/syncBeep.js";
@@ -194,6 +194,62 @@ recordingsRouter.delete("/sessions/:id", requireAuth, async (req, res, next) => 
   }
 });
 
+// Admins and the group owner can delete one recording (every angle of it,
+// with its comments), live session or not, unless it's being recorded now.
+// Its number stays taken and marked deleted, so the other recordings keep
+// theirs and a phone still uploading it is turned away.
+recordingsRouter.delete("/sessions/:id/recordings/:startedAt", requireAuth, async (req, res, next) => {
+  const startedAt = Number(req.params.startedAt);
+  if (!SESSION_ID_PATTERN.test(req.params.id) || !Number.isSafeInteger(startedAt) || startedAt <= 0) {
+    return res.status(400).json({ error: "Invalid recording." });
+  }
+  let client;
+  try {
+    const role = await getSessionRole(req.params.id, req.user.id);
+    if (!atLeast(role, "admin")) {
+      return res.status(403).json({ error: "Only group admins can delete recordings." });
+    }
+    const active = await getRecordingSession(req.params.id).catch(() => null);
+    if (Number(active?.recording?.startAtEpochMs) === startedAt) {
+      return res.status(409).json({ error: "Stop this recording before deleting it." });
+    }
+    client = await pool.connect();
+    await client.query("BEGIN");
+    const { rows: videos } = await client.query(
+      `SELECT file_id, preview_file_id, thumbnail_file_id, scrub FROM recording_session_videos
+        WHERE session_id = $1 AND started_at_ms = $2 FOR UPDATE`,
+      [req.params.id, startedAt]
+    );
+    const { rowCount: known } = await client.query(
+      `UPDATE session_recordings SET deleted_at = NOW()
+        WHERE session_id = $1 AND started_at_ms = $2`,
+      [req.params.id, startedAt]
+    );
+    if (videos.length === 0 && known === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Recording not found." });
+    }
+    await client.query(
+      "DELETE FROM recording_session_videos WHERE session_id = $1 AND started_at_ms = $2",
+      [req.params.id, startedAt]
+    );
+    await client.query(
+      "DELETE FROM session_notes WHERE session_id = $1 AND started_at_ms = $2",
+      [req.params.id, startedAt]
+    );
+    await client.query("COMMIT");
+    // The rows are gone first, so nothing points at a missing file.
+    await deleteRecordingFiles(storedFileIds(videos)).catch((err) =>
+      console.error("Could not delete a recording's files:", err));
+    res.json({ ok: true });
+  } catch (err) {
+    if (client) await client.query("ROLLBACK").catch(() => {});
+    next(err);
+  } finally {
+    client?.release();
+  }
+});
+
 // How much later a camera really started than its take's startedAt, which
 // players shift the angle by, and what that comes from.
 //
@@ -305,7 +361,9 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
         upload: row.file_id ? null : progressFor(req.params.id, startedAt, Number(row.user_id)),
       });
     }
-    res.json({ session: sessions[0], recordings });
+    // Admins (and the owner) can delete a recording (see below).
+    const canDelete = atLeast(await getSessionRole(req.params.id, req.user.id), "admin");
+    res.json({ session: sessions[0], recordings, canDelete });
   } catch (err) {
     next(err);
   }
@@ -331,7 +389,10 @@ recordingsRouter.post("/sessions/:id/upload-progress", requireAuth, async (req, 
     if (rows.length === 0) {
       return res.status(403).json({ error: "You did not join this session." });
     }
-    reportProgress(req.params.id, startedAt, Number(req.user.id), stage, fraction);
+    // Not for a recording that's been deleted.
+    if (!(await isRecordingDeleted(req.params.id, startedAt))) {
+      reportProgress(req.params.id, startedAt, Number(req.user.id), stage, fraction);
+    }
     res.status(204).end();
   } catch (err) {
     next(err);
@@ -357,6 +418,9 @@ recordingsRouter.post("/sessions/:id/videos", requireAuth, async (req, res, next
     // Covers participants demoted to viewer after they joined.
     if (!atLeast(await getSessionRole(req.params.id, req.user.id), "member")) {
       return res.status(403).json({ error: "Viewers can't save recordings." });
+    }
+    if (await isRecordingDeleted(req.params.id, startedAt)) {
+      return res.status(410).json({ error: "This recording was deleted." });
     }
     const number = await ensureRecordingNumber(req.params.id, startedAt);
     await pool.query(

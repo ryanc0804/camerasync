@@ -251,6 +251,15 @@ export async function deleteSession(id) {
   });
 }
 
+// Deletes one recording of a session (every angle, and its comments).
+// Admins only.
+export async function deleteRecording(id, startedAt) {
+  await request(
+    `/api/recordings/sessions/${encodeURIComponent(id)}/recordings/${startedAt}`,
+    { method: "DELETE" }
+  );
+}
+
 // loads the notes left on one recording of a session
 export async function getSessionNotes(id, startedAt) {
   const data = await request(

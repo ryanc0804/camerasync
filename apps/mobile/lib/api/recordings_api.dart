@@ -271,11 +271,15 @@ class SessionVideos {
     required this.sessionId,
     required this.sessionName,
     required this.recordings,
+    this.canDelete = false,
   });
 
   final String sessionId;
   final String sessionName;
   final List<SessionRecording> recordings;
+
+  /// This user can delete recordings (an admin of the group).
+  final bool canDelete;
 
   factory SessionVideos.fromJson(Map<String, dynamic> json) {
     final session = Map<String, dynamic>.from(json['session'] as Map);
@@ -285,6 +289,7 @@ class SessionVideos {
       recordings: ((json['recordings'] as List?) ?? const [])
           .map((r) => SessionRecording.fromJson(Map<String, dynamic>.from(r)))
           .toList(),
+      canDelete: json['canDelete'] == true,
     );
   }
 }
@@ -427,6 +432,12 @@ class RecordingsApi {
       'body': body,
       'videoTimeMs': videoTimeMs,
     });
+  }
+
+  /// Deletes one recording of a session: every angle, and its comments.
+  /// Admins only.
+  Future<void> deleteRecording(String id, int startedAtMs) async {
+    await _api.delete('/api/recordings/sessions/$id/recordings/$startedAtMs');
   }
 
   Future<void> deleteSessionNote(String id, int noteId) async {

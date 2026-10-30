@@ -15,7 +15,7 @@ import { pool } from "../db/pool.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { atLeast, getSessionRole, sessionVisibleSql } from "../middleware/groupRole.js";
 import { storage } from "../storage/index.js";
-import { ensureRecordingNumber } from "../recordings/numbering.js";
+import { ensureRecordingNumber, isRecordingDeleted } from "../recordings/numbering.js";
 import { START_OFFSET_UPSERT_SQL, startClock, startOffsetMs } from "../recordings/startOffset.js";
 import { findEndBeep, findSyncBeep } from "../recordings/syncBeep.js";
 import { remuxForStreaming } from "../recordings/remux.js";
@@ -259,6 +259,10 @@ async function checkUploader(req, res, next) {
     const role = await getSessionRole(req.query.sessionId, req.user.id);
     if (!atLeast(role, "member")) {
       return res.status(403).json({ error: "Viewers can't upload recordings." });
+    }
+    // Deleted while this device was still sending it.
+    if (await isRecordingDeleted(req.query.sessionId, startedAt)) {
+      return res.status(410).json({ error: "This recording was deleted." });
     }
     next();
   } catch (err) {

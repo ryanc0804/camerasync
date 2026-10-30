@@ -496,6 +496,47 @@ class _WatchScreenState extends State<WatchScreen> {
     await _syncPlayers(keepSources: _midTake);
   }
 
+  /// Deletes the open recording (after asking), then reloads the session.
+  Future<void> _deleteRecording() async {
+    final recording = _recording;
+    if (recording == null) return;
+    final name = 'Recording ${recording.number.toString().padLeft(3, '0')}';
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Delete $name?'),
+        content: const Text(
+            "Every angle of it and its comments go too. This can't be undone."),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style:
+                TextButton.styleFrom(foregroundColor: const Color(0xFFE5484D)),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    try {
+      await _closeAllPlayers();
+      await _recordings.deleteRecording(
+          widget.session.id, recording.startedAtMs);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('$name deleted')));
+      await _load();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+      await _openRecording();
+    }
+  }
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -1253,6 +1294,13 @@ class _WatchScreenState extends State<WatchScreen> {
               ),
             ),
           ),
+          if (_recording != null && (_videos?.canDelete ?? false))
+            IconButton(
+              onPressed: _deleteRecording,
+              tooltip: 'Delete this recording',
+              color: const Color(0xFFE5484D),
+              icon: const Icon(Icons.delete_outline, size: 24),
+            ),
           if (_recording != null)
             IconButton(
               onPressed: _downloading ? null : _download,

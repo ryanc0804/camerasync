@@ -400,3 +400,7 @@ CREATE TABLE IF NOT EXISTS resumable_uploads (
     query JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- A recording deleted on its own (its videos are gone): the number stays
+-- taken, and late uploads for it are refused (see recordings/numbering.js).
+ALTER TABLE session_recordings ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
