@@ -4,7 +4,7 @@
 import "dotenv/config";
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -160,6 +160,47 @@ describe("preview first", () => {
     expect((await upload(full, startedAt)).status).toBe(201);
     expect((await angle(startedAt)).upload).toBeNull();
     expect((await report("bogus", 0.4)).status).toBe(400);
+  });
+
+  it("takes a video in pieces, carrying on from what arrived", async () => {
+    if (!hasFfmpeg) return;
+    const startedAt = Date.now() - 4_000;
+    const bytes = readFileSync(full);
+    const half = Math.floor(bytes.length / 2);
+    const base = `/api/files/uploads`;
+
+    const start = await request(app)
+      .post(`${base}?sessionId=${sessionId}&startedAt=${startedAt}&actualStartedAt=${startedAt + 80}` +
+        `&startClock=frame&size=${bytes.length}&name=full.mp4`)
+      .set("Cookie", cookie);
+    expect(start.status).toBe(201);
+    const { uploadId } = start.body;
+    const put = (offset, chunk) => request(app)
+      .put(`${base}/${uploadId}?offset=${offset}`)
+      .set("Cookie", cookie)
+      .set("Content-Type", "application/octet-stream")
+      .send(chunk);
+
+    expect((await put(0, bytes.subarray(0, half))).body.offset).toBe(half);
+    // Asked again after a dropped connection: carries on from there.
+    expect((await request(app).get(`${base}/${uploadId}`).set("Cookie", cookie)).body)
+      .toEqual({ offset: half, size: bytes.length });
+    // Not all here yet.
+    expect((await request(app).post(`${base}/${uploadId}/complete`).set("Cookie", cookie)).status)
+      .toBe(409);
+    // A piece sent for the wrong place is refused, with the right place.
+    const wrong = await put(0, bytes.subarray(0, 10));
+    expect(wrong.status).toBe(409);
+    expect(wrong.body.offset).toBe(half);
+    expect((await put(half, bytes.subarray(half))).body.offset).toBe(bytes.length);
+
+    const done = await request(app).post(`${base}/${uploadId}/complete`).set("Cookie", cookie);
+    expect(done.status).toBe(201);
+    const video = await angle(startedAt);
+    expect(video.url).toBe(`/api/files/get/${done.body.file.id}`);
+    expect(video).toMatchObject({ startOffsetMs: 80, previewOnly: false });
+    // Gone once finished.
+    expect((await request(app).get(`${base}/${uploadId}`).set("Cookie", cookie)).status).toBe(404);
   });
 
   it("ignores a preview that arrives after the full video", async () => {

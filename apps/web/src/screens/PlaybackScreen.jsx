@@ -274,7 +274,11 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
   const sourceFor = (video, small) => {
     const wanted = (small && video.previewUrl) || video.url;
     const key = `${video.userId}:${small ? "small" : "large"}`;
-    if (!midTake || !heldSources.current.has(key)) heldSources.current.set(key, wanted);
+    const held = heldSources.current.get(key);
+    // The same file under a fresh link (a CDN link is re-signed every few
+    // hours) keeps its link, so the player doesn't load it again.
+    if (!midTake && !(held && sameFile(held, wanted))) heldSources.current.set(key, wanted);
+    else if (!held) heldSources.current.set(key, wanted);
     return heldSources.current.get(key);
   };
   useEffect(() => {
@@ -591,11 +595,25 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
   const [, setSheetsLoaded] = useState(0);
   const onSheetLoaded = () => setSheetsLoaded((count) => count + 1);
   const scrubbing = useRef({ active: false, wasPlaying: false, lastAt: 0 });
+  // Counts drags, so a release still waiting on the videos after a new drag
+  // has begun leaves that one alone.
+  const scrubCount = useRef(0);
+  // The latest endScrub (it reads this render's state), for the window's
+  // pointerup: letting go anywhere ends the drag, not only over the bar.
+  const endScrubRef = useRef(null);
   const onScreenVideos = panelVideos.filter((video, panelIndex) => video?.url && isOnScreen(panelIndex));
   const haveStills = onScreenVideos.length > 0 && onScreenVideos.every((video) => video.scrub);
   const startScrub = () => {
     if (scrubbing.current.active) return;
     scrubbing.current = { active: true, wasPlaying: playingRef.current, lastAt: 0 };
+    scrubCount.current += 1;
+    const release = () => {
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
+      endScrubRef.current?.();
+    };
+    window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
     if (playingRef.current) {
       playRequest.current += 1;
       onScreenPlayers().forEach((video) => video.pause());
@@ -641,6 +659,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     if (!scrubbing.current.active) return;
     const { wasPlaying } = scrubbing.current;
     scrubbing.current = { active: false, wasPlaying: false, lastAt: 0 };
+    const drag = scrubCount.current;
     const to = scrubTo;
     setScrubTo(null);
     if (to != null) {
@@ -649,9 +668,11 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
         await untilReady(onScreenPlayers().filter((video) => !video.ended));
       }
     }
+    if (drag !== scrubCount.current) return;
     setStillsAt(null);
     if (wasPlaying) play();
   };
+  endScrubRef.current = endScrub;
   const shownTime = scrubTo ?? time;
 
   // How far ahead every angle on screen has loaded, on the shared timeline:
@@ -1110,8 +1131,6 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
             aria-label="Seek" disabled={uploading || !duration}
             value={Math.min(shownTime, duration || 0)}
             onPointerDown={startScrub}
-            onPointerUp={endScrub}
-            onPointerCancel={endScrub}
             onChange={(event) => moveScrub(Number(event.target.value))} />
           {duration > 0 && notes.map((note) => (
             <button type="button" key={note.id} className="playback-dot"
@@ -1213,6 +1232,14 @@ function sheetAt(scrub, at) {
   return scrub.sheets[Math.floor(frameAt(scrub, at) / (scrub.cols * scrub.rows))];
 }
 
+const SHEET_RETRY_MS = 10_000;
+
+// Whether two links are to the same stored file (they can differ only in
+// their signature).
+function sameFile(a, b) {
+  return a.split("?")[0] === b.split("?")[0];
+}
+
 // How far ahead of the finger the next sheet starts downloading.
 const SHEET_AHEAD_S = 5;
 
@@ -1223,7 +1250,11 @@ const sheetStates = new Map();
 function loadSheet(sheet, onLoaded) {
   const state = sheetStates.get(sheet);
   if (state === "loaded") return true;
-  if (state) {
+  // Failed recently (an expired link, offline): not asked for again on
+  // every move of the drag, only after a pause.
+  if (typeof state === "number") {
+    if (Date.now() - state < SHEET_RETRY_MS) return false;
+  } else if (state) {
     state.add(onLoaded);
     return false;
   }
@@ -1236,8 +1267,7 @@ function loadSheet(sheet, onLoaded) {
     sheetStates.set(sheet, "loaded");
     waiting.forEach((callback) => callback());
   };
-  // Tried again on the next drag.
-  image.onerror = () => sheetStates.delete(sheet);
+  image.onerror = () => sheetStates.set(sheet, Date.now());
   image.src = sheet;
   return false;
 }

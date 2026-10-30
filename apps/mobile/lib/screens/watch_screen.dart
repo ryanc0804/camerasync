@@ -529,10 +529,12 @@ class _WatchScreenState extends State<WatchScreen> {
     for (final i in _players.keys.toList()) {
       // Closed when it's no longer shown, or to switch between its preview
       // and the original (the grid grew or shrank around it).
+      final url = _urlFor(recording, i);
       if (!wanted.contains(i) ||
-          (!keepSources && _playerUrls[i] != _urlFor(recording, i))) {
+          (!keepSources && (url == null || !sameFile(_playerUrls[i]!, url)))) {
         final player = _players.remove(i)!;
         _playerUrls.remove(i);
+        _bufferingSince.remove(player);
         if (player == _clockPlayer) _setClock(null);
         await player.dispose();
       }
@@ -738,6 +740,7 @@ class _WatchScreenState extends State<WatchScreen> {
     final old = _players.values.toList();
     _players.clear();
     _playerUrls.clear();
+    _bufferingSince.clear();
     for (final p in old) {
       await p.dispose();
     }
@@ -1303,7 +1306,9 @@ class _WatchScreenState extends State<WatchScreen> {
               milliseconds: (dx / width * total).round().clamp(0, total));
           return GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTapDown: total <= 0 ? null : (d) => _seek(at(d.localPosition.dx)),
+            // On lifting a tap, so a press that turns into a drag doesn't
+            // move the videos first.
+            onTapUp: total <= 0 ? null : (d) => _seek(at(d.localPosition.dx)),
             onHorizontalDragStart: total <= 0
                 ? null
                 : (d) {

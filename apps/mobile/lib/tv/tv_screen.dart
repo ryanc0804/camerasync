@@ -4,6 +4,7 @@ import 'package:external_display/transfer_parameters.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
+import '../api/recordings_api.dart' show isSignedLink, sameFile;
 import '../playback/angle_sync.dart';
 import '../recordings/angle_layout.dart';
 import '../theme.dart';
@@ -249,7 +250,7 @@ class _TvScreenState extends State<TvScreen> {
     for (final i in _players.keys.toList()) {
       // Closed when it's off screen, or to switch between its preview and
       // the original.
-      if (!live.contains(i) || _playerUrls[i] != _urlFor(i)) {
+      if (!live.contains(i) || !sameFile(_playerUrls[i]!, _urlFor(i))) {
         _playerUrls.remove(i);
         await _players.remove(i)!.dispose();
       }
@@ -297,7 +298,7 @@ class _TvScreenState extends State<TvScreen> {
       Uri.parse(url),
       // The login only goes to our server; a CDN link is signed.
       httpHeaders: {
-        if (cookie != null && !_isCdnLink(url)) 'Cookie': cookie,
+        if (cookie != null && !isSignedLink(url)) 'Cookie': cookie,
       },
     );
     try {
@@ -490,7 +491,3 @@ class _TvScreenState extends State<TvScreen> {
     );
   }
 }
-
-/// A signed CDN link (see the server's storage/cdn.js) rather than one to
-/// our server.
-bool _isCdnLink(String url) => url.contains('Key-Pair-Id=');

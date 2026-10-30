@@ -23,6 +23,8 @@ class QueuedTake {
     this.attempts = 0,
     this.preview = PreviewState.none,
     this.previewPath,
+    this.uploadId,
+    this.previewUploadId,
   });
 
   final String id;
@@ -44,6 +46,11 @@ class QueuedTake {
   PreviewState preview;
   String? previewPath;
 
+  /// The server's resumable upload of the video, and of its preview, once
+  /// one has started: a later try carries on from what reached the server.
+  String? uploadId;
+  String? previewUploadId;
+
   /// When the next try may start, after a failed one.
   DateTime? retryAt;
   String? lastError;
@@ -59,6 +66,8 @@ class QueuedTake {
         'attempts': attempts,
         'preview': preview.name,
         'previewPath': previewPath,
+        'uploadId': uploadId,
+        'previewUploadId': previewUploadId,
       };
 
   static QueuedTake fromJson(Map<String, dynamic> json) => QueuedTake(
@@ -72,6 +81,8 @@ class QueuedTake {
         attempts: (json['attempts'] as num?)?.toInt() ?? 0,
         preview: PreviewState.values.asNameMap()[json['preview']] ??
             PreviewState.none,
+        uploadId: json['uploadId'] as String?,
+        previewUploadId: json['previewUploadId'] as String?,
         previewPath: json['previewPath'] as String?,
       );
 }
@@ -110,8 +121,9 @@ enum UploadEvent { uploaded, unrecorded, rejected }
 /// wait (5 s, 15 s, 30 s, 1 min, 2 min, then every 5 min) until it gets
 /// through. No upload starts while a take is starting or running ([pause]),
 /// so the start and stop messages aren't stuck behind video on a slow
-/// network; one already sending is stopped, and sent again from the start
-/// once the take is over.
+/// network; one already sending is stopped, and carries on from what
+/// reached the server once the take is over (uploads go in resumable
+/// pieces, see [RecordingsApi.uploadSessionVideo]).
 class UploadQueue extends ChangeNotifier {
   UploadQueue(this._api, {PreviewMaker? makePreview, Directory? dir})
       : _makePreview = makePreview ?? makeVideoPreview,
@@ -374,6 +386,15 @@ class UploadQueue extends ChangeNotifier {
         startClock: item.startClock,
         preview: preview,
         timeout: const Duration(minutes: 30),
+        resumeId: preview ? item.previewUploadId : item.uploadId,
+        onStarted: (uploadId) {
+          if (preview) {
+            item.previewUploadId = uploadId;
+          } else {
+            item.uploadId = uploadId;
+          }
+          unawaited(_save());
+        },
         onProgress: (sent, total) {
           // Throwing here ends the file's stream, which ends the upload.
           if (paused) {
@@ -477,6 +498,7 @@ class UploadQueue extends ChangeNotifier {
     final path = item.previewPath;
     item.preview = PreviewState.none;
     item.previewPath = null;
+    item.previewUploadId = null;
     if (path != null) await File(path).delete().catchError((_) => File(path));
     await _save();
   }

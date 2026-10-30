@@ -107,7 +107,8 @@ export function ActiveSessionScreen() {
   const recordingInfoRef = useRef(null);
   // Recordings waiting to upload, oldest first. None goes while a take runs,
   // so on a slow network the start and stop aren't stuck behind video; one
-  // already going is stopped and sent again from the start once it's over.
+  // already going is stopped and carries on from where it got once it's
+  // over.
   const uploadQueueRef = useRef([]);
   // Stops the upload going now (an AbortController), if one is.
   const uploadingRef = useRef(null);
@@ -196,6 +197,9 @@ export function ActiveSessionScreen() {
           ? Math.round(info.actualStartAtEpochMs)
           : undefined,
         startClock: info.startClock ?? "call",
+        // The server's upload of it once one has started, so a try that's
+        // stopped (a take starting) or cut off carries on from there.
+        resume: {},
       });
       sendUploads();
     };
@@ -214,7 +218,7 @@ export function ActiveSessionScreen() {
       saveRecordingDetails(sessionId, next.startedAt, next.actualStartedAt, next.startClock)
         .then(() => uploadSessionVideo(
           sessionId, next.startedAt, next.video, next.videoFileName, next.actualStartedAt,
-          next.startClock, controller.signal
+          next.startClock, controller.signal, next.resume
         ))
         .then(() => {
           done();
@@ -423,7 +427,14 @@ export function ActiveSessionScreen() {
             setRecordingMessage(
               controls ? "Ready to record." : "Waiting for the host to record."
             );
-            if (reply.recording) beginRecording(reply.recording);
+            if (reply.recording) {
+              beginRecording(reply.recording);
+            } else if (takeRunningRef.current && !recorderRef.current) {
+              // The take ended while this computer was offline (its stop
+              // never arrived): uploads can go again.
+              takeRunningRef.current = false;
+              sendUploads();
+            }
           });
         });
 

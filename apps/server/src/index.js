@@ -11,6 +11,7 @@ import { startIdleSessionChecks } from "./sessions/idleSessions.js";
 import { startPreviewBackfill } from "./recordings/previews.js";
 import { startThumbnailBackfill } from "./recordings/thumbnails.js";
 import { startScrubBackfill } from "./recordings/scrubFrames.js";
+import { startUnfinishedUploadSweep } from "./routes/file.js";
 import { startRetiredFileSweep } from "./recordings/retiredFiles.js";
 import { authRouter } from "./routes/auth.js";
 import { groupRouter } from "./routes/groups.js";
@@ -53,6 +54,7 @@ startIdleSessionChecks();
 startPreviewBackfill();
 startThumbnailBackfill();
 startScrubBackfill();
+startUnfinishedUploadSweep();
 startRetiredFileSweep();
 
 server.listen(PORT, () => {

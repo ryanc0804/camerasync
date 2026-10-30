@@ -377,3 +377,26 @@ CREATE TABLE IF NOT EXISTS retired_files (
 ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS scrub JSONB;
 ALTER TABLE recording_session_videos
     ADD COLUMN IF NOT EXISTS scrub_failed BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Finding a stored file's video row (the access check on /api/files/get),
+-- by whichever column it's in, without scanning every recording.
+CREATE INDEX IF NOT EXISTS recording_session_videos_file_idx
+    ON recording_session_videos (file_id);
+CREATE INDEX IF NOT EXISTS recording_session_videos_preview_idx
+    ON recording_session_videos (preview_file_id);
+CREATE INDEX IF NOT EXISTS recording_session_videos_thumbnail_idx
+    ON recording_session_videos (thumbnail_file_id);
+CREATE INDEX IF NOT EXISTS recording_session_videos_scrub_sheets_idx
+    ON recording_session_videos USING gin ((scrub->'sheets'));
+
+-- Uploads sent in pieces (see src/routes/file.js), until the last piece is
+-- in: whose, the file type, its full size, and the take's details (the
+-- /upload query) to file it with.
+CREATE TABLE IF NOT EXISTS resumable_uploads (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    ext TEXT NOT NULL,
+    size BIGINT NOT NULL,
+    query JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
