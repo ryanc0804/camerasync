@@ -64,8 +64,10 @@ class _SessionScreenState extends State<SessionScreen> {
   /// A take is scheduled or running; the camera can't be switched mid-take.
   bool _takeRunning = false;
 
-  /// The running take's number, shown in the top bar's pill.
+  /// The running take's number, and its shared start on this phone's
+  /// clock, for the REC chip's timer.
   int? _takeNumber;
+  int? _takeStartAtMs;
   Timer? _resumeUploads;
   bool _switching = false;
 
@@ -94,6 +96,7 @@ class _SessionScreenState extends State<SessionScreen> {
       setState(() {
         _takeRunning = true;
         _takeNumber = command.recordingNumber;
+        _takeStartAtMs = command.localStartAtEpochMs;
       });
       // Watching when the next take starts: back to the camera, which is
       // already recording underneath.
@@ -312,6 +315,7 @@ class _SessionScreenState extends State<SessionScreen> {
       reconnecting: _reconnecting,
       recording: _takeRunning,
       takeNumber: _takeNumber,
+      takeStartAtMs: _takeStartAtMs,
       myId: widget.auth.user?.id,
     );
 
@@ -375,6 +379,7 @@ class _SessionTopBar extends StatelessWidget {
     this.reconnecting = false,
     this.recording = false,
     this.takeNumber,
+    this.takeStartAtMs,
     this.myId,
   });
 
@@ -391,8 +396,9 @@ class _SessionTopBar extends StatelessWidget {
 
   final bool recording;
   final int? takeNumber;
+  final int? takeStartAtMs;
 
-  /// This phone's user, whose own connection shows top right.
+  /// This phone's user, whose own connection shows in the pill.
   final int? myId;
 
   @override
@@ -430,12 +436,7 @@ class _SessionTopBar extends StatelessWidget {
               'Code $code',
               style: const TextStyle(color: Colors.white70, fontSize: 12),
             ),
-            if (reconnecting)
-              const Text(
-                'Connection lost. Reconnecting…',
-                style: TextStyle(color: Colors.orangeAccent, fontSize: 12),
-              )
-            else if (!clockSynced)
+            if (!reconnecting && !clockSynced)
               const Text(
                 'Clock not synced; recordings may drift.',
                 style: TextStyle(color: Colors.orangeAccent, fontSize: 12),
@@ -444,16 +445,15 @@ class _SessionTopBar extends StatelessWidget {
         ),
       ),
     ];
-    final status = _ConnectionStatus(
-      roundTripMs: members.where((m) => m.id == myId).firstOrNull?.roundTripMs,
-      reconnecting: reconnecting,
-    );
     final devices = _DevicesPill(
       members: members,
       myId: myId,
-      recording: recording,
-      takeNumber: takeNumber,
+      reconnecting: reconnecting,
     );
+    // Top right, only while a take runs.
+    final rec = recording
+        ? _RecChip(number: takeNumber, startAtMs: takeStartAtMs)
+        : const SizedBox.shrink();
 
     if (MediaQuery.orientationOf(context) == Orientation.landscape) {
       return Padding(
@@ -467,10 +467,11 @@ class _SessionTopBar extends StatelessWidget {
             // opened it grows down over the camera without moving the rest.
             Padding(padding: const EdgeInsets.only(top: 6), child: devices),
             const SizedBox(width: 12),
+            // As wide as the left, so the pill stays centred.
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.only(top: 6),
-                child: Align(alignment: Alignment.topRight, child: status),
+                child: Align(alignment: Alignment.topRight, child: rec),
               ),
             ),
           ],
@@ -482,7 +483,7 @@ class _SessionTopBar extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(children: [...left, const SizedBox(width: 8), status]),
+          Row(children: [...left, const SizedBox(width: 8), rec]),
           const SizedBox(height: 4),
           devices,
         ],
@@ -492,20 +493,20 @@ class _SessionTopBar extends StatelessWidget {
 }
 
 /// How many devices are connected; tapped, it grows into the list of who
-/// they are (tap again, or anywhere else, to close). While a take runs it
-/// says so: "Recording 007 · 3 devices".
+/// they are (tap again, or anywhere else, to close). It leads with this
+/// phone's own signal, and says Reconnecting when the connection drops.
 class _DevicesPill extends StatefulWidget {
   const _DevicesPill({
     required this.members,
-    required this.recording,
-    required this.takeNumber,
     this.myId,
+    this.reconnecting = false,
   });
 
   final List<SessionMember> members;
   final int? myId;
-  final bool recording;
-  final int? takeNumber;
+
+  /// This phone lost its connection; the pill says so until it's back.
+  final bool reconnecting;
 
   @override
   State<_DevicesPill> createState() => _DevicesPillState();
@@ -538,7 +539,7 @@ class _DevicesPillState extends State<_DevicesPill> {
           duration: ease,
           curve: curve,
           // Open, only as wide as the names need (within limits).
-          constraints: const BoxConstraints(maxWidth: 260),
+          constraints: const BoxConstraints(maxWidth: 300),
           decoration: BoxDecoration(
             color: Colors.black54,
             borderRadius: BorderRadius.circular(18),
@@ -561,34 +562,25 @@ class _DevicesPillState extends State<_DevicesPill> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          // Red while recording; orange when someone's
-                          // connection is weak (open it to see whose).
-                          Icon(Icons.circle,
-                              size: 9,
-                              color: widget.recording
-                                  ? Colors.redAccent
-                                  : members.any((m) =>
-                                          _signalOf(m.roundTripMs) ==
-                                          _Signal.weak)
-                                      ? Colors.orangeAccent
-                                      : const Color(0xFF4ADE80)),
-                          const SizedBox(width: 6),
-                          if (widget.recording) ...[
-                            Text(
-                              widget.takeNumber == null
-                                  ? 'Recording'
-                                  : 'Recording ${widget.takeNumber.toString().padLeft(3, '0')}',
-                              style: const TextStyle(
-                                  color: Colors.redAccent,
-                                  fontWeight: FontWeight.w700),
-                            ),
-                            const Text('  ·  ',
-                                style: TextStyle(color: Colors.white54)),
-                          ],
+                          // This phone's own signal (everyone's is in the
+                          // list).
+                          _SignalIcon(
+                            roundTripMs: members
+                                .where((m) => m.id == widget.myId)
+                                .firstOrNull
+                                ?.roundTripMs,
+                            offline: widget.reconnecting,
+                            size: 16,
+                          ),
+                          const SizedBox(width: 8),
                           Text(
-                            widget.recording ? count : '$count connected',
-                            style: const TextStyle(
-                                color: Colors.white,
+                            widget.reconnecting
+                                ? 'Reconnecting…'
+                                : '$count connected',
+                            style: TextStyle(
+                                color: widget.reconnecting
+                                    ? Colors.redAccent
+                                    : Colors.white,
                                 fontWeight: FontWeight.w600),
                           ),
                           const SizedBox(width: 2),
@@ -616,7 +608,8 @@ class _DevicesPillState extends State<_DevicesPill> {
                     curve: _open ? const Interval(0.25, 1) : Curves.easeOut,
                     opacity: _open ? 1 : 0,
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(14, 2, 14, 10),
+                      // Lined up with the pill's own row above.
+                      padding: const EdgeInsets.fromLTRB(12, 2, 14, 10),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -673,46 +666,9 @@ _Signal _signalOf(int? roundTripMs, {bool offline = false}) {
         ),
     };
 
-/// This phone's connection, top right: Good, Weak or Offline, from the
-/// round trip the server times on its connection (sent with the device
-/// list every few seconds).
-class _ConnectionStatus extends StatelessWidget {
-  const _ConnectionStatus({this.roundTripMs, required this.reconnecting});
-
-  final int? roundTripMs;
-  final bool reconnecting;
-
-  @override
-  Widget build(BuildContext context) {
-    final signal = _signalOf(roundTripMs, offline: reconnecting);
-    if (signal == _Signal.unknown) return const SizedBox.shrink();
-    final (icon, color, label) = _signalLook(signal);
-    return Tooltip(
-      message: signal == _Signal.offline
-          ? 'No connection to the server'
-          : '$roundTripMs ms to the server',
-      child: Frosted(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 16, color: color),
-              const SizedBox(width: 4),
-              Text(label,
-                  style: TextStyle(
-                      color: color, fontSize: 12, fontWeight: FontWeight.w600)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// One person in the who's-connected list: their initial, name ("(you)" on
-/// this phone's own), whether their camera is recording or they're just
-/// running the session, and how good their connection is.
+/// One person in the who's-connected list: how good their connection is,
+/// their name ("(you)" on this phone's own), and whether their camera is
+/// recording or they're just running the session.
 class _MemberRow extends StatelessWidget {
   const _MemberRow({required this.member, this.isMe = false});
 
@@ -722,18 +678,11 @@ class _MemberRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final name = member.displayName.trim();
+    // The signal first, in a column under the pill's own.
     return Row(
       children: [
-        CircleAvatar(
-          radius: 15,
-          backgroundColor: Colors.white12,
-          child: Text(
-            name.isEmpty ? '?' : name.characters.first.toUpperCase(),
-            style: const TextStyle(
-                color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
-          ),
-        ),
-        const SizedBox(width: 12),
+        _SignalIcon(roundTripMs: member.roundTripMs, size: 16),
+        const SizedBox(width: 8),
         Expanded(
           child: Text.rich(
             TextSpan(text: name, children: [
@@ -756,28 +705,108 @@ class _MemberRow extends StatelessWidget {
         else
           const Text('Controlling',
               style: TextStyle(color: Colors.white54, fontSize: 12)),
-        const SizedBox(width: 10),
-        _SignalIcon(roundTripMs: member.roundTripMs),
       ],
     );
   }
 }
 
-/// Someone's connection in the who's-connected list: green, orange (weak) or
-/// grey (not timed yet), with the round trip on a long press.
+/// Someone's connection: green, orange (weak), red (offline) or grey (not
+/// timed yet), with the round trip on a long press. In the list for
+/// everyone, and in the pill for this phone.
 class _SignalIcon extends StatelessWidget {
-  const _SignalIcon({this.roundTripMs});
+  const _SignalIcon({this.roundTripMs, this.offline = false, this.size = 18});
 
   final int? roundTripMs;
+  final bool offline;
+  final double size;
 
   @override
   Widget build(BuildContext context) {
-    final (icon, color, label) = _signalLook(_signalOf(roundTripMs));
+    final (icon, color, label) =
+        _signalLook(_signalOf(roundTripMs, offline: offline));
     return Tooltip(
       message: roundTripMs == null
           ? 'Checking connection'
           : '$label · $roundTripMs ms',
-      child: Icon(icon, size: 18, color: color, semanticLabel: label),
+      child: Icon(icon, size: size, color: color, semanticLabel: label),
+    );
+  }
+}
+
+/// Top right while a take runs: a solid red chip with REC and how long it's
+/// been recording ("Starting" in the moment before its shared start).
+class _RecChip extends StatefulWidget {
+  const _RecChip({this.number, this.startAtMs});
+
+  final int? number;
+  final int? startAtMs;
+
+  @override
+  State<_RecChip> createState() => _RecChipState();
+}
+
+class _RecChipState extends State<_RecChip> {
+  late final Timer _tick =
+      Timer.periodic(const Duration(milliseconds: 250), (_) => setState(() {}));
+
+  @override
+  void initState() {
+    super.initState();
+    _tick;
+  }
+
+  @override
+  void dispose() {
+    _tick.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final start = widget.startAtMs;
+    final elapsed =
+        start == null ? null : DateTime.now().millisecondsSinceEpoch - start;
+    final String time;
+    if (elapsed == null || elapsed < 0) {
+      time = 'Starting';
+    } else {
+      final seconds = elapsed ~/ 1000;
+      time = '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}';
+    }
+    return Semantics(
+      label: widget.number == null
+          ? 'Recording, $time'
+          : 'Recording ${widget.number}, $time',
+      // Solid red: it should catch the eye, unlike the controls around it.
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xFFE5484D),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.circle, size: 9, color: Colors.white),
+              const SizedBox(width: 6),
+              const Text('REC',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.5)),
+              const SizedBox(width: 6),
+              Text(time,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      fontFeatures: [FontFeature.tabularFigures()])),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
