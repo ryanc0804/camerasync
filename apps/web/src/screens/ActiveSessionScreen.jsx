@@ -684,7 +684,10 @@ export function ActiveSessionScreen() {
           <h1>{session?.name || "Loading session..."}</h1>
           {session && <code>{session.id}</code>}
         </div>
-        {session && <ConnectionStatus connected={socketStatus === "Connected"} />}
+        {session && (
+          <ConnectionStatus offline={socketStatus === "Disconnected"}
+            roundTripMs={members.find((member) => Number(member.id) === Number(user.id))?.roundTripMs} />
+        )}
 
         {session && (
         <div className="active-session-actions">
@@ -804,11 +807,18 @@ export function ActiveSessionScreen() {
                   <ul>
                     {members.map((member) => (
                       <li key={member.id}>
-                        {member.name || member.email}
+                        <span className="session-member-name">
+                          {member.name || member.email}
+                          {Number(member.id) === Number(user.id) && <em> (you)</em>}
+                        </span>
                         {Number(member.id) === Number(session.createdBy) && (
                           <span>Creator</span>
                         )}
                         {member.camera === false && <span>Controller</span>}
+                        <SignalBars level={signalLevel(member.roundTripMs, true)}
+                          title={member.roundTripMs == null
+                            ? "Checking connection"
+                            : `${member.roundTripMs} ms to the server`} />
                       </li>
                     ))}
                   </ul>
@@ -888,6 +898,12 @@ const activeSessionCss = `
   .connection-status-good { color: #22a559; }
   .connection-status-weak { color: #e08a00; }
   .connection-status-offline { color: #e5484d; }
+  .connection-status-unknown { color: #666; }
+  .signal-bars { display: inline-flex; flex: none; }
+  .signal-bars svg { display: block; }
+  .active-session-members li { gap: 0.6rem; }
+  .session-member-name { flex: 1; min-width: 0; color: inherit !important; font-size: inherit !important; }
+  .session-member-name em { font-style: normal; color: #888; }
   .active-session-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; justify-content: flex-end; }
   .session-device-mode { display: inline-flex; align-items: center; gap: 0; }
   .session-device-mode > span { margin-right: 0.6rem; }
@@ -1077,44 +1093,46 @@ const activeSessionCss = `
 // uploads will be slow.
 const WEAK_ABOVE_MS = 600;
 
-// How good this browser's connection to the server is: a quick round trip
-// every 5 s, shown as Good, Weak or Offline (like the phone's session bar).
-function ConnectionStatus({ connected }) {
-  const [rtt, setRtt] = useState(undefined);
-  useEffect(() => {
-    let cancelled = false;
-    const check = async () => {
-      const started = performance.now();
-      try {
-        const res = await fetch(`${SERVER_URL}/timesync`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ jsonrpc: "2.0", id: 0, method: "timesync" }),
-          signal: AbortSignal.timeout(4000),
-        });
-        if (!cancelled) setRtt(res.ok ? Math.round(performance.now() - started) : null);
-      } catch {
-        if (!cancelled) setRtt(null);
-      }
-    };
-    check();
-    const timer = setInterval(check, 5000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, []);
+// How good a connection is from its round trip to the server (timed by the
+// server and sent with the device list every few seconds).
+function signalLevel(roundTripMs, connected) {
+  if (!connected) return "offline";
+  if (roundTripMs == null) return "unknown";
+  return roundTripMs > WEAK_ABOVE_MS ? "weak" : "good";
+}
 
-  if (rtt === undefined && connected) return null;
-  const level = !connected || rtt == null ? "offline" : rtt > WEAK_ABOVE_MS ? "weak" : "good";
-  const bars = { good: 3, weak: 2, offline: 0 }[level];
+const SIGNAL_LABELS = { good: "Good", weak: "Weak", offline: "Offline", unknown: "Checking" };
+// Set on the bars themselves, so a list's own text colour can't grey them.
+const SIGNAL_COLORS = { good: "#22a559", weak: "#e08a00", offline: "#e5484d", unknown: "#666" };
+
+// Three signal bars in the connection's colour, as many lit as it's good.
+function SignalBars({ level, title }) {
+  const bars = { good: 3, weak: 2, offline: 0, unknown: 3 }[level];
   return (
-    <span className={`connection-status connection-status-${level}`} role="status"
-      title={rtt == null ? "No connection to the server" : `${rtt} ms to the server`}>
+    <span className="signal-bars" style={{ color: SIGNAL_COLORS[level] }} title={title}
+      role="img" aria-label={`Connection: ${SIGNAL_LABELS[level]}`}>
       <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
         {[0, 1, 2].map((i) => (
           <rect key={i} x={1 + i * 5} y={10 - i * 4} width="3.5" height={5 + i * 4} rx="1"
             fill="currentColor" opacity={i < bars ? 1 : 0.25} />
         ))}
       </svg>
-      {{ good: "Good", weak: "Weak", offline: "Offline" }[level]}
+    </span>
+  );
+}
+
+// This computer's connection in the header: Good, Weak or Offline, like the
+// phone's session bar.
+// Nothing until the server has timed it; Offline only once the connection
+// has dropped (not while it's still waiting for the camera).
+function ConnectionStatus({ offline, roundTripMs }) {
+  const level = signalLevel(roundTripMs, !offline);
+  if (level === "unknown") return null;
+  return (
+    <span className={`connection-status connection-status-${level}`} role="status"
+      title={roundTripMs == null ? "No connection to the server" : `${roundTripMs} ms to the server`}>
+      <SignalBars level={level} />
+      {SIGNAL_LABELS[level]}
     </span>
   );
 }

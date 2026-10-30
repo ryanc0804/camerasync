@@ -432,33 +432,40 @@ class _CameraScreenState extends State<CameraScreen> {
           fit: StackFit.expand,
           children: [
             _body(),
+            // Tinted from the top down, fading out below the bar, so its
+            // text reads over any picture without shadows of its own. A
+            // fixed height: the devices pill opening over it doesn't stretch
+            // it.
             Positioned(
               top: 0,
               left: 0,
               right: 0,
-              // Tinted from the top down, fading out below the bar, so its
-              // text reads over any picture without shadows of its own.
-              child: DecoratedBox(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    // Eased out over a long way, so there's no edge to see.
-                    colors: [
-                      Color(0x73000000),
-                      Color(0x47000000),
-                      Color(0x1F000000),
-                      Color(0x08000000),
-                      Color(0x00000000),
-                    ],
-                    stops: [0, 0.35, 0.65, 0.85, 1],
+              height: MediaQuery.paddingOf(context).top + _topBarSpace + 56,
+              child: const IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      // Eased out over a long way, so there's no edge to see.
+                      colors: [
+                        Color(0x73000000),
+                        Color(0x47000000),
+                        Color(0x1F000000),
+                        Color(0x08000000),
+                        Color(0x00000000),
+                      ],
+                      stops: [0, 0.35, 0.65, 0.85, 1],
+                    ),
                   ),
                 ),
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 56),
-                  child: SafeArea(bottom: false, child: topBar),
-                ),
               ),
+            ),
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: SafeArea(bottom: false, child: topBar),
             ),
           ],
         ),

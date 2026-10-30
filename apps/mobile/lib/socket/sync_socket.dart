@@ -17,6 +17,7 @@ class SessionMember {
     required this.email,
     this.name,
     this.camera = true,
+    this.roundTripMs,
   });
 
   final int id;
@@ -26,6 +27,10 @@ class SessionMember {
   /// False for a host or admin running the session without recording.
   final bool camera;
 
+  /// How long their connection takes to answer the server, timed by the
+  /// server every few seconds (their slowest device); null until it has.
+  final int? roundTripMs;
+
   String get displayName => (name != null && name!.isNotEmpty) ? name! : email;
 
   factory SessionMember.fromJson(Map json) => SessionMember(
@@ -33,6 +38,7 @@ class SessionMember {
         email: (json['email'] ?? '').toString(),
         name: json['name'] as String?,
         camera: json['camera'] != false,
+        roundTripMs: (json['roundTripMs'] as num?)?.toInt(),
       );
 }
 
@@ -333,25 +339,6 @@ class SyncSocket {
     if (bestOffset != null) {
       _clockOffsetMs = bestOffset;
       _clockSynced = true;
-    }
-  }
-
-  /// One small round trip to the server, for showing how good the
-  /// connection is: its time in ms, or null when it didn't get through.
-  Future<int?> ping() async {
-    try {
-      final t0 = DateTime.now().millisecondsSinceEpoch;
-      final res = await http
-          .post(
-            Uri.parse('$serverUrl/timesync'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'jsonrpc': '2.0', 'id': 0, 'method': 'timesync'}),
-          )
-          .timeout(const Duration(seconds: 4));
-      if (res.statusCode != 200) return null;
-      return DateTime.now().millisecondsSinceEpoch - t0;
-    } catch (_) {
-      return null;
     }
   }
 
