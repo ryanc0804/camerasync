@@ -603,6 +603,11 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
   const endScrubRef = useRef(null);
   const onScreenVideos = panelVideos.filter((video, panelIndex) => video?.url && isOnScreen(panelIndex));
   const haveStills = onScreenVideos.length > 0 && onScreenVideos.every((video) => video.scrub);
+  // Every angle on screen switches to its still at once, when all of their
+  // sheets for this moment are here: one angle moving while another sits
+  // on the old moment would look out of sync.
+  const stillsReady = stillsAt != null && haveStills && onScreenVideos.every((video) =>
+    loadSheet(sheetAt(video.scrub, stillsAt + (trims.get(video.userId) ?? 0)), onSheetLoaded));
   const startScrub = () => {
     if (scrubbing.current.active) return;
     scrubbing.current = { active: true, wasPlaying: playingRef.current, lastAt: 0 };
@@ -983,7 +988,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
               </div>}
               {/* While the seek bar is dragged (and until the videos land),
                   this angle's still for the moment under the finger. */}
-              {stillsAt != null && video?.scrub && isOnScreen(panelIndex) && (
+              {stillsReady && video?.scrub && isOnScreen(panelIndex) && (
                 <ScrubStill scrub={video.scrub} at={stillsAt + (trims.get(video.userId) ?? 0)}
                   onLoaded={onSheetLoaded} />
               )}
