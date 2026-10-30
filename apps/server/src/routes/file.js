@@ -20,6 +20,7 @@ import { remuxForStreaming } from "../recordings/remux.js";
 import { queuePreview } from "../recordings/previews.js";
 import { retireFile } from "../recordings/retiredFiles.js";
 import { queueThumbnail } from "../recordings/thumbnails.js";
+import { queueScrubFrames } from "../recordings/scrubFrames.js";
 import { clearProgress } from "../recordings/uploadProgress.js";
 
 export const fileRouter = Router();
@@ -210,6 +211,7 @@ fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
        ) AS allowed FROM (
          SELECT session_id FROM recording_session_videos
           WHERE file_id = $1 OR preview_file_id = $1 OR thumbnail_file_id = $1
+             OR scrub->'sheets' ? $1
          UNION ALL
          SELECT session_id FROM retired_files WHERE file_id = $1
        ) v
@@ -409,6 +411,8 @@ fileRouter.post(
       queuePreview(fileId);
       // And a still for the session lists.
       queueThumbnail(fileId);
+      // And the stills shown while the seek bar is dragged.
+      queueScrubFrames(fileId);
       // In: no more progress bar for this angle.
       clearProgress(req.query.sessionId, Number(req.query.startedAt), Number(req.user.id));
 
@@ -430,14 +434,15 @@ fileRouter.post(
   }
 );
 
-// Every stored file behind these video rows: the originals and their
-// previews, once each.
+// Every stored file behind these video rows: the originals, their previews,
+// thumbnails and seek-bar stills, once each.
 export function storedFileIds(rows) {
   const ids = new Set();
   for (const row of rows) {
     if (row.file_id) ids.add(row.file_id);
     if (row.preview_file_id) ids.add(row.preview_file_id);
     if (row.thumbnail_file_id) ids.add(row.thumbnail_file_id);
+    for (const sheet of row.scrub?.sheets ?? []) ids.add(sheet);
   }
   return [...ids];
 }

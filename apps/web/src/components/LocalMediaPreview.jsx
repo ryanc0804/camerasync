@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 // The room as it sounds. Browsers default to call processing that cancels
-// sound from this computer's own speakers, which would erase the sync beep
-// it plays when it starts a take (so this angle couldn't be lined up by it),
-// and that also dulls music and pumps the volume.
+// sound from this computer's own speakers, dulls music and pumps the volume.
 const RECORDING_AUDIO = {
   echoCancellation: false,
   noiseSuppression: false,

@@ -22,7 +22,6 @@ import {
   recordingBaseName,
   recordingDisplayName,
 } from "../recording/localRecording.js";
-import { END_BEEP_TONES_HZ, playSyncBeep } from "../recording/syncBeep.js";
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
 
@@ -106,12 +105,14 @@ export function ActiveSessionScreen() {
   const recordingTimerRef = useRef(null);
   const recordingChunksRef = useRef([]);
   const recordingInfoRef = useRef(null);
-  // This device pressed Start, so it plays the sync beep for the take.
-  const beepRequestedRef = useRef(false);
-  // And pressed Stop, so it plays the end beep.
-  const endBeepRequestedRef = useRef(false);
-  // Waiting out a stop: cameras keep rolling until its time so they all
-  // record the end beep.
+  // Recordings waiting to upload, oldest first. None goes while a take runs,
+  // so on a slow network the start and stop aren't stuck behind video; one
+  // already going is stopped and sent again from the start once it's over.
+  const uploadQueueRef = useRef([]);
+  // Stops the upload going now (an AbortController), if one is.
+  const uploadingRef = useRef(null);
+  const takeRunningRef = useRef(false);
+  // Waiting out a stop: cameras keep rolling until its time.
   const stopTimerRef = useRef(null);
   // A camera that left its app mid-take, for whoever runs the session.
   const [dropNotice, setDropNotice] = useState("");
@@ -119,7 +120,6 @@ export function ActiveSessionScreen() {
   // connection) stays live underneath. Never during a take: it closes when
   // one starts, before this camera records, and can't open until it's done.
   const [watching, setWatching] = useState(false);
-  const audioContextRef = useRef(null);
   // The screen stays on for the whole live session, cameras and controllers
   // alike: a sleeping computer misses the start or starts late.
   useWakeLock();
@@ -167,8 +167,8 @@ export function ActiveSessionScreen() {
     let timer;
     let cancelled = false;
 
-    // uploads the video for playback; it's saved to this computer only if
-    // the upload fails, so the take isn't lost
+    // queues the video to upload for playback; it's saved to this computer
+    // only if the upload fails, so the take isn't lost
     const saveRecording = (recorder, extension) => {
       const info = recordingInfoRef.current;
       if (!info) return;
@@ -186,24 +186,52 @@ export function ActiveSessionScreen() {
         setRecordingMessage("Nothing was recorded on this device.");
         return;
       }
+      uploadQueueRef.current.push({
+        video,
+        videoFileName,
+        startedAt: info.plannedStartAtEpochMs,
+        // When the recorder really started, so playback can line this angle
+        // up with the phones, which start a moment after the shared time.
+        actualStartedAt: info.actualStartAtEpochMs
+          ? Math.round(info.actualStartAtEpochMs)
+          : undefined,
+        startClock: info.startClock ?? "call",
+      });
+      sendUploads();
+    };
+
+    // sends the queued recordings one at a time, unless a take is running
+    const sendUploads = () => {
+      if (takeRunningRef.current || uploadingRef.current) return;
+      const next = uploadQueueRef.current[0];
+      if (!next) return;
+      const controller = new AbortController();
+      uploadingRef.current = controller;
+      const done = () => {
+        uploadQueueRef.current = uploadQueueRef.current.filter((item) => item !== next);
+      };
       setRecordingMessage("Uploading for playback...");
-      // When the recorder really started, so playback can line this angle
-      // up with the phones, which start a moment after the shared time.
-      const actualStartedAt = info.actualStartAtEpochMs
-        ? Math.round(info.actualStartAtEpochMs)
-        : undefined;
-      const startClock = info.startClock ?? "call";
-      saveRecordingDetails(sessionId, info.plannedStartAtEpochMs, actualStartedAt, startClock)
+      saveRecordingDetails(sessionId, next.startedAt, next.actualStartedAt, next.startClock)
         .then(() => uploadSessionVideo(
-          sessionId, info.plannedStartAtEpochMs, video, videoFileName, actualStartedAt,
-          startClock
+          sessionId, next.startedAt, next.video, next.videoFileName, next.actualStartedAt,
+          next.startClock, controller.signal
         ))
-        .then(() => setRecordingMessage("Uploaded for playback"))
+        .then(() => {
+          done();
+          if (!takeRunningRef.current) setRecordingMessage("Uploaded for playback");
+        })
         .catch((err) => {
-          downloadFile(video, videoFileName);
+          // Stopped for a take: it stays queued and goes again after.
+          if (controller.signal.aborted) return;
+          done();
+          downloadFile(next.video, next.videoFileName);
           setRecordingMessage(
-            `Upload failed (${err.message}), so ${videoFileName} was saved to this computer instead.`
+            `Upload failed (${err.message}), so ${next.videoFileName} was saved to this computer instead.`
           );
+        })
+        .finally(() => {
+          uploadingRef.current = null;
+          sendUploads();
         });
     };
 
@@ -212,6 +240,8 @@ export function ActiveSessionScreen() {
       if (recorderRef.current || recordingTimerRef.current) return;
 
       setWatching(false);
+      takeRunningRef.current = true;
+      uploadingRef.current?.abort();
       const receivedAtEpochMs = clock.now();
       recordingInfoRef.current = {
         sessionId,
@@ -227,14 +257,6 @@ export function ActiveSessionScreen() {
 
       const delay = Math.max(0, command.startAtEpochMs - receivedAtEpochMs);
 
-      if (beepRequestedRef.current && command.beepAtEpochMs) {
-        beepRequestedRef.current = false;
-        const audioContext = audioContextRef.current;
-        if (audioContext) {
-          const wait = Math.max(0, command.beepAtEpochMs - receivedAtEpochMs) / 1000;
-          playSyncBeep(audioContext, audioContext.currentTime + wait);
-        }
-      }
       setRecordingStatus("waiting");
       setRecordingMessage(`Recording starts in ${Math.round(delay)} ms`);
 
@@ -307,8 +329,7 @@ export function ActiveSessionScreen() {
       }, delay);
     };
 
-    // stops this device when the host sends stop: at the stop's time, after
-    // the end beep, which this device plays if it pressed Stop
+    // stops this device when the host sends stop, at the stop's time
     const finishRecording = (command) => {
       if (recordingTimerRef.current) {
         window.clearTimeout(recordingTimerRef.current);
@@ -316,14 +337,6 @@ export function ActiveSessionScreen() {
       }
 
       const receivedAtEpochMs = clock.now();
-      if (endBeepRequestedRef.current && command.endBeepAtEpochMs) {
-        const audioContext = audioContextRef.current;
-        if (audioContext) {
-          const wait = Math.max(0, command.endBeepAtEpochMs - receivedAtEpochMs) / 1000;
-          playSyncBeep(audioContext, audioContext.currentTime + wait, END_BEEP_TONES_HZ);
-        }
-      }
-      endBeepRequestedRef.current = false;
 
       const stopIn = command.stopAtEpochMs
         ? Math.max(0, command.stopAtEpochMs - receivedAtEpochMs)
@@ -337,6 +350,10 @@ export function ActiveSessionScreen() {
 
     const stopNow = (command) => {
       setDropNotice("");
+      // Uploads go again once every camera has really stopped (this one's
+      // own take joins the queue as it's saved).
+      takeRunningRef.current = false;
+      window.setTimeout(sendUploads, 1500);
 
       if (recordingInfoRef.current) {
         recordingInfoRef.current = {
@@ -437,6 +454,9 @@ export function ActiveSessionScreen() {
 
     return () => {
       cancelled = true;
+      // Leaving mid-take: whatever's queued still goes.
+      takeRunningRef.current = false;
+      sendUploads();
       if (timer) window.clearInterval(timer);
       if (recordingTimerRef.current) {
         window.clearTimeout(recordingTimerRef.current);
@@ -529,15 +549,6 @@ export function ActiveSessionScreen() {
       return;
     }
 
-    // Created on the click so the browser lets it play sound.
-    try {
-      audioContextRef.current ??= new AudioContext();
-      audioContextRef.current.resume();
-      beepRequestedRef.current = true;
-    } catch {
-      // No Web Audio: the take still lines up by the reported start times.
-    }
-
     setRecordingStatus("requesting");
     setRecordingMessage("Sending the synchronized start...");
     socket.emit(
@@ -546,7 +557,6 @@ export function ActiveSessionScreen() {
       { sessionId },
       (reply) => {
         if (!reply?.ok) {
-          beepRequestedRef.current = false;
           setRecordingStatus("idle");
           setRecordingMessage(reply?.error || "Unable to start recording.");
         }
@@ -561,20 +571,10 @@ export function ActiveSessionScreen() {
       return;
     }
 
-    // The click lets the end beep play, like the start's.
-    try {
-      audioContextRef.current ??= new AudioContext();
-      audioContextRef.current.resume();
-      endBeepRequestedRef.current = true;
-    } catch {
-      // No Web Audio: cameras that heard the start beep still line up.
-    }
-
     setRecordingStatus("stopping");
-    setRecordingMessage("Stopping with a beep...");
+    setRecordingMessage("Stopping...");
     socket.emit("recording:stop", { sessionId }, (reply) => {
       if (!reply?.ok) {
-        endBeepRequestedRef.current = false;
         setRecordingStatus("recording");
         setRecordingMessage(reply?.error || "Unable to stop recording.");
       }
@@ -673,6 +673,7 @@ export function ActiveSessionScreen() {
           <h1>{session?.name || "Loading session..."}</h1>
           {session && <code>{session.id}</code>}
         </div>
+        {session && <ConnectionStatus connected={socketStatus === "Connected"} />}
 
         {session && (
         <div className="active-session-actions">
@@ -749,14 +750,6 @@ export function ActiveSessionScreen() {
                 </div>
               )}
 
-              {canControl && recordingStatus === "idle" && (
-                <p className="session-sync-tip">
-                  Starting plays a short beep that every camera uses to line up.
-                  For the closest sync, start from a device near the middle of the
-                  room and keep its volume up.
-                </p>
-              )}
-
               <p>
                 {recordingStatus === "recording" && (
                   <span className="session-recording-dot" />
@@ -775,7 +768,7 @@ export function ActiveSessionScreen() {
                 <h2>Controlling the cameras</h2>
                 <p>
                   This device isn't recording. Start and stop every camera from
-                  here; it still plays the sync beep, so keep its volume up.
+                  here.
                 </p>
               </section>
             ) : (
@@ -879,6 +872,11 @@ const activeSessionCss = `
     background: #000;
   }
   @media (max-width: 640px) { .session-watch-overlay { padding: 1rem; } }
+  .connection-status { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; background: rgba(127,127,127,0.14); font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
+  .connection-status svg { display: block; }
+  .connection-status-good { color: #22a559; }
+  .connection-status-weak { color: #e08a00; }
+  .connection-status-offline { color: #e5484d; }
   .active-session-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; justify-content: flex-end; }
   .session-device-mode { display: inline-flex; align-items: center; gap: 0; }
   .session-device-mode > span { margin-right: 0.6rem; }
@@ -1063,3 +1061,49 @@ const activeSessionCss = `
     }
   }
 `;
+
+// Above this a round trip counts as weak: start and stop may arrive late and
+// uploads will be slow.
+const WEAK_ABOVE_MS = 600;
+
+// How good this browser's connection to the server is: a quick round trip
+// every 5 s, shown as Good, Weak or Offline (like the phone's session bar).
+function ConnectionStatus({ connected }) {
+  const [rtt, setRtt] = useState(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      const started = performance.now();
+      try {
+        const res = await fetch(`${SERVER_URL}/timesync`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 0, method: "timesync" }),
+          signal: AbortSignal.timeout(4000),
+        });
+        if (!cancelled) setRtt(res.ok ? Math.round(performance.now() - started) : null);
+      } catch {
+        if (!cancelled) setRtt(null);
+      }
+    };
+    check();
+    const timer = setInterval(check, 5000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, []);
+
+  if (rtt === undefined && connected) return null;
+  const level = !connected || rtt == null ? "offline" : rtt > WEAK_ABOVE_MS ? "weak" : "good";
+  const bars = { good: 3, weak: 2, offline: 0 }[level];
+  return (
+    <span className={`connection-status connection-status-${level}`} role="status"
+      title={rtt == null ? "No connection to the server" : `${rtt} ms to the server`}>
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        {[0, 1, 2].map((i) => (
+          <rect key={i} x={1 + i * 5} y={10 - i * 4} width="3.5" height={5 + i * 4} rx="1"
+            fill="currentColor" opacity={i < bars ? 1 : 0.25} />
+        ))}
+      </svg>
+      {{ good: "Good", weak: "Weak", offline: "Offline" }[level]}
+    </span>
+  );
+}

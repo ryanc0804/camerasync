@@ -10,6 +10,7 @@ import archiver from "archiver";
 import { Router } from "express";
 import { pool } from "../db/pool.js";
 import { storage } from "../storage/index.js";
+import { fileUrl } from "../storage/cdn.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import {
   ROLE_RANK,
@@ -76,7 +77,7 @@ function publicSession(row) {
     activeMemberCount: Number(row.active_member_count ?? 0),
     isJoined: Boolean(row.is_joined),
     // A still from the session's first take, for the session lists.
-    thumbnailUrl: row.thumbnail_file_id ? `/api/files/get/${row.thumbnail_file_id}` : null,
+    thumbnailUrl: row.thumbnail_file_id ? fileUrl(row.thumbnail_file_id) : null,
   };
 }
 
@@ -177,7 +178,7 @@ recordingsRouter.delete("/sessions/:id", requireAuth, async (req, res, next) => 
       return res.status(409).json({ error: "End this session before deleting it." });
     }
     const { rows: videos } = await client.query(
-      `SELECT file_id, preview_file_id, thumbnail_file_id FROM recording_session_videos
+      `SELECT file_id, preview_file_id, thumbnail_file_id, scrub FROM recording_session_videos
         WHERE session_id = $1 FOR UPDATE`,
       [req.params.id]
     );
@@ -255,7 +256,7 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
       return res.status(404).json({ error: "Session not found." });
     }
     const { rows } = await pool.query(
-      `SELECT v.started_at_ms, v.user_id, v.file_id, v.preview_file_id, v.start_offset_ms,
+      `SELECT v.started_at_ms, v.user_id, v.file_id, v.preview_file_id, v.scrub, v.start_offset_ms,
               v.start_offset_source,
               v.beep_at_ms, v.end_beep_at_ms, sr.end_beep_epoch_ms,
               u.display_name, sr.recording_number
@@ -288,12 +289,17 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
         // The full video; until it arrives, the phone's preview stands in
         // (previewOnly), so a take can be watched while it uploads.
         url: row.file_id
-          ? `/api/files/get/${row.file_id}`
-          : row.preview_file_id ? `/api/files/get/${row.preview_file_id}` : null,
+          ? fileUrl(row.file_id)
+          : row.preview_file_id ? fileUrl(row.preview_file_id) : null,
         previewOnly: !row.file_id && Boolean(row.preview_file_id),
         // A smaller copy for when the angle is shown small; null until it's
         // made (see ../recordings/previews.js).
-        previewUrl: row.preview_file_id ? `/api/files/get/${row.preview_file_id}` : null,
+        previewUrl: row.preview_file_id ? fileUrl(row.preview_file_id) : null,
+        // Stills shown while the seek bar is dragged; null until they're made
+        // (see ../recordings/scrubFrames.js).
+        scrub: row.file_id && row.scrub
+          ? { ...row.scrub, sheets: row.scrub.sheets.map((id) => fileUrl(id)) }
+          : null,
         ...videoStartOffset(row, startedAt),
         // How far along its upload is, while the full video isn't in yet.
         upload: row.file_id ? null : progressFor(req.params.id, startedAt, Number(row.user_id)),

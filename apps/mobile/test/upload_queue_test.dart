@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:camerasync_mobile/api/recordings_api.dart';
@@ -36,6 +37,28 @@ class _FakeApi implements RecordingsApi {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+/// Sends half, then waits for [halfway] before the rest, like a slow
+/// upload a take can start in the middle of.
+class _SlowApi extends _FakeApi {
+  final halfway = <Completer<void>>[];
+
+  @override
+  Future<void> uploadSessionVideo(String id, int startedAtMs, String filePath,
+      {String? filename,
+      int? actualStartedAtMs,
+      String? startClock,
+      bool preview = false,
+      Duration timeout = const Duration(minutes: 10),
+      void Function(int sent, int total)? onProgress}) async {
+    onProgress?.call(5, 10);
+    final gate = Completer<void>();
+    halfway.add(gate);
+    await gate.future;
+    onProgress?.call(10, 10);
+    sent.add('${preview ? 'preview' : 'full'} $startedAtMs');
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory dir;
@@ -49,16 +72,18 @@ void main() {
   }
 
   Future<void> settle(UploadQueue queue) async {
-    for (var i = 0; i < 100 && (queue.waiting > 0 || queue.sending != null); i++) {
+    for (var i = 0;
+        i < 100 && (queue.waiting > 0 || queue.sending != null);
+        i++) {
       await Future<void>.delayed(const Duration(milliseconds: 10));
     }
   }
 
   test('sends every waiting preview before any full video', () async {
     final api = _FakeApi();
-    final queue = UploadQueue(api,
-        dir: Directory('${dir.path}/queue')..createSync(),
-        makePreview: (path) async {
+    final queue =
+        UploadQueue(api, dir: Directory('${dir.path}/queue')..createSync(),
+            makePreview: (path) async {
       final copy = File('$path.small.mp4');
       await copy.writeAsBytes(List.filled(8192, 2));
       return copy.path;
@@ -88,8 +113,12 @@ void main() {
     expect(api.progress, isNotEmpty);
     expect(api.progress.first, 'preview 1 0.5');
     // Nothing left behind on the phone.
-    expect(Directory('${dir.path}/queue').listSync().whereType<File>()
-        .where((f) => f.path.endsWith('.mp4')), isEmpty);
+    expect(
+        Directory('${dir.path}/queue')
+            .listSync()
+            .whereType<File>()
+            .where((f) => f.path.endsWith('.mp4')),
+        isEmpty);
   });
 
   test('a small take, or one whose preview fails, goes as it is', () async {
@@ -110,5 +139,36 @@ void main() {
         filename: 'small.mp4');
     await settle(queue);
     expect(api.sent, ['full 1', 'full 2']);
+  });
+
+  test('a take starting stops the upload in progress, which goes again after',
+      () async {
+    final api = _SlowApi();
+    final queue =
+        UploadQueue(api, dir: Directory('${dir.path}/queue')..createSync());
+    await queue.add(
+        sessionId: 's',
+        startedAtMs: 1,
+        sourcePath: await take('small', 8192),
+        filename: 'small.mp4');
+    for (var i = 0; i < 100 && api.halfway.isEmpty; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+
+    queue.pause('take');
+    api.halfway.last.complete();
+    await settle(queue);
+    // Stopped mid-way: still waiting, with no failed try held against it.
+    expect(api.sent, isEmpty);
+    expect(queue.waiting, 1);
+    expect(queue.nextRetryAt, isNull);
+
+    queue.resume('take');
+    for (var i = 0; i < 100 && api.halfway.length < 2; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    api.halfway.last.complete();
+    await settle(queue);
+    expect(api.sent, ['full 1']);
   });
 }

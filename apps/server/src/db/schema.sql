@@ -369,3 +369,11 @@ CREATE TABLE IF NOT EXISTS retired_files (
     session_id VARCHAR(6) NOT NULL,
     retired_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Small stills several a second, tiled to sheets, shown while the seek bar
+-- is dragged (see src/recordings/scrubFrames.js): {fps, width, height, cols,
+-- rows, frames, sheets: [file ids]}. NULL until made; scrub_failed when they
+-- couldn't be, so they aren't retried on every start.
+ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS scrub JSONB;
+ALTER TABLE recording_session_videos
+    ADD COLUMN IF NOT EXISTS scrub_failed BOOLEAN NOT NULL DEFAULT FALSE;

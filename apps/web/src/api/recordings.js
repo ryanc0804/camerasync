@@ -1,5 +1,18 @@
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || "http://localhost:4000";
 
+// A stored file's link as the server gave it: a path on this server, or a
+// full (signed) CDN link when the server has one set up.
+function fileLink(link) {
+  return link.startsWith("/") ? `${SERVER_URL}${link}` : link;
+}
+
+// What a <video> needs to send with its requests for [link]: the login
+// cookie to this server (which checks it), nothing to the CDN (the link is
+// signed, and asking for credentials there would need CORS set up for it).
+export function mediaCors(link) {
+  return link?.startsWith(SERVER_URL) ? "use-credentials" : undefined;
+}
+
 // sends api requests with the login cookie
 async function request(path, options = {}) {
   const response = await fetch(`${SERVER_URL}${path}`, {
@@ -25,7 +38,7 @@ export async function getMyVideoCount() {
 export async function getSessions() {
   const data = await request("/api/recordings/sessions");
   for (const session of data.sessions) {
-    if (session.thumbnailUrl) session.thumbnailUrl = `${SERVER_URL}${session.thumbnailUrl}`;
+    if (session.thumbnailUrl) session.thumbnailUrl = fileLink(session.thumbnailUrl);
   }
   return data.sessions;
 }
@@ -95,8 +108,9 @@ export async function getSessionVideos(id) {
   const data = await request(`/api/recordings/sessions/${encodeURIComponent(id)}/videos`);
   for (const recording of data.recordings) {
     for (const video of recording.videos) {
-      if (video.url) video.url = `${SERVER_URL}${video.url}`;
-      if (video.previewUrl) video.previewUrl = `${SERVER_URL}${video.previewUrl}`;
+      if (video.url) video.url = fileLink(video.url);
+      if (video.previewUrl) video.previewUrl = fileLink(video.previewUrl);
+      if (video.scrub) video.scrub.sheets = video.scrub.sheets.map(fileLink);
     }
   }
   return data;
@@ -109,8 +123,10 @@ export function sessionDownloadUrl(id) {
   return `${SERVER_URL}/api/recordings/sessions/${encodeURIComponent(id)}/download`;
 }
 
+// `signal` stops it part way (a take starting): it then rejects with an
+// AbortError.
 export async function uploadSessionVideo(
-  id, startedAt, video, filename, actualStartedAt, startClock
+  id, startedAt, video, filename, actualStartedAt, startClock, signal
 ) {
   const body = new FormData();
   // Multipart uploads need the plain media type, without recorder codec details.
@@ -138,6 +154,12 @@ export async function uploadSessionVideo(
       resolve({ status: xhr.status, data: parsed });
     };
     xhr.onerror = () => reject(new Error("Could not upload this recording."));
+    xhr.onabort = () => reject(new DOMException("Upload stopped", "AbortError"));
+    if (signal?.aborted) {
+      reject(new DOMException("Upload stopped", "AbortError"));
+      return;
+    }
+    signal?.addEventListener("abort", () => xhr.abort(), { once: true });
     xhr.send(body);
   });
   if (status < 200 || status >= 300) {

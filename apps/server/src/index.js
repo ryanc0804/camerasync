@@ -10,6 +10,7 @@ import { initSocket } from "./sockets/websocket.js";
 import { startIdleSessionChecks } from "./sessions/idleSessions.js";
 import { startPreviewBackfill } from "./recordings/previews.js";
 import { startThumbnailBackfill } from "./recordings/thumbnails.js";
+import { startScrubBackfill } from "./recordings/scrubFrames.js";
 import { startRetiredFileSweep } from "./recordings/retiredFiles.js";
 import { authRouter } from "./routes/auth.js";
 import { groupRouter } from "./routes/groups.js";
@@ -51,6 +52,7 @@ initSocket(server);
 startIdleSessionChecks();
 startPreviewBackfill();
 startThumbnailBackfill();
+startScrubBackfill();
 startRetiredFileSweep();
 
 server.listen(PORT, () => {
