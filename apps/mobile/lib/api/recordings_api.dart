@@ -1,3 +1,6 @@
+import 'dart:io';
+import 'dart:math' as math;
+
 import 'package:flutter/widgets.dart';
 import 'api_client.dart';
 
@@ -190,6 +193,14 @@ class ScrubStills {
         sheets: [for (final sheet in json['sheets'] as List) sheet.toString()],
       );
 }
+
+/// A signed CDN link to a stored file (see the server's storage/cdn.js),
+/// which needs no login, rather than one to our server, which does.
+bool isSignedLink(String url) => url.contains('Key-Pair-Id=');
+
+/// Whether two links are to the same stored file: a CDN link is re-signed
+/// every few hours, and a player handed the new one needn't load it again.
+bool sameFile(String a, String b) => a.split('?').first == b.split('?').first;
 
 /// An angle's upload as the uploading device last reported it.
 class UploadProgress {
@@ -443,7 +454,7 @@ class RecordingsApi {
   Map<String, String> mediaHeaders(String url) {
     final cookie = _api.cookie;
     return {
-      if (cookie != null && url.startsWith(_api.baseUrl)) 'Cookie': cookie,
+      if (cookie != null && !isSignedLink(url)) 'Cookie': cookie,
     };
   }
 
@@ -475,6 +486,12 @@ class RecordingsApi {
   /// (see `RecordingStartCommand.serverStartAtEpochMs`); the server lines this
   /// angle up with every other device's by that value. A [preview] is a
   /// small copy sent first, played until the full video arrives.
+  ///
+  /// Sent in pieces ([uploadPieceBytes] each), so an upload that's cut off
+  /// (no connection, a take starting) carries on later from what arrived:
+  /// [resumeId] is an earlier try's upload, and [onStarted] hears the id of
+  /// a new one, to keep for next time. A server without resumable uploads
+  /// gets the whole file in one request, as before.
   Future<void> uploadSessionVideo(
     String id,
     int startedAtMs,
@@ -485,18 +502,78 @@ class RecordingsApi {
     bool preview = false,
     Duration timeout = const Duration(minutes: 10),
     void Function(int sent, int total)? onProgress,
-  }) =>
-      _api.postFile(
-        '/api/files/upload'
+    String? resumeId,
+    void Function(String uploadId)? onStarted,
+  }) async {
+    final name = filename ?? filePath.split('/').last;
+    final query =
         '?sessionId=${Uri.encodeQueryComponent(id)}&startedAt=$startedAtMs'
         '${actualStartedAtMs == null ? '' : '&actualStartedAt=$actualStartedAtMs'}'
         '${startClock == null ? '' : '&startClock=$startClock'}'
-        '${preview ? '&kind=preview' : ''}',
-        filePath: filePath,
-        filename: filename,
-        timeout: timeout,
-        onProgress: onProgress,
-      );
+        '${preview ? '&kind=preview' : ''}';
+    final file = File(filePath);
+    final size = await file.length();
+
+    var uploadId = resumeId;
+    var offset = 0;
+    if (uploadId != null) {
+      try {
+        final status = await _api.get('/api/files/uploads/$uploadId');
+        offset = (status['offset'] as num).toInt();
+        if ((status['size'] as num).toInt() != size) uploadId = null;
+      } on ApiException catch (e) {
+        // Finished already, or cleared away: start again.
+        if (e.statusCode != 404) rethrow;
+        uploadId = null;
+      }
+    }
+    if (uploadId == null) {
+      try {
+        final started = await _api.post('/api/files/uploads$query'
+            '&size=$size&name=${Uri.encodeQueryComponent(name)}');
+        uploadId = started['uploadId'] as String;
+      } on ApiException catch (e) {
+        if (e.statusCode != 404) rethrow;
+        // An older server: the whole file at once.
+        await _api.postFile('/api/files/upload$query',
+            filePath: filePath,
+            filename: filename,
+            timeout: timeout,
+            onProgress: onProgress);
+        return;
+      }
+      offset = 0;
+      onStarted?.call(uploadId);
+    }
+
+    while (offset < size) {
+      final end = math.min(offset + uploadPieceBytes, size);
+      final from = offset;
+      try {
+        final sent = await _api.putBytes(
+          '/api/files/uploads/$uploadId?offset=$from',
+          file.openRead(from, end),
+          end - from,
+          onProgress: (bytes) => onProgress?.call(from + bytes, size),
+        );
+        offset = (sent['offset'] as num).toInt();
+      } on ApiException catch (e) {
+        // The server has a different amount than we thought (a piece that
+        // half arrived): carry on from what it has.
+        if (e.statusCode != 409) rethrow;
+        final status = await _api.get('/api/files/uploads/$uploadId');
+        offset = (status['offset'] as num).toInt();
+      }
+    }
+    // Finishing stores and checks the whole video, which takes a while.
+    await _api.postSlow(
+        '/api/files/uploads/$uploadId/complete', const Duration(minutes: 5));
+  }
+
+  /// How much of a recording goes up in one request: small enough that a
+  /// dropped connection loses little, big enough not to waste time on
+  /// requests.
+  static const uploadPieceBytes = 4 * 1024 * 1024;
 
   /// How far along this device's upload of one angle is, for the bars
   /// viewers see under it. [stage] is 'preview' or 'full'.

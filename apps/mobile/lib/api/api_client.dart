@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -73,6 +74,11 @@ class ApiClient {
   Future<dynamic> post(String path, [Map<String, dynamic>? body]) =>
       _send('POST', path, body);
 
+  /// A POST the server takes a while to answer (it waits on [timeout]
+  /// rather than the usual 15 seconds).
+  Future<dynamic> postSlow(String path, Duration timeout) =>
+      _send('POST', path, null, timeout);
+
   Future<dynamic> patch(String path, Map<String, dynamic> body) =>
       _send('PATCH', path, body);
 
@@ -83,13 +89,12 @@ class ApiClient {
     String method,
     String path, [
     Map<String, dynamic>? body,
+    // Without a timeout an unreachable host can hang a request forever and
+    // leave the UI stuck in its submitting state.
+    Duration timeout = const Duration(seconds: 15),
   ]) async {
     final uri = Uri.parse('$baseUrl$path');
     late http.Response res;
-
-    // Without a timeout an unreachable host can hang a request forever and
-    // leave the UI stuck in its submitting state.
-    const timeout = Duration(seconds: 15);
 
     try {
       res = switch (method) {
@@ -120,6 +125,41 @@ class ApiClient {
       throw ApiException(0, "Can't reach the server at $baseUrl.");
     }
 
+    await _captureCookie(res);
+    return _decode(res);
+  }
+
+  /// Sends [length] bytes from [body] as the request body of a PUT (one
+  /// piece of a resumable upload) and returns the decoded JSON reply.
+  /// [onProgress] hears how many bytes of this piece have gone; throwing
+  /// from it stops the request.
+  Future<dynamic> putBytes(
+    String path,
+    Stream<List<int>> body,
+    int length, {
+    Duration timeout = const Duration(minutes: 5),
+    void Function(int sent)? onProgress,
+  }) async {
+    final request = http.StreamedRequest('PUT', Uri.parse('$baseUrl$path'))
+      ..headers.addAll(_headers())
+      ..headers['Content-Type'] = 'application/octet-stream'
+      ..contentLength = length;
+    var sent = 0;
+    unawaited(body
+        .map((chunk) {
+          sent += chunk.length;
+          onProgress?.call(sent);
+          return chunk;
+        })
+        .pipe(request.sink)
+        .catchError((Object _) {}));
+    late http.Response res;
+    try {
+      final streamed = await request.send().timeout(timeout);
+      res = await http.Response.fromStream(streamed).timeout(timeout);
+    } catch (_) {
+      throw ApiException(0, "Can't reach the server at $baseUrl.");
+    }
     await _captureCookie(res);
     return _decode(res);
   }

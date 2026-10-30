@@ -20,7 +20,9 @@ class _FakeApi implements RecordingsApi {
       String? startClock,
       bool preview = false,
       Duration timeout = const Duration(minutes: 10),
-      void Function(int sent, int total)? onProgress}) async {
+      void Function(int sent, int total)? onProgress,
+      String? resumeId,
+      void Function(String uploadId)? onStarted}) async {
     onProgress?.call(5, 10);
     sent.add('${preview ? 'preview' : 'full'} $startedAtMs');
   }
@@ -42,6 +44,9 @@ class _FakeApi implements RecordingsApi {
 class _SlowApi extends _FakeApi {
   final halfway = <Completer<void>>[];
 
+  /// The upload each try carried on from (null: a new one).
+  final resumedFrom = <String?>[];
+
   @override
   Future<void> uploadSessionVideo(String id, int startedAtMs, String filePath,
       {String? filename,
@@ -49,7 +54,11 @@ class _SlowApi extends _FakeApi {
       String? startClock,
       bool preview = false,
       Duration timeout = const Duration(minutes: 10),
-      void Function(int sent, int total)? onProgress}) async {
+      void Function(int sent, int total)? onProgress,
+      String? resumeId,
+      void Function(String uploadId)? onStarted}) async {
+    resumedFrom.add(resumeId);
+    if (resumeId == null) onStarted?.call('upload-$startedAtMs');
     onProgress?.call(5, 10);
     final gate = Completer<void>();
     halfway.add(gate);
@@ -141,7 +150,7 @@ void main() {
     expect(api.sent, ['full 1', 'full 2']);
   });
 
-  test('a take starting stops the upload in progress, which goes again after',
+  test('a take starting stops the upload in progress, which carries on after',
       () async {
     final api = _SlowApi();
     final queue =
@@ -170,5 +179,7 @@ void main() {
     api.halfway.last.complete();
     await settle(queue);
     expect(api.sent, ['full 1']);
+    // The second try picked up the first one's upload, not a new one.
+    expect(api.resumedFrom, [null, 'upload-1']);
   });
 }

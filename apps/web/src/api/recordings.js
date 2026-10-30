@@ -124,30 +124,95 @@ export function sessionDownloadUrl(id) {
 }
 
 // `signal` stops it part way (a take starting): it then rejects with an
-// AbortError.
+// AbortError. Sent in pieces (UPLOAD_PIECE_BYTES each) so a stopped or
+// dropped upload carries on from what reached the server: pass the same
+// `resume` object again ({} the first time; it remembers the upload). A
+// server without resumable uploads gets the whole file in one request.
 export async function uploadSessionVideo(
-  id, startedAt, video, filename, actualStartedAt, startClock, signal
+  id, startedAt, video, filename, actualStartedAt, startClock, signal, resume = {}
 ) {
-  const body = new FormData();
-  // Multipart uploads need the plain media type, without recorder codec details.
-  const upload = new Blob([video], { type: video.type.split(";")[0] });
-  body.append("file", upload, filename);
   const actual = Number.isFinite(actualStartedAt)
     ? `&actualStartedAt=${Math.round(actualStartedAt)}${startClock ? `&startClock=${startClock}` : ""}`
     : "";
-  // XMLHttpRequest rather than fetch: it reports upload progress, which
-  // goes to the server every few seconds for the bars viewers see.
+  const query = `?sessionId=${encodeURIComponent(id)}&startedAt=${startedAt}${actual}`;
+  const uploads = `${SERVER_URL}/api/files/uploads`;
+  // The bars viewers see, every few seconds.
   let reportedAt = 0;
-  const { status, data } = await new Promise((resolve, reject) => {
+  const report = (sent) => {
+    if (Date.now() - reportedAt < PROGRESS_EVERY_MS) return;
+    reportedAt = Date.now();
+    reportUploadProgress(id, startedAt, "full", sent / video.size).catch(() => {});
+  };
+
+  let offset = 0;
+  if (resume.uploadId) {
+    const status = await send("GET", `${uploads}/${resume.uploadId}`, null, { signal });
+    if (status.status === 200 && status.data.size === video.size) offset = status.data.offset;
+    else if (status.status === 404 || status.status === 200) resume.uploadId = null;
+    else throw uploadError(status);
+  }
+  if (!resume.uploadId) {
+    const started = await send("POST",
+      `${uploads}${query}&size=${video.size}&name=${encodeURIComponent(filename)}`, null, { signal });
+    if (started.status === 404) return uploadWhole(`${SERVER_URL}/api/files/upload${query}`, video, filename, signal, report);
+    if (started.status !== 201) throw uploadError(started);
+    resume.uploadId = started.data.uploadId;
+  }
+
+  while (offset < video.size) {
+    const from = offset;
+    const piece = video.slice(from, Math.min(from + UPLOAD_PIECE_BYTES, video.size));
+    const sent = await send("PUT", `${uploads}/${resume.uploadId}?offset=${from}`, piece, {
+      signal, onProgress: (loaded) => report(from + loaded),
+    });
+    if (sent.status === 200) {
+      offset = sent.data.offset;
+    } else if (sent.status === 409 && Number.isFinite(sent.data?.offset)) {
+      // The server has a different amount (a piece that half arrived).
+      offset = sent.data.offset;
+    } else {
+      throw uploadError(sent);
+    }
+  }
+  const done = await send("POST", `${uploads}/${resume.uploadId}/complete`, null, { signal });
+  if (done.status < 200 || done.status >= 300) throw uploadError(done);
+}
+
+// How much of a recording goes up in one request: small enough that a
+// dropped connection loses little, big enough not to waste time on requests.
+const UPLOAD_PIECE_BYTES = 4 * 1024 * 1024;
+
+// The whole file in one multipart request, for a server without resumable
+// uploads.
+async function uploadWhole(url, video, filename, signal, report) {
+  const body = new FormData();
+  // Multipart uploads need the plain media type, without recorder codec details.
+  body.append("file", new Blob([video], { type: video.type.split(";")[0] }), filename);
+  const result = await send("POST", url, body, { signal, onProgress: report });
+  if (result.status < 200 || result.status >= 300) throw uploadError(result);
+}
+
+function uploadError(result) {
+  return new Error(result.data?.error || "Could not upload this recording.");
+}
+
+// One request with the login cookie, by XMLHttpRequest rather than fetch:
+// it reports how much of the body has gone. Resolves {status, data} (the
+// parsed JSON reply, or null); rejects when it can't reach the server, or
+// with an AbortError when `signal` stops it.
+function send(method, url, body, { signal, onProgress } = {}) {
+  return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST",
-      `${SERVER_URL}/api/files/upload?sessionId=${encodeURIComponent(id)}&startedAt=${startedAt}${actual}`);
+    xhr.open(method, url);
     xhr.withCredentials = true;
-    xhr.upload.onprogress = (event) => {
-      if (!event.lengthComputable || Date.now() - reportedAt < PROGRESS_EVERY_MS) return;
-      reportedAt = Date.now();
-      reportUploadProgress(id, startedAt, "full", event.loaded / event.total).catch(() => {});
-    };
+    if (body instanceof Blob && !(body instanceof File)) {
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    }
+    if (onProgress) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) onProgress(event.loaded);
+      };
+    }
     xhr.onload = () => {
       let parsed = null;
       try { parsed = JSON.parse(xhr.responseText); } catch { /* not JSON */ }
@@ -162,9 +227,6 @@ export async function uploadSessionVideo(
     signal?.addEventListener("abort", () => xhr.abort(), { once: true });
     xhr.send(body);
   });
-  if (status < 200 || status >= 300) {
-    throw new Error(data?.error || "Could not upload this recording.");
-  }
 }
 
 // Often enough for the bars to look alive, rarely enough not to compete

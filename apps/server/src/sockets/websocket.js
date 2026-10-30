@@ -410,7 +410,7 @@ export async function stopSessionRecording(sessionId) {
   const stoppedRecording = {
     ...recording,
     stopAtEpochMs,
-    // The device that asked for the stop plays the end beep at this time.
+    // Older app versions play an end beep at this time (now the stop itself).
     endBeepAtEpochMs,
   };
   stoppingUntil.set(sessionId, stopAtEpochMs);
